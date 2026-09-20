@@ -6,7 +6,9 @@ tools an agent can call: resolve a package on npm, crates.io or PyPI, fetch and
 extract its archives, and diff one version against another.
 
 **Status: foundations.** The crate builds, tests and deploys as a single
-`/health` function. There is no MCP endpoint and there are no tools yet — see
+`/health` function, reachable at [mcp.diffpack.io](https://mcp.diffpack.io).
+There is no MCP endpoint and there are no tools yet — `/mcp` arrives with
+[#6](https://github.com/philfreshman/diffpack-server/issues/6). See
 [#2](https://github.com/philfreshman/diffpack-server/issues/2) for the plan and
 what is done.
 
@@ -35,6 +37,8 @@ fixtures/        Golden vectors two languages are tested against.
 scripts/         The checks CI runs, and the hook installer that makes a
                  commit run them too.
 deny.toml        The policy over the dependency graph.
+vercel.json      The deployment shape: the catch-all rewrite, the function
+                 timeout, and which branches deploy.
 .githooks/       The pre-commit hook. Not active until install-hooks.sh.
 ```
 
@@ -62,7 +66,7 @@ cargo build --release                   # produces the `mcp` binary
 
 The toolchain is pinned in `rust-toolchain.toml` so CI and Vercel's build
 container cannot drift apart silently. CI runs all of them on every pull
-request into `main`.
+request into `development` and into `main`.
 
 ## The checks that block a commit
 
@@ -79,7 +83,7 @@ Run once per clone. It points `core.hooksPath` at `.githooks/` and installs
 | `cargo clippy --all-targets -- -D warnings` | `*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | Lints, as errors. |
 | `cargo deny --all-features check` | `Cargo.toml`, `Cargo.lock`, `deny.toml` | Advisories, licenses, banned crates, and where the code came from. See `deny.toml`. |
 | `cargo audit --deny warnings` | `Cargo.toml`, `Cargo.lock`, `deny.toml` | The same advisory database, read without `deny.toml` — the second opinion that notices an ignore that has expired. |
-| `cargo test` | `*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `fixtures/` | The suite. |
+| `cargo test` | `*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `fixtures/`, `vercel.json` | The suite. |
 
 `scripts/checks.sh` is the single definition of each one: the hook and the CI
 jobs both call it, so what fails locally is what fails on the pull request.
@@ -94,6 +98,101 @@ to lose work — so a partial commit is checked by CI, not here. And `deny` and
 `git commit --no-verify` skips the hook, which is a reasonable thing to do for
 a work-in-progress commit on a branch. CI is the gate that cannot be skipped.
 `DIFFPACK_HOOK_ALL=1 git commit` forces all four regardless of what is staged.
+
+## Deployment
+
+Pushes to `main` deploy to production. Nothing else deploys at all — not
+`development`, not a branch, not a pull request — so the only way code reaches
+production is a merge into `main`.
+
+`vercel.json` is small on purpose. Vercel's Rust runtime finds `api/*.rs` and
+`Cargo.toml` by itself, so there is no build command to set, and the file says
+only the three things the platform cannot work out:
+
+| Key | Why it is there |
+| --- | --- |
+| `rewrites` | The runtime serves `api/mcp.rs` at `/api/mcp` and nothing else. Without a catch-all, `/health` and `/mcp` are 404s from the platform and the handler never sees them. Routing belongs inside the function, where a test can reach it. |
+| `functions.maxDuration` | A Rust handler cannot declare its timeout in code the way a Node one can. This is the only place 300 seconds can be said. |
+| `git.deploymentEnabled` | The branch policy, and the same pattern [`diffpack`](https://github.com/philfreshman/diffpack/blob/main/vercel.json) uses. |
+
+Two things here are easy to get wrong.
+
+**The wildcard has to be there.** Vercel matches branch names with minimatch
+and deploys when *any* matching rule is true, so `{"main": true}` on its own
+deploys every branch — `main` matches its rule, and every other branch matches
+no rule and falls through to the default, which is on. `"**": false` is what
+turns the default off, and the specific entry then beats it. Deleting the
+wildcard as redundant is the mistake it looks like it invites.
+
+**Every deploy compiles the world.** The Rust runtime is in Beta and there is
+no Cargo cache between deployments, so each one builds the crate,
+`diffpack-engine` and the whole of `vercel_runtime` from scratch — under
+`lto = "fat"` and `codegen-units = 1`, which `Cargo.toml` sets because a
+handler is built once and invoked many times. Cold build time is measured and
+recorded in [#8](https://github.com/philfreshman/diffpack-server/issues/8);
+that number is the answer to every later "why is the deploy slow".
+
+`tests/deploy.rs` holds `vercel.json` against the crate layout, because
+nothing compiles against it: renaming the `[[bin]]` or moving `api/mcp.rs`
+would otherwise be invisible until a deploy served a 404. It deliberately does
+not assert the timeout or the branch policy back at the file — those are
+verified against the deployed result, not against the file that was written.
+
+### Who can reach it
+
+`mcp.diffpack.io` exists because of a protection setting, not because a short
+name is nicer. The project has Vercel Authentication on Standard Protection
+(`ssoProtection: all_except_custom_domains`), which answers an unauthenticated
+request with an HTML login page — where an MCP client expects JSON-RPC. The
+setting exempts production domains, so attaching a custom domain fixes it
+without weakening anything else. `diffpack.io` is on Vercel's own nameservers
+in the same team, so the DNS record was configured automatically; there was no
+registrar step.
+
+Measured against the live project rather than inferred from the setting's
+name:
+
+| URL | Reachable without a Vercel session |
+| --- | --- |
+| `mcp.diffpack.io` | **yes** — this is the point |
+| `diffpack-server.vercel.app` | **yes** — the production alias is a production domain, so Standard Protection exempts it too |
+| `diffpack-server-<hash>-philfreshmans-projects.vercel.app` | no — redirects to `vercel.com/login` |
+| `diffpack-server-git-<branch>-philfreshmans-projects.vercel.app` | no — redirects to `vercel.com/login` |
+
+The second row is worth knowing: the server has two public front doors, not
+one. That is not a hole — everything here is public package content and the
+server is deliberately unauthenticated, the same posture `diffpack` itself
+takes — but the rate limiting in
+[#26](https://github.com/philfreshman/diffpack-server/issues/26) has to cover
+both hostnames, and "it is only on a `.vercel.app` URL" is not a reason to
+treat something as unreachable.
+
+## Using the server
+
+**`/mcp` does not answer yet** — the endpoint lands in
+[#6](https://github.com/philfreshman/diffpack-server/issues/6). The
+configuration below is what clients will use, recorded here so it is written
+down once and in one place.
+
+Claude Code:
+
+```bash
+claude mcp add --transport http diffpack https://mcp.diffpack.io/mcp
+```
+
+Codex, in `config.toml`:
+
+```toml
+[mcp_servers.diffpack]
+url = "https://mcp.diffpack.io/mcp"
+```
+
+What does answer today is `/health`, which is how to tell whether a deploy
+landed and which build is serving:
+
+```bash
+curl https://mcp.diffpack.io/health
+```
 
 ## The sibling repositories
 

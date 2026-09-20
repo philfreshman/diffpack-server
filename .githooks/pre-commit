@@ -52,9 +52,11 @@ else
     checks+=(deny audit)
   fi
 
-  # `tests/` and `fixtures/` are as much a reason to run the suite as `src/`
-  # is — the vectors are a contract and the tests are what hold it.
-  if matches '(\.rs$|^Cargo\.(toml|lock)$|^rust-toolchain\.toml$|^fixtures/)'; then
+  # `tests/`, `fixtures/` and `vercel.json` are as much a reason to run the
+  # suite as `src/` is — the vectors are a contract, `vercel.json` is held
+  # against the crate layout by `tests/deploy.rs`, and the tests are what hold
+  # both.
+  if matches '(\.rs$|^Cargo\.(toml|lock)$|^rust-toolchain\.toml$|^fixtures/|^vercel\.json$)'; then
     checks+=(test)
   fi
 fi

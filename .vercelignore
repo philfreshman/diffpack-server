@@ -1,0 +1,6 @@
+# Vercel builds the crate in its own container, so a local `target/` is
+# megabytes of someone else's build artifacts uploaded for nothing — and the
+# Rust runtime reads the release binaries out of `target/release`, so the
+# directory cannot simply be excluded whole.
+target/**
+!target/release/*

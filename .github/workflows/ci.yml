@@ -1,10 +1,13 @@
 name: CI
 
+# `development` is where work integrates and `main` is what deploys, so both
+# are gated: a pull request into either one runs the suite, and so does the
+# merge commit that lands on it.
 on:
   pull_request:
-    branches: [main]
+    branches: [development, main]
   push:
-    branches: [main]
+    branches: [development, main]
 
 # A force-push or a second commit makes the run in flight irrelevant.
 concurrency:
