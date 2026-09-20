@@ -5,10 +5,15 @@ An MCP server in Rust, deployed to Vercel, exposing what
 tools an agent can call: resolve a package on npm, crates.io or PyPI, fetch and
 extract its archives, and diff one version against another.
 
-**Status: foundations.** The crate builds, tests and deploys as a single
-`/health` function, reachable at [mcp.diffpack.io](https://mcp.diffpack.io).
-There is no MCP endpoint and there are no tools yet — `/mcp` arrives with
-[#6](https://github.com/philfreshman/diffpack-server/issues/6). See
+**Status: transport, no tools.** The crate builds, tests and deploys, and
+`/mcp` speaks Streamable HTTP: a client connects, negotiates a protocol
+revision and calls `tools/list`. The list is empty — the first tool arrives
+with [#11](https://github.com/philfreshman/diffpack-server/issues/11), and the
+engine is wired in but nothing calls it yet. `/health` is the other route and
+is what a monitor watches.
+
+Production serves whatever was last merged to `main`, so a branch merged into
+`development` is not live until it is promoted. See
 [#2](https://github.com/philfreshman/diffpack-server/issues/2) for the plan and
 what is done.
 
@@ -25,13 +30,22 @@ file under `api/`, and `vercel.json` rewrites all traffic to it. So this repo
 is one binary in front of a library:
 
 ```
-api/mcp.rs       The deployed function. Thin: it matches a path, asks the
-                 library what to say, and writes a response.
+api/mcp.rs       The deployed function. Thin: it wraps the router in
+                 vercel_runtime's layer and hands it to the runtime.
 src/lib.rs       Everything with a decision in it, where a test can reach it
                  without a runtime.
+src/router.rs    Every route this function serves, and the panic guard over
+                 the transport. vercel.json rewrites all traffic here, so
+                 routing is this crate's job rather than the platform's.
+src/mcp.rs       The MCP handler: identity, capabilities, the tool list, and
+                 the wrapper that turns a panic in a handler into an answer.
+src/error.rs     Which channel a failure reaches the client on, and the
+                 redaction rule over anything that leaves the process.
 src/health.rs    The /health body.
 src/cache_key.rs The deterministic diff cache key.
 src/engine.rs    The one module allowed to import diffpack-engine.
+tests/           The suite, driven at the seams: real requests through the
+                 real router, and the vectors read from fixtures/.
 docs/            Normative specifications. docs/cache-key.md is one.
 fixtures/        Golden vectors two languages are tested against.
 scripts/         The checks CI runs, and the hook installer that makes a
@@ -61,7 +75,7 @@ cargo fmt --all --check                 # formatting, no compile needed
 cargo clippy --all-targets -- -D warnings
 cargo build --release                   # produces the `mcp` binary
 ./scripts/check-engine-seam.sh          # the engine import boundary
-./scripts/checks.sh                     # clippy, deny, audit, test
+./scripts/checks.sh                     # fmt, clippy, deny, audit, test
 ```
 
 The toolchain is pinned in `rust-toolchain.toml` so CI and Vercel's build
@@ -80,6 +94,7 @@ Run once per clone. It points `core.hooksPath` at `.githooks/` and installs
 
 | Check | Runs when the commit touches | What it is for |
 | --- | --- | --- |
+| `cargo fmt --all --check` | `*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | Formatting. It compiles nothing, so it costs a second and removes the one way a commit that passed here can still go red on the pull request. |
 | `cargo clippy --all-targets -- -D warnings` | `*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | Lints, as errors. |
 | `cargo deny --all-features check` | `Cargo.toml`, `Cargo.lock`, `deny.toml` | Advisories, licenses, banned crates, and where the code came from. See `deny.toml`. |
 | `cargo audit --deny warnings` | `Cargo.toml`, `Cargo.lock`, `deny.toml` | The same advisory database, read without `deny.toml` — the second opinion that notices an ignore that has expired. |
@@ -97,7 +112,7 @@ to lose work — so a partial commit is checked by CI, not here. And `deny` and
 
 `git commit --no-verify` skips the hook, which is a reasonable thing to do for
 a work-in-progress commit on a branch. CI is the gate that cannot be skipped.
-`DIFFPACK_HOOK_ALL=1 git commit` forces all four regardless of what is staged.
+`DIFFPACK_HOOK_ALL=1 git commit` forces all five regardless of what is staged.
 
 ## Deployment
 
@@ -169,10 +184,14 @@ treat something as unreachable.
 
 ## Using the server
 
-**`/mcp` does not answer yet** — the endpoint lands in
-[#6](https://github.com/philfreshman/diffpack-server/issues/6). The
-configuration below is what clients will use, recorded here so it is written
-down once and in one place.
+`/mcp` is a Streamable HTTP endpoint. It is stateless by design — revision
+`2026-07-28` removed protocol-level sessions and the `initialize` handshake,
+which suits a serverless function that has no warm process to hold one in —
+and it answers clients back to `2025-11-25` as well. `POST` only: `GET` and
+`DELETE` are `405`, and no answer ever carries an `Mcp-Session-Id`.
+
+A client can connect and call `tools/list` today; the list is empty until
+[#11](https://github.com/philfreshman/diffpack-server/issues/11).
 
 Claude Code:
 
@@ -187,12 +206,33 @@ Codex, in `config.toml`:
 url = "https://mcp.diffpack.io/mcp"
 ```
 
-What does answer today is `/health`, which is how to tell whether a deploy
-landed and which build is serving:
+Both point at production, which serves `main` — so they work once the branch
+carrying `/mcp` has been promoted, and answer `404` before that. `/health` is
+the route that tells you which build is serving:
 
 ```bash
 curl https://mcp.diffpack.io/health
 ```
+
+### Browser clients
+
+Every client above is a local process and sends no `Origin`, which is what
+this server is configured for: origin validation is on, the allowed list is
+empty by default, and a request carrying any `Origin` is refused with `403`. A
+request with none is served.
+
+`DIFFPACK_ALLOWED_ORIGINS` opens it, as a comma-separated list, so letting a
+browser-based client in is a deployment decision rather than a release:
+
+```
+DIFFPACK_ALLOWED_ORIGINS=https://app.example,https://staging.app.example
+```
+
+`Host` validation is deliberately off. It is rmcp's DNS-rebinding defence and
+it is aimed at a server on a developer's own machine; on a public deployment
+it defends nothing — an attacker's page sends the correct `Host` by fetching
+the real URL — while its default loopback list would reject every deployment
+we have.
 
 ## The sibling repositories
 
