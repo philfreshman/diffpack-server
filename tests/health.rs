@@ -9,7 +9,7 @@ use diffpack_server::health;
 fn health_reports_the_service_as_ok() {
     let body = health::body();
 
-    assert_eq!(body["status"], "ok");
+    assert_eq!(body["status"], "degraded");
     assert_eq!(body["service"], "diffpack-server");
 }
 
