@@ -6,7 +6,9 @@ tools an agent can call: resolve a package on npm, crates.io or PyPI, fetch and
 extract its archives, and diff one version against another.
 
 **Status: foundations.** The crate builds, tests and deploys as a single
-`/health` function. There is no MCP endpoint and there are no tools yet — see
+`/health` function, reachable at [mcp.diffpack.io](https://mcp.diffpack.io).
+There is no MCP endpoint and there are no tools yet — `/mcp` arrives with
+[#6](https://github.com/philfreshman/diffpack-server/issues/6). See
 [#2](https://github.com/philfreshman/diffpack-server/issues/2) for the plan and
 what is done.
 
@@ -135,6 +137,62 @@ nothing compiles against it: renaming the `[[bin]]` or moving `api/mcp.rs`
 would otherwise be invisible until a deploy served a 404. It deliberately does
 not assert the timeout or the branch policy back at the file — those are
 verified against the deployed result, not against the file that was written.
+
+### Who can reach it
+
+`mcp.diffpack.io` exists because of a protection setting, not because a short
+name is nicer. The project has Vercel Authentication on Standard Protection
+(`ssoProtection: all_except_custom_domains`), which answers an unauthenticated
+request with an HTML login page — where an MCP client expects JSON-RPC. The
+setting exempts production domains, so attaching a custom domain fixes it
+without weakening anything else. `diffpack.io` is on Vercel's own nameservers
+in the same team, so the DNS record was configured automatically; there was no
+registrar step.
+
+Measured against the live project rather than inferred from the setting's
+name:
+
+| URL | Reachable without a Vercel session |
+| --- | --- |
+| `mcp.diffpack.io` | **yes** — this is the point |
+| `diffpack-server.vercel.app` | **yes** — the production alias is a production domain, so Standard Protection exempts it too |
+| `diffpack-server-<hash>-philfreshmans-projects.vercel.app` | no — redirects to `vercel.com/login` |
+| `diffpack-server-git-<branch>-philfreshmans-projects.vercel.app` | no — redirects to `vercel.com/login` |
+
+The second row is worth knowing: the server has two public front doors, not
+one. That is not a hole — everything here is public package content and the
+server is deliberately unauthenticated, the same posture `diffpack` itself
+takes — but the rate limiting in
+[#26](https://github.com/philfreshman/diffpack-server/issues/26) has to cover
+both hostnames, and "it is only on a `.vercel.app` URL" is not a reason to
+treat something as unreachable.
+
+## Using the server
+
+**`/mcp` does not answer yet** — the endpoint lands in
+[#6](https://github.com/philfreshman/diffpack-server/issues/6). The
+configuration below is what clients will use, recorded here so it is written
+down once and in one place.
+
+Claude Code:
+
+```bash
+claude mcp add --transport http diffpack https://mcp.diffpack.io/mcp
+```
+
+Codex, in `config.toml`:
+
+```toml
+[mcp_servers.diffpack]
+url = "https://mcp.diffpack.io/mcp"
+```
+
+What does answer today is `/health`, which is how to tell whether a deploy
+landed and which build is serving:
+
+```bash
+curl https://mcp.diffpack.io/health
+```
 
 ## The sibling repositories
 
