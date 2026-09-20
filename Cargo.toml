@@ -43,6 +43,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# `Layer`, so `api/mcp.rs` can wrap the router in `VercelLayer`. Nothing else
+# from it — the middleware this crate writes itself is an axum
+# `map_response`, and the middleware it does not is `tower-http` below.
+tower = "0.5.3"
 # `catch-panic` alone. A panic in a handler would otherwise unwind into the
 # connection task `vercel_runtime` spawns, and the client would see a dropped
 # connection rather than an answer — worse than a 500, because there is
