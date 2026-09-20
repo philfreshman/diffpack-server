@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Blocks a commit that would not survive CI: clippy, deny, audit, test.
+# Blocks a commit that would not survive CI: fmt, clippy, deny, audit, test.
 #
 # Installed by `./scripts/install-hooks.sh`, which points `core.hooksPath` at
 # this directory. That is what makes the hook reviewable: it is a tracked file
@@ -37,12 +37,15 @@ matches() { grep -qE "$1" <<<"$staged"; }
 
 checks=()
 if [[ "${DIFFPACK_HOOK_ALL:-0}" == "1" ]]; then
-  checks=(clippy deny audit test)
+  checks=(fmt clippy deny audit test)
 else
   # Rust source, the manifest, the lockfile or the pinned toolchain: anything
   # that can change what the compiler sees.
   if matches '(\.rs$|^Cargo\.(toml|lock)$|^rust-toolchain\.toml$)'; then
-    checks+=(clippy)
+    # `fmt` first, and unconditionally alongside clippy: it compiles nothing,
+    # so it costs a second and removes the one way a commit that passed here
+    # can still go red on the pull request.
+    checks+=(fmt clippy)
   fi
 
   # The dependency graph and the policy over it. Advisories also appear

@@ -41,6 +41,10 @@ allow = [
   "0BSD",
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
+  # `matchit`, axum's router. Its trie is a port of Go's `httprouter`, so the
+  # crate is "MIT AND BSD-3-Clause" — both licenses at once rather than a
+  # choice, which is why the MIT allowance below does not cover it.
+  "BSD-3-Clause",
   "MIT",
   "Unicode-3.0",
   "Unlicense",
