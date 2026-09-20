@@ -220,9 +220,7 @@ async fn discover_returns_versions_capabilities_and_identity() {
 /// trip is an avoided cold start.
 #[tokio::test]
 async fn tools_list_carries_a_ttl_and_a_cache_scope() {
-    let result = ask(list_tools(CURRENT, 1))
-        .await
-        .result();
+    let result = ask(list_tools(CURRENT, 1)).await.result();
 
     assert!(
         result["ttlMs"].as_u64().is_some(),
@@ -343,9 +341,7 @@ async fn a_disallowed_origin_is_forbidden_and_an_absent_one_is_not() {
     );
 
     assert_eq!(
-        ask_of(router(), list_tools(CURRENT, 1))
-            .await
-            .status,
+        ask_of(router(), list_tools(CURRENT, 1)).await.status,
         StatusCode::OK,
         "a request with no Origin at all should be served"
     );

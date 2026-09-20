@@ -18,12 +18,10 @@ permissions:
   contents: read
 
 jobs:
-  # `cargo fmt --check` needs no compile at all, so a formatting failure is
-  # reported in seconds rather than after the crate and its dependency tree —
-  # which includes `diffpack-engine` and the whole of `vercel_runtime` — have
-  # been built. `--all` covers `api/` and `tests/` as well as `src/`.
-  #
-  # When this fails: `cargo fmt --all`, and commit.
+  # First because it compiles nothing: a formatting failure is reported in
+  # seconds rather than after the crate and its dependency tree — which
+  # includes `diffpack-engine` and the whole of `vercel_runtime` — have been
+  # built. What it runs is in `scripts/checks.sh`, with the rest.
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
@@ -34,12 +32,13 @@ jobs:
       # version number in a second place and let CI and Vercel's build
       # container drift apart without anyone noticing.
       - run: rustup show
-      - run: cargo fmt --all --check
+      - run: ./scripts/checks.sh fmt
 
-  # The four jobs below each run one check out of `scripts/checks.sh`, which is
-  # also what the `pre-commit` hook in `.githooks/` runs. Neither place spells
-  # the command out, so a flag added to a check is added to both and a commit
-  # that passed locally cannot be failed here by a difference in arguments.
+  # This job and the four below each run one check out of `scripts/checks.sh`,
+  # which is also what the `pre-commit` hook in `.githooks/` runs. Neither
+  # place spells the command out, so a flag added to a check is added to both
+  # and a commit that passed locally cannot be failed here by a difference in
+  # arguments.
   # They stay separate jobs rather than one `./scripts/checks.sh` invocation so
   # that a failure names itself in the checks list, and so the slow ones do not
   # queue behind each other.
