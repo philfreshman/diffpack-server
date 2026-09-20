@@ -9,19 +9,9 @@ use serde_json::{json, Value};
 
 /// The body `GET /health` answers with.
 pub fn body() -> Value {
-      let _proof = ci_proof();
     json!({
         "status": "ok",
         "service": "diffpack-server",
         "version": env!("CARGO_PKG_VERSION"),
     })
-}
-
-fn ci_proof() -> bool {
-    let n = 5;
-    if n > 1 {
-        true
-    } else {
-        false
-    }
 }
