@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# A force-push or a second commit makes the run in flight irrelevant.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # `cargo fmt --check` needs no compile at all, so a formatting failure is
+  # reported in seconds rather than after the crate and its dependency tree —
+  # which includes `diffpack-engine` and the whole of `vercel_runtime` — have
+  # been built. `--all` covers `api/` and `tests/` as well as `src/`.
+  #
+  # When this fails: `cargo fmt --all`, and commit.
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # `rustup show` installs whatever `rust-toolchain.toml` pins, components
+      # included. Pinning the action to `stable` instead would put a second
+      # version number in a second place and let CI and Vercel's build
+      # container drift apart without anyone noticing.
+      - run: rustup show
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      # `--all-targets` so the binary, the tests and any example are linted,
+      # not just the library.
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+
+  # The cache key is a contract with a codebase written in another language
+  # (#27), so `fixtures/cache-key-vectors.json` has to stay a fixed target. A
+  # vector file edited to match a changed implementation would let the two
+  # sides drift while both their suites stayed green, which is the one failure
+  # mode the vectors exist to prevent. Flag it for a human; do not fail on it.
+  vectors:
+    name: cache-key vectors
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Warn if the vectors changed
+        run: |
+          base="origin/${{ github.base_ref }}"
+          if git diff --quiet "$base"...HEAD -- fixtures/cache-key-vectors.json; then
+            echo "vectors unchanged"
+            exit 0
+          fi
+          {
+            echo '## Cache-key vectors changed'
+            echo ''
+            echo 'This PR edits `fixtures/cache-key-vectors.json`. Those values are'
+            echo 'the contract with the TypeScript reader in `diffpack` (#27) and must'
+            echo 'come from `docs/cache-key.md`, not from running the Rust.'
+            echo ''
+            echo 'If this is a deliberate change to the key, `docs/cache-key.md`'
+            echo 'should change in the same PR and the `schema` field should move.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning file=fixtures/cache-key-vectors.json::Cache-key vectors changed - confirm they came from docs/cache-key.md"
+
+  # `src/engine.rs` is the only module allowed to import `diffpack_engine`.
+  # Its own job because it needs no toolchain and no compile.
+  seam:
+    name: engine seam
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./scripts/check-engine-seam.sh

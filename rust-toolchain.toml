@@ -1,0 +1,7 @@
+# Pinned so CI and Vercel's build container cannot drift apart silently: a
+# lint that is clean here and a lint that is clean there have to be the same
+# lint. Bump deliberately, and expect `cargo clippy -D warnings` to have
+# opinions when you do.
+[toolchain]
+channel = "1.93.0"
+components = ["rustfmt", "clippy"]
