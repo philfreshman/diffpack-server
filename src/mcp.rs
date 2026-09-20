@@ -21,10 +21,24 @@ use std::panic::AssertUnwindSafe;
 
 use futures::FutureExt as _;
 use rmcp::model::{
-    CacheScope, CallToolRequestParams, CallToolResponse, Implementation, ListToolsResult,
-    PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig, Tool,
+    CacheScope, CallToolRequestParams, CallToolResponse, CancelTaskParams,
+    CancelledNotificationParam, CompleteRequestParams, CompleteResult, CustomNotification,
+    CustomRequest, CustomResult, DiscoverResult, GetPromptRequestParams, GetPromptResponse,
+    GetTaskParams, GetTaskResult, Implementation, InitializeRequestParams, InitializeResult,
+    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
+    PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion, ReadResourceRequestParams,
+    ReadResourceResponse, ServerCapabilities, ServerConfig, SubscribeRequestParams,
+    SubscriptionFilter, Tool, UnsubscribeRequestParams, UpdateTaskParams,
 };
-use rmcp::service::RequestContext;
+// Logging was deprecated by SEP-2577, but `set_level` is still on the trait
+// and a wrapper that skipped it would answer for the handler it wraps. It is
+// forwarded like everything else; the deprecation is rmcp's to carry.
+#[expect(
+    deprecated,
+    reason = "forwarding a deprecated method is still forwarding"
+)]
+use rmcp::model::SetLevelRequestParams;
+use rmcp::service::{NotificationContext, RequestContext, SubscriptionContext};
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 
@@ -140,13 +154,167 @@ impl ServerHandler for Diffpack {
 #[derive(Debug, Clone)]
 pub struct Guarded<S>(pub S);
 
+/// # Why every method is written out
+///
+/// A wrapper that implements only the methods it cares about is not a
+/// wrapper: the ones it leaves out resolve to the *trait's* defaults, not to
+/// the handler underneath, and the inner handler is never called. For
+/// `resources/list` that default is an empty list, so the failure mode is a
+/// successful, wrong answer — a resource this server offers, reported as
+/// absent, with nothing anywhere saying so. `tests/errors.rs` pins it.
+///
+/// `rmcp` has this impl as a macro for its own `Box` and `Arc` wrappers, but
+/// it is private to that crate, so the forwarding is spelled out here. The
+/// cost is that a method added to `ServerHandler` in a later `rmcp` silently
+/// falls back to its default again; the compiler cannot warn about that, so
+/// the upgrade is the moment to re-read this impl against the trait.
 impl<S: ServerHandler> ServerHandler for Guarded<S> {
+    // -----------------------------------------------------------------------
+    // Not futures, so there is nothing for `catch_unwind` to wrap. These are
+    // read off a handler built moments ago, and a panic in one is a panic in
+    // a constant.
+    // -----------------------------------------------------------------------
+
     fn get_info(&self) -> ServerConfig {
         self.0.get_info()
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
         self.0.supported_protocol_versions()
+    }
+
+    fn negotiate_initialize(
+        &self,
+        request: &InitializeRequestParams,
+    ) -> Result<InitializeResult, ErrorData> {
+        self.0.negotiate_initialize(request)
+    }
+
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        self.0.accepted_subscription_filter(requested)
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.0.get_tool(name)
+    }
+
+    // -----------------------------------------------------------------------
+    // Requests. Each one has a JSON-RPC id waiting on it, so each one can be
+    // answered with an error instead of left to hang.
+    // -----------------------------------------------------------------------
+
+    async fn ping(&self, context: RequestContext<RoleServer>) -> Result<(), ErrorData> {
+        guard("answering a ping", self.0.ping(context)).await
+    }
+
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        guard("initializing", self.0.initialize(request, context)).await
+    }
+
+    async fn discover(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> Result<DiscoverResult, ErrorData> {
+        guard("describing this server", self.0.discover(context)).await
+    }
+
+    async fn complete(
+        &self,
+        request: CompleteRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CompleteResult, ErrorData> {
+        guard("completing an argument", self.0.complete(request, context)).await
+    }
+
+    #[expect(
+        deprecated,
+        reason = "the trait still has it, so the wrapper still forwards it"
+    )]
+    async fn set_level(
+        &self,
+        request: SetLevelRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        guard("setting the log level", self.0.set_level(request, context)).await
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, ErrorData> {
+        guard("reading a prompt", self.0.get_prompt(request, context)).await
+    }
+
+    async fn list_prompts(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        guard("listing prompts", self.0.list_prompts(request, context)).await
+    }
+
+    async fn list_resources(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        guard("listing resources", self.0.list_resources(request, context)).await
+    }
+
+    async fn list_resource_templates(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        guard(
+            "listing resource templates",
+            self.0.list_resource_templates(request, context),
+        )
+        .await
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        guard("reading a resource", self.0.read_resource(request, context)).await
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), ErrorData> {
+        guard("listening for updates", self.0.listen(context)).await
+    }
+
+    #[expect(
+        deprecated,
+        reason = "the trait still has it, so the wrapper still forwards it"
+    )]
+    async fn subscribe(
+        &self,
+        request: SubscribeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        guard("subscribing", self.0.subscribe(request, context)).await
+    }
+
+    #[expect(
+        deprecated,
+        reason = "the trait still has it, so the wrapper still forwards it"
+    )]
+    async fn unsubscribe(
+        &self,
+        request: UnsubscribeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        guard("unsubscribing", self.0.unsubscribe(request, context)).await
     }
 
     async fn list_tools(
@@ -167,6 +335,82 @@ impl<S: ServerHandler> ServerHandler for Guarded<S> {
         // index that is off by one on a malformed file is a panic like any
         // other.
         guard("calling a tool", self.0.call_tool(request, context)).await
+    }
+
+    async fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CustomResult, ErrorData> {
+        guard(
+            "answering a request",
+            self.0.on_custom_request(request, context),
+        )
+        .await
+    }
+
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetTaskResult, ErrorData> {
+        guard("reading a task", self.0.get_task(request, context)).await
+    }
+
+    async fn update_task(
+        &self,
+        request: UpdateTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        guard("updating a task", self.0.update_task(request, context)).await
+    }
+
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        guard("cancelling a task", self.0.cancel_task(request, context)).await
+    }
+
+    // -----------------------------------------------------------------------
+    // Notifications. No id, no response, so there is nowhere to put an error
+    // and nothing waiting on one — the guard's whole argument is that a panic
+    // should become the answer, and here there is no answer. A panic in one
+    // of these unwinds the task that delivered the notification and stops
+    // there; #26 is where it reaches a log.
+    // -----------------------------------------------------------------------
+
+    async fn on_cancelled(
+        &self,
+        notification: CancelledNotificationParam,
+        context: NotificationContext<RoleServer>,
+    ) {
+        self.0.on_cancelled(notification, context).await
+    }
+
+    async fn on_progress(
+        &self,
+        notification: ProgressNotificationParam,
+        context: NotificationContext<RoleServer>,
+    ) {
+        self.0.on_progress(notification, context).await
+    }
+
+    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        self.0.on_initialized(context).await
+    }
+
+    async fn on_roots_list_changed(&self, context: NotificationContext<RoleServer>) {
+        self.0.on_roots_list_changed(context).await
+    }
+
+    async fn on_custom_notification(
+        &self,
+        notification: CustomNotification,
+        context: NotificationContext<RoleServer>,
+    ) {
+        self.0.on_custom_notification(notification, context).await
     }
 }
 
