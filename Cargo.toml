@@ -18,20 +18,45 @@ name = "mcp"
 path = "api/mcp.rs"
 
 [dependencies]
+# The router `api/mcp.rs` mounts both `/health` and `rmcp`'s tower service on.
+# `vercel_runtime`'s axum integration is built against 0.8, so the major is
+# theirs to choose, not ours. Default features off because this is one
+# serverless function and not a web framework: no `http2` (Vercel speaks
+# HTTP/1.1 to the function), no `ws`, no `multipart`, no `tracing`.
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 # Pinned to a tag, not a branch: a branch would make the build
 # unreproducible, and the engine version is a field in the cache key. The
 # crate is not published to crates.io, so a git dependency is the only
 # option. `src/engine.rs` is the only module allowed to import it, and
 # `engine::VERSION` must agree with this tag — `tests/engine.rs` checks.
 diffpack-engine = { git = "https://github.com/philfreshman/diffpack-engine.git", tag = "v0.3.0" }
+# The official MCP SDK, and the reason this crate does not hand-roll a
+# protocol. It implements revision `2026-07-28` while still answering clients
+# on `2025-11-25` and earlier, which is what makes one endpoint serve every
+# client we care about.
+#
+# `transport-streamable-http-server` is the Streamable HTTP transport as a
+# tower `Service`, so it composes with axum directly. No client features: this
+# crate is a server.
+rmcp = { version = "3.4.0", features = ["server", "transport-streamable-http-server"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-vercel_runtime = "2.4"
+# `catch-panic` alone. A panic in a handler would otherwise unwind into the
+# connection task `vercel_runtime` spawns, and the client would see a dropped
+# connection rather than an answer — worse than a 500, because there is
+# nothing in it to act on. #7 turns that into a JSON-RPC error.
+tower-http = { version = "0.7.1", features = ["catch-panic"] }
+vercel_runtime = { version = "2.4", features = ["axum"] }
 
 [dev-dependencies]
+# Reading a response body back out in the HTTP tests.
+http-body-util = "0.1.5"
 toml = "0.9"
+# `ServiceExt::oneshot`, which is how the tests drive the router: a real
+# request in, a real response out, without binding a port.
+tower = { version = "0.5.3", features = ["util"] }
 
 # Vercel's Rust template. A handler is built once and invoked many times, so
 # the build is allowed to be slow: one codegen unit and fat LTO across the
