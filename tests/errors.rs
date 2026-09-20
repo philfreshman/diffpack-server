@@ -454,6 +454,83 @@ impl rmcp::ServerHandler for Panicking {
 }
 
 // ---------------------------------------------------------------------------
+// Delegation
+// ---------------------------------------------------------------------------
+
+/// Every request reaches the handler that was wrapped, including the methods
+/// this crate has not implemented yet.
+///
+/// `Guarded` is a wrapper, and a wrapper that implements a trait method
+/// silently replaces the inner handler's answer with its own. For a method
+/// like `resources/list` the trait's default is an empty list, so an
+/// overlooked method does not fail — it succeeds, with the wrong answer, and
+/// nothing anywhere says so. `Failure::NoSuchResource` exists, so resources
+/// are coming; this is the test that notices if they arrive behind a wrapper
+/// that swallows them.
+///
+/// `resources/list` is the probe rather than the subject: what is under test
+/// is that `Guarded` forwards, and any method it did not override would do.
+#[tokio::test]
+async fn a_method_this_crate_has_not_implemented_still_reaches_the_handler() {
+    let router = router::router_with(|| Ok(WithResources), vec![]);
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("host", "mcp.diffpack.io")
+        .header("accept", "application/json, text/event-stream")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", CURRENT)
+        .header("mcp-method", "resources/list")
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "resources/list",
+                "params": { "_meta": meta() },
+            })
+            .to_string(),
+        ))
+        .expect("the request should build");
+
+    let (status, body) = send(router, request).await;
+
+    assert_eq!(status, StatusCode::OK, "got {body}");
+    assert_eq!(
+        body["result"]["resources"][0]["uri"],
+        json!(WITH_RESOURCES_URI),
+        "the wrapper answered instead of the handler it wraps: {body}"
+    );
+}
+
+const WITH_RESOURCES_URI: &str = "diff://npm/zod/3.25.76...4.0.0";
+
+/// A handler implementing a method `Guarded` does not itself override, so
+/// that a reply carrying this resource proves the call was forwarded.
+#[derive(Debug, Clone)]
+struct WithResources;
+
+impl rmcp::ServerHandler for WithResources {
+    fn get_info(&self) -> rmcp::model::ServerConfig {
+        rmcp::model::ServerConfig::new(
+            rmcp::model::ServerCapabilities::builder()
+                .enable_resources()
+                .build(),
+        )
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListResourcesResult, rmcp::ErrorData> {
+        Ok(rmcp::model::ListResourcesResult::with_all_items(vec![
+            rmcp::model::Resource::new(WITH_RESOURCES_URI, "zod 3.25.76 to 4.0.0"),
+        ]))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
