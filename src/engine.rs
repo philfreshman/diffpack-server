@@ -10,16 +10,18 @@
 //! `diffpack_engine` directly. One seam means one file to change when the
 //! engine moves, and one file to read to know what we depend on.
 //!
-//! # What is not here yet
+//! # What is deliberately not re-exported
 //!
-//! `get_diff_content` (the unified-diff renderer), `whitespace_mode` and the
-//! npm/crates.io/PyPI URL builders live in the engine's private `core` and
-//! `package` modules and are unreachable from outside it. philfreshman/diffpack-engine#2
-//! widens that surface and releases `0.3.0`; this module grows to cover them
-//! when it lands, and [`VERSION`] moves with the tag in `Cargo.toml`.
+//! The Go helpers (`build_go_zip_url`, `escape_go_module_path`,
+//! `strip_go_module_root`). The engine made them public in `0.3.0` so that Go
+//! support would not need a second release, but nothing here calls them yet
+//! and a re-export with no caller is a surface we would have to keep working.
+//! #28 adds them.
 
 pub use diffpack_engine::{
-    build_diff_tree, extract_archive_bytes, DiffFileEntry, DiffStatus, FileMapEntry, FileType,
+    build_diff_tree, build_tarball_url, extract_archive_bytes, get_diff_content,
+    select_pypi_sdist_url, whitespace_mode, DiffFileEntry, DiffStatus, FileMapEntry, FileType,
+    PyPiResponse, PyPiUrl, WhitespaceMode,
 };
 
 /// The pinned `diffpack-engine` release.
@@ -27,4 +29,4 @@ pub use diffpack_engine::{
 /// A field in the cache key, not a label: see
 /// [`crate::cache_key::DiffKey::engine`]. `tests/engine.rs` fails if this and
 /// the tag in `Cargo.toml` disagree.
-pub const VERSION: &str = "0.2.0";
+pub const VERSION: &str = "0.3.0";

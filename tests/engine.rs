@@ -76,3 +76,108 @@ fn the_archive_extractor_is_reachable_through_the_seam() {
     let result = diffpack_server::engine::extract_archive_bytes(b"not an archive");
     assert!(result.is_err(), "rubbish bytes should not extract");
 }
+
+/// The unified-diff format, pinned byte for byte.
+///
+/// This is the one piece of the engine whose *output* is the contract rather
+/// than just its signature. The server renders file views from it and the
+/// tree's counts come from the same lines, so a byte that moves here makes
+/// the two disagree — and the alternative to depending on the engine was
+/// re-implementing this format, which is exactly the drift the seam exists to
+/// prevent.
+///
+/// The expectations below are written from the format the engine documents —
+/// a `--- from/{f}` / `+++ to/{f}` header, then one line per change as sign,
+/// a space, and the line with any trailing newline removed — not by running
+/// the function and recording what it said.
+#[test]
+fn the_unified_diff_format_is_byte_for_byte_what_the_engine_documents() {
+    use diffpack_server::engine::get_diff_content;
+
+    let cases: [(&str, &str, &str, &str); 4] = [
+        (
+            "an added file",
+            "",
+            "one\ntwo\n",
+            "--- from/a.txt\n+++ to/a.txt\n+ one\n+ two",
+        ),
+        (
+            "a removed file",
+            "one\ntwo\n",
+            "",
+            "--- from/a.txt\n+++ to/a.txt\n- one\n- two",
+        ),
+        (
+            "a modified file",
+            "one\ntwo\n",
+            "one\nTWO\n",
+            "--- from/a.txt\n+++ to/a.txt\n  one\n- two\n+ TWO",
+        ),
+        (
+            "a byte-identical file",
+            "one\ntwo\n",
+            "one\ntwo\n",
+            "--- from/a.txt\n+++ to/a.txt\n  one\n  two",
+        ),
+    ];
+
+    for (what, from, to, expected) in cases {
+        let actual = get_diff_content("a.txt", from, to, false);
+        assert_eq!(actual, expected, "{what}");
+    }
+}
+
+/// `ignore_whitespace` reaches the renderer, and the two modes are the two
+/// `similar` values rather than a local re-spelling of them.
+#[test]
+fn the_whitespace_setting_is_reachable_and_changes_the_diff() {
+    use diffpack_server::engine::{get_diff_content, whitespace_mode, WhitespaceMode};
+
+    assert_eq!(whitespace_mode(false), WhitespaceMode::Exact);
+    assert_eq!(whitespace_mode(true), WhitespaceMode::IgnoreAll);
+
+    let (from, to) = ("one\ntwo\n", "one\n  two  \n");
+
+    assert_eq!(
+        get_diff_content("a.txt", from, to, true),
+        "--- from/a.txt\n+++ to/a.txt\n  one\n    two  ",
+        "ignoring whitespace, the second line is unchanged"
+    );
+    assert_eq!(
+        get_diff_content("a.txt", from, to, false),
+        "--- from/a.txt\n+++ to/a.txt\n  one\n- two\n+   two  ",
+        "exactly, the second line is a replacement"
+    );
+}
+
+/// The archive URL builders, which are real logic — scoped npm names and the
+/// sdist-then-wheel preference order — and not worth writing twice.
+#[test]
+fn the_registry_url_builders_are_reachable_through_the_seam() {
+    use diffpack_server::engine::{build_tarball_url, select_pypi_sdist_url, PyPiUrl};
+
+    assert_eq!(
+        build_tarball_url("npm", "zod", "4.0.0").unwrap(),
+        "https://registry.npmjs.org/zod/-/zod-4.0.0.tgz"
+    );
+    assert_eq!(
+        build_tarball_url("npm", "@types/node", "22.0.0").unwrap(),
+        "https://registry.npmjs.org/@types/node/-/node-22.0.0.tgz",
+        "a scoped name keeps the scope in the path and drops it from the filename"
+    );
+    assert!(build_tarball_url("crates", "serde", "1.0.229").is_ok());
+
+    let url = |packagetype: &str, url: &str| PyPiUrl {
+        packagetype: packagetype.to_string(),
+        url: url.to_string(),
+    };
+    let chosen = select_pypi_sdist_url(&[
+        url(
+            "bdist_wheel",
+            "https://files.pythonhosted.org/x-py3-none-any.whl",
+        ),
+        url("sdist", "https://files.pythonhosted.org/x-1.0.tar.gz"),
+    ])
+    .unwrap();
+    assert!(chosen.ends_with(".tar.gz"), "sdist is preferred over wheel");
+}
