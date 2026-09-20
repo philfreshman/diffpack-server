@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+#
+# Blocks a commit that would not survive CI: clippy, deny, audit, test.
+#
+# Installed by `./scripts/install-hooks.sh`, which points `core.hooksPath` at
+# this directory. That is what makes the hook reviewable: it is a tracked file
+# that arrives with a clone, rather than something each person is asked to
+# paste into `.git/hooks` and then quietly has a different version of.
+#
+# Two things worth knowing before this surprises you:
+#
+#   - It checks the working tree, not the staged snapshot. Stashing the
+#     unstaged remainder to check the index exactly is a good way to lose
+#     work, so this does not do it. If you stage a subset of your changes, the
+#     hook tells you what the tree as a whole looks like and CI is what checks
+#     the commit itself.
+#   - `deny` and `audit` want the RustSec advisory database, so they need the
+#     network. Offline, they fail; that is the same answer CI would give, but
+#     on a plane it is the wrong moment for it.
+#
+# Either way out is `git commit --no-verify`, which is a normal thing to do for
+# a work-in-progress commit on a branch. CI is the gate that cannot be skipped.
+
+set -uo pipefail
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+# Which checks a commit needs depends on what it touches. A README-only commit
+# has no business compiling the crate, and being made to wait for it is how a
+# hook ends up disabled for good. The mapping is deliberately generous: if it
+# is plausibly Rust, lint and test it.
+#
+# Set DIFFPACK_HOOK_ALL=1 to run everything regardless.
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+matches() { grep -qE "$1" <<<"$staged"; }
+
+checks=()
+if [[ "${DIFFPACK_HOOK_ALL:-0}" == "1" ]]; then
+  checks=(clippy deny audit test)
+else
+  # Rust source, the manifest, the lockfile or the pinned toolchain: anything
+  # that can change what the compiler sees.
+  if matches '(\.rs$|^Cargo\.(toml|lock)$|^rust-toolchain\.toml$)'; then
+    checks+=(clippy)
+  fi
+
+  # The dependency graph and the policy over it. Advisories also appear
+  # without anyone committing anything, which is CI's job on the next pull
+  # request, not something a commit can be held responsible for.
+  if matches '^(Cargo\.(toml|lock)|deny\.toml)$'; then
+    checks+=(deny audit)
+  fi
+
+  # `tests/` and `fixtures/` are as much a reason to run the suite as `src/`
+  # is — the vectors are a contract and the tests are what hold it.
+  if matches '(\.rs$|^Cargo\.(toml|lock)$|^rust-toolchain\.toml$|^fixtures/)'; then
+    checks+=(test)
+  fi
+fi
+
+if [[ ${#checks[@]} -eq 0 ]]; then
+  echo "pre-commit: nothing staged that needs a Rust check"
+  exit 0
+fi
+
+if ! git diff --quiet; then
+  echo "pre-commit: note - there are unstaged changes; these checks see the working tree" >&2
+fi
+
+./scripts/checks.sh "${checks[@]}" || {
+  cat >&2 <<'EOF'
+
+The commit was not made. Fix the above, or commit with --no-verify if this is
+a work-in-progress commit on a branch - CI runs the same checks on the pull
+request either way.
+EOF
+  exit 1
+}

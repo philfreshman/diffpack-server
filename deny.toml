@@ -1,0 +1,88 @@
+# What `cargo deny check` holds the dependency graph to.
+#
+# This repository is the one place in diffpack where package archives are
+# fetched, extracted and diffed on a server rather than in a reader's browser
+# — untrusted bytes from crates.io, npm and PyPI, on our machine. That makes
+# the dependency graph part of the attack surface in a way it is not in the
+# other two repositories, and this file is where the graph is policed.
+#
+# Run it with `./scripts/checks.sh deny`, or directly:
+#
+#   cargo deny --all-features check
+#
+# The schema is cargo-deny's v2 config; `cargo deny check` explains any
+# section it rejects after an upgrade.
+
+[graph]
+# No `targets` list. Restricting to the Vercel runtime's Linux target would
+# hide an advisory in a dependency that only builds on macOS — which is where
+# the tests run, and where the archives are extracted while someone is
+# working on them.
+all-features = true
+
+[advisories]
+version = 2
+# The RustSec database, unfiltered. Every ignore added here needs the advisory
+# id, a sentence on why it does not reach this crate, and the condition that
+# would let it be removed. `cargo audit` in `scripts/checks.sh` runs without
+# this file and is the thing that notices when an ignore has outstayed its
+# welcome.
+ignore = []
+
+[licenses]
+version = 2
+# Exactly what this graph carries today, and nothing held in reserve. A
+# license cargo-deny never encounters is reported as an unmatched allowance,
+# so a list padded with every license someone might call permissive means a
+# permanently warning-coloured log — and a log nobody reads. A new license
+# arriving should be a moment someone looks at it and adds a line here, not a
+# line already waiting for it.
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+# A weakly-held license expression (one cargo-deny is less than this sure
+# about) is not good enough to pass.
+confidence-threshold = 0.93
+
+[licenses.private]
+# `diffpack-server` is `publish = false`, so it has no `license` field and
+# needs none.
+ignore = true
+# Neither does `diffpack-engine`. It is ours, it is not published to
+# crates.io, and it is pinned to a tag by `Cargo.toml` — the same git URL that
+# `[sources]` below is the only one to allow.
+ignore-sources = ["https://github.com/philfreshman/diffpack-engine.git"]
+
+[bans]
+# Two versions of the same crate is a smell, not a defect: it usually means a
+# transitive dependency is behind, which is someone else's release schedule.
+# Warn so it is visible in the log; do not fail a pull request over it.
+multiple-versions = "warn"
+# `diffpack-engine` is a git dependency with no version requirement, which is
+# what cargo-deny counts as a wildcard. Here that is the stricter of the two
+# options rather than the looser one: `tag = "v0.3.0"` is an exact commit,
+# where a semver range would let the engine move underneath a build. The
+# agreement between that tag and `engine::VERSION` — which is a field in the
+# cache key — is held by `tests/engine.rs`, not by this file. Left as a
+# warning so a genuine `"*"` on a crates.io dependency is still visible.
+wildcards = "warn"
+# Nothing is banned outright yet. When something is — an unmaintained crate
+# kept alive by one transitive dependency, say — it goes here with the reason
+# attached, so the ban outlives whoever added it.
+deny = []
+
+[sources]
+# The point of this section, for this repository: the code that runs on the
+# server comes from crates.io or from the one git repository named below.
+# Anything else is either a mistake or an attack, and both should stop a
+# build.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/philfreshman/diffpack-engine"]

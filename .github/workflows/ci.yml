@@ -33,6 +33,13 @@ jobs:
       - run: rustup show
       - run: cargo fmt --all --check
 
+  # The four jobs below each run one check out of `scripts/checks.sh`, which is
+  # also what the `pre-commit` hook in `.githooks/` runs. Neither place spells
+  # the command out, so a flag added to a check is added to both and a commit
+  # that passed locally cannot be failed here by a difference in arguments.
+  # They stay separate jobs rather than one `./scripts/checks.sh` invocation so
+  # that a failure names itself in the checks list, and so the slow ones do not
+  # queue behind each other.
   clippy:
     name: cargo clippy
     runs-on: ubuntu-latest
@@ -40,9 +47,7 @@ jobs:
       - uses: actions/checkout@v5
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
-      # `--all-targets` so the binary, the tests and any example are linted,
-      # not just the library.
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: ./scripts/checks.sh clippy
 
   test:
     name: cargo test
@@ -51,7 +56,40 @@ jobs:
       - uses: actions/checkout@v5
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test
+      - run: ./scripts/checks.sh test
+
+  # Advisories, licenses, banned crates and — the one that matters most for a
+  # server that fetches archives — where the code came from. `deny.toml` says
+  # what is allowed and why.
+  #
+  # No toolchain: cargo-deny reads `Cargo.lock` and the manifests rather than
+  # compiling anything, so this reports in well under a minute and does not
+  # wait on the dependency graph being built.
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Prebuilt binaries. `cargo install` would compile cargo-deny itself on
+      # every run, which costs minutes to learn the same thing.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: ./scripts/checks.sh deny
+
+  # The second opinion on advisories: the same RustSec database, read without
+  # `deny.toml`. It is here to disagree — an advisory ignored in `deny.toml`
+  # for a reason that has since expired shows up as this job going red while
+  # `deny` stays green, which is the signal to go and read the ignore.
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: ./scripts/checks.sh audit
 
   # The cache key is a contract with a codebase written in another language
   # (#27), so `fixtures/cache-key-vectors.json` has to stay a fixed target. A

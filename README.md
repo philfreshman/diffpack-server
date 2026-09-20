@@ -32,7 +32,10 @@ src/cache_key.rs The deterministic diff cache key.
 src/engine.rs    The one module allowed to import diffpack-engine.
 docs/            Normative specifications. docs/cache-key.md is one.
 fixtures/        Golden vectors two languages are tested against.
-scripts/         Checks that run in CI and need no toolchain.
+scripts/         The checks CI runs, and the hook installer that makes a
+                 commit run them too.
+deny.toml        The policy over the dependency graph.
+.githooks/       The pre-commit hook. Not active until install-hooks.sh.
 ```
 
 Two boundaries are enforced rather than documented:
@@ -54,11 +57,43 @@ cargo fmt --all --check                 # formatting, no compile needed
 cargo clippy --all-targets -- -D warnings
 cargo build --release                   # produces the `mcp` binary
 ./scripts/check-engine-seam.sh          # the engine import boundary
+./scripts/checks.sh                     # clippy, deny, audit, test
 ```
 
 The toolchain is pinned in `rust-toolchain.toml` so CI and Vercel's build
-container cannot drift apart silently. CI runs all five on every pull request
-into `main`.
+container cannot drift apart silently. CI runs all of them on every pull
+request into `main`.
+
+## The checks that block a commit
+
+```bash
+./scripts/install-hooks.sh
+```
+
+Run once per clone. It points `core.hooksPath` at `.githooks/` and installs
+`cargo-deny` and `cargo-audit`, after which `git commit` runs the checks in
+`scripts/checks.sh` that match what is staged:
+
+| Check | Runs when the commit touches | What it is for |
+| --- | --- | --- |
+| `cargo clippy --all-targets -- -D warnings` | `*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | Lints, as errors. |
+| `cargo deny --all-features check` | `Cargo.toml`, `Cargo.lock`, `deny.toml` | Advisories, licenses, banned crates, and where the code came from. See `deny.toml`. |
+| `cargo audit --deny warnings` | `Cargo.toml`, `Cargo.lock`, `deny.toml` | The same advisory database, read without `deny.toml` — the second opinion that notices an ignore that has expired. |
+| `cargo test` | `*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `fixtures/` | The suite. |
+
+`scripts/checks.sh` is the single definition of each one: the hook and the CI
+jobs both call it, so what fails locally is what fails on the pull request.
+Every requested check runs before the hook gives up, so one commit attempt
+tells you everything that is wrong.
+
+Two things to know. The hook checks the working tree rather than the staged
+snapshot — stashing the unstaged remainder to isolate the index is a good way
+to lose work — so a partial commit is checked by CI, not here. And `deny` and
+`audit` need the network for the RustSec database.
+
+`git commit --no-verify` skips the hook, which is a reasonable thing to do for
+a work-in-progress commit on a branch. CI is the gate that cannot be skipped.
+`DIFFPACK_HOOK_ALL=1 git commit` forces all four regardless of what is staged.
 
 ## The sibling repositories
 
