@@ -16,10 +16,13 @@
 //! reason: there is nowhere for their session to live either.
 
 use std::borrow::Cow;
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
 
+use futures::FutureExt as _;
 use rmcp::model::{
-    CacheScope, Implementation, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
-    ServerCapabilities, ServerConfig, Tool,
+    CacheScope, CallToolRequestParams, CallToolResponse, Implementation, ListToolsResult,
+    PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
@@ -112,6 +115,80 @@ impl ServerHandler for Diffpack {
             .with_ttl_ms(TOOL_LIST_TTL_MS)
             .with_cache_scope(CacheScope::Public))
     }
+}
+
+/// A handler whose panics become JSON-RPC errors instead of silence.
+///
+/// # Why this cannot be an HTTP layer
+///
+/// The obvious place for a panic guard is a `tower` layer on the HTTP stack,
+/// and it is the wrong place. `rmcp` runs the handler on a task of its own
+/// (`tokio::spawn`, in its Streamable HTTP service), so a panic unwinds that
+/// task and never passes through the tower stack at all. The HTTP side is
+/// left awaiting a response that will never be sent: the request does not
+/// fail, it *hangs*, until Vercel kills the function at `maxDuration` and the
+/// client is left with a dropped connection and no idea which call did it.
+///
+/// That is strictly worse than the `500` #7 set out to prevent, so the guard
+/// has to be inside the handler, above the spawn. Here the panic is still a
+/// value, the request id is still in hand, and the answer is an ordinary
+/// JSON-RPC internal error that a client can render and a caller can report.
+///
+/// The panic's own message is deliberately not forwarded. It is written for
+/// us, it can name a file in this repository, and the caller can do nothing
+/// with it — #26 is where it reaches a log instead.
+#[derive(Debug, Clone)]
+pub struct Guarded<S>(pub S);
+
+impl<S: ServerHandler> ServerHandler for Guarded<S> {
+    fn get_info(&self) -> ServerConfig {
+        self.0.get_info()
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        self.0.supported_protocol_versions()
+    }
+
+    async fn list_tools(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        guard("listing tools", self.0.list_tools(request, context)).await
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        // The one that matters. Every tool of phases 3 and 4 runs through
+        // here, against archives from registries we do not control, and an
+        // index that is off by one on a malformed file is a panic like any
+        // other.
+        guard("calling a tool", self.0.call_tool(request, context)).await
+    }
+}
+
+/// Run `handler`, turning a panic into an internal error.
+///
+/// `AssertUnwindSafe` is the honest annotation rather than a way around the
+/// check: nothing here is shared across the catch. The handler is built fresh
+/// per request and dropped after it, so there is no state left half-updated
+/// for a later request to observe.
+async fn guard<T>(
+    doing: &'static str,
+    handler: impl Future<Output = Result<T, ErrorData>>,
+) -> Result<T, ErrorData> {
+    AssertUnwindSafe(handler)
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|_| {
+            Err(ErrorData::internal_error(
+                format!("diffpack failed while {doing}."),
+                None,
+            ))
+        })
 }
 
 /// How the handler is exposed over Streamable HTTP.

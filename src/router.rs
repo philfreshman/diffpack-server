@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use axum::body::Body;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
@@ -15,6 +16,8 @@ use axum::{Json, Router};
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::ServerHandler;
+use tower::Layer;
+use tower_http::catch_panic::{CatchPanicLayer, ResponseForPanic};
 
 use crate::mcp::{self, Diffpack};
 
@@ -47,7 +50,10 @@ where
     S: ServerHandler + Send + 'static,
 {
     let mcp = StreamableHttpService::new(
-        service_factory,
+        // Every handler the factory builds is wrapped, including one a test
+        // supplies, because a panic guard that only covered the handler in
+        // this file would be a guard the tests could not reach.
+        move || service_factory().map(mcp::Guarded),
         // Not the local session manager with sessions switched off, but the
         // manager that cannot make one. Two invocations of a serverless
         // function share no memory, so an in-memory session store would be a
@@ -60,10 +66,71 @@ where
 
     Router::new()
         .route("/health", get(health))
-        .nest_service("/mcp", mcp)
+        // The panic layer wraps the MCP service rather than the whole router,
+        // because what it answers with is JSON-RPC and only this route speaks
+        // it. The other two routes are a constant and a literal; there is
+        // nothing in them to panic.
+        .nest_service("/mcp", CatchPanicLayer::custom(JsonRpcOnPanic).layer(mcp))
         .fallback(not_found)
         .layer(axum::middleware::map_response(unbuffered_streams))
 }
+
+/// Turn a panic in the transport into an answer.
+///
+/// # What this does and does not catch
+///
+/// This catches the part of a request that runs inline on the HTTP task:
+/// origin validation, header checks, and deserializing the body — everything
+/// `rmcp` does before it hands the message to a handler. That is the code
+/// that meets attacker-controlled bytes first, which is why the layer is
+/// worth having on a public endpoint.
+///
+/// It does **not** catch a panic in a handler. `rmcp` runs handlers on a task
+/// of its own, so that unwind never passes through this stack;
+/// [`crate::mcp::Guarded`] is what catches those, and it has to live inside
+/// the handler to do it. The two are not alternatives — they cover different
+/// halves of the request, and neither covers the other's.
+///
+/// The status is `200`, matching how the transport already carries an
+/// internal error: the failure is in the body, not in the HTTP exchange,
+/// which completed. The id is `null` because a panic here happened before or
+/// during parsing, so there may be no id to echo — JSON-RPC allows null for
+/// exactly that case.
+///
+/// The panic's own message is not included. It is written for us, it may name
+/// a file in this repository, and the caller can do nothing with it; #26 is
+/// where it reaches a log instead.
+#[derive(Debug, Clone)]
+struct JsonRpcOnPanic;
+
+impl ResponseForPanic for JsonRpcOnPanic {
+    type ResponseBody = Body;
+
+    fn response_for_panic(
+        &mut self,
+        _panic: Box<dyn std::any::Any + Send + 'static>,
+    ) -> axum::http::Response<Self::ResponseBody> {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": null,
+            "error": {
+                "code": INTERNAL_ERROR,
+                "message": "diffpack failed while handling this request.",
+            },
+        });
+
+        axum::http::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("a constant response builds")
+    }
+}
+
+/// JSON-RPC's own code for "something broke inside the server", which is what
+/// a panic is. Not one of ours from [`crate::error`]: those name a failure we
+/// anticipated, and a panic is by definition one we did not.
+const INTERNAL_ERROR: i32 = -32603;
 
 /// The allowed origins named by [`ALLOWED_ORIGINS`], or none.
 ///
