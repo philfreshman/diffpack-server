@@ -15,6 +15,7 @@
 //! to stderr would leave "every tool call emits one line" as something nobody
 //! could check.
 
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -118,11 +119,14 @@ pub struct Phases {
     /// Everything: argument validation, the work, and building the answer.
     pub total: f64,
 
-    /// The part of it spent waiting for archives, where any was.
+    /// The part of it spent waiting for a registry, where any was.
     ///
     /// The one split worth making before the others exist: a slow call is
     /// either a slow registry or slow work here, and those are somebody
-    /// else's incident and ours.
+    /// else's incident and ours. Every seam that goes out of this process
+    /// counts towards it — an Archive and a Catalogue alike — because the
+    /// question is about the wait and not about which document was waited
+    /// for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fetch: Option<f64>,
 }
@@ -148,7 +152,7 @@ pub struct Phases {
 /// how much of the call went on waiting for a registry — and it makes
 /// `fetch <= total` true rather than usually true.
 ///
-/// What it is not is how much archive work the call caused, which is the
+/// What it is not is how much registry work the call caused, which is the
 /// summed figure and is a different question. Nothing asks it yet; when
 /// something does it goes beside this rather than replacing it.
 #[derive(Debug)]
@@ -158,8 +162,8 @@ pub struct Spent {
     /// in an atomic.
     started: Instant,
 
-    /// Whether any fetch happened at all, which is what tells "no archives
-    /// were read" from "reading them was instant".
+    /// Whether any fetch happened at all, which is what tells "nothing was
+    /// asked of a registry" from "asking was instant".
     fetched: AtomicBool,
 
     /// Microseconds from [`Self::started`] to the earliest fetch beginning.
@@ -198,8 +202,25 @@ impl Spent {
         self.last.fetch_max(self.offset(ended), Ordering::Relaxed);
     }
 
-    /// How long the call spent waiting for archives, or nothing if it read
-    /// none.
+    /// Run `work`, and put the window it took on this request's fetch phase.
+    ///
+    /// What a seam calls, rather than reading the two instants itself. There
+    /// is one seam per thing this server fetches and there will be more, and
+    /// a phase each of them times its own way is a phase that means something
+    /// slightly different per row.
+    ///
+    /// Recorded whether or not `work` succeeded. A registry that times out is
+    /// exactly the call worth knowing the wait for.
+    pub async fn while_fetching<T>(&self, work: impl Future<Output = T>) -> T {
+        let began = Instant::now();
+        let done = work.await;
+
+        self.fetching(began, Instant::now());
+        done
+    }
+
+    /// How long the call spent waiting for a registry, or nothing if it
+    /// asked one for nothing.
     pub fn fetch(&self) -> Option<Duration> {
         self.fetched.load(Ordering::Relaxed).then(|| {
             let first = self.first.load(Ordering::Relaxed);

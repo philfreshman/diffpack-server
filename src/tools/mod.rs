@@ -65,7 +65,7 @@ use crate::archive::{Archive, FileMap};
 use crate::catalogue::Catalogue;
 use crate::error::Failure;
 use crate::log::{Line, Sink, Spent};
-use crate::registry::Registry;
+use crate::registry::{Registry, Version};
 
 /// Declare the tools, and build the collection and the dispatch from one list.
 ///
@@ -268,27 +268,41 @@ impl Ctx {
     /// so that there is no way to read an archive that is not counted. A
     /// handler is unchanged by it: `ctx.archive().fetch(..)` is the same
     /// call it always was.
-    pub fn archive(&self) -> Timed<'_> {
-        Timed {
-            archive: &self.archive,
-            spent: &self.spent,
-        }
+    pub fn archive(&self) -> Timed<'_, Archive> {
+        self.timed(&self.archive)
     }
 
     /// What a package has released.
-    pub fn catalogue(&self) -> &Catalogue {
-        &self.catalogue
+    ///
+    /// Timed for the same reason and by the same wrapper. Reading a
+    /// catalogue is a request to a registry, and a `fetch` phase that only
+    /// counted archives would report the one tool that does nothing else as
+    /// a call that waited on nobody — which is the reading an operator makes
+    /// when the phase is absent.
+    pub fn catalogue(&self) -> Timed<'_, Catalogue> {
+        self.timed(&self.catalogue)
+    }
+
+    /// `seam`, with this request's tally attached.
+    fn timed<'a, S>(&'a self, seam: &'a S) -> Timed<'a, S> {
+        Timed {
+            seam,
+            spent: &self.spent,
+        }
     }
 }
 
-/// The archive seam, with the time a fetch takes recorded.
+/// A seam that waits on a registry, with that wait recorded.
 ///
 /// The same shape as [`crate::mcp::Guarded`]: a wrapper that adds one
 /// property to something a caller already knows how to use, so that the
-/// property is not a thing each caller has to remember.
+/// property is not a thing each caller has to remember. One wrapper over both
+/// seams rather than one each, because "how long did this call wait on a
+/// registry" is a question about the request and not about which of them
+/// answered it — two wrappers would be two places for that to drift.
 ///
-/// `Copy`, and [`Timed::fetch`] takes it by value, because of how the one
-/// tool that reads two archives asks for them:
+/// `Copy`, and each method takes it by value, because of how the one tool
+/// that reads two archives asks for them:
 ///
 /// ```ignore
 /// try_join!(
@@ -304,13 +318,24 @@ impl Ctx {
 /// binding at each such call site, which is a thing to remember at the one
 /// place this seam is used concurrently — and the seam exists so that
 /// counting a fetch is not a thing to remember.
-#[derive(Debug, Clone, Copy)]
-pub struct Timed<'a> {
-    archive: &'a Archive,
+#[derive(Debug)]
+pub struct Timed<'a, S> {
+    seam: &'a S,
     spent: &'a Spent,
 }
 
-impl Timed<'_> {
+// Derived, these would ask the seam behind the reference to be `Copy` too,
+// which neither adapter is and neither needs to be: what is copied is two
+// pointers.
+impl<S> Clone for Timed<'_, S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S> Copy for Timed<'_, S> {}
+
+impl Timed<'_, Archive> {
     /// The files in `version` of `package`, and the time it took on the
     /// request's tally.
     pub async fn fetch(
@@ -319,13 +344,23 @@ impl Timed<'_> {
         package: &str,
         version: &str,
     ) -> Result<FileMap, Failure> {
-        let began = Instant::now();
-        let files = self.archive.fetch(registry, package, version).await;
+        self.spent
+            .while_fetching(self.seam.fetch(registry, package, version))
+            .await
+    }
+}
 
-        // Recorded whether or not it worked. A registry that times out is
-        // exactly the call worth knowing the fetch time of.
-        self.spent.fetching(began, Instant::now());
-        files
+impl Timed<'_, Catalogue> {
+    /// Every published version of `package`, newest first, and the time it
+    /// took on the request's tally.
+    pub async fn versions(
+        self,
+        registry: Registry,
+        package: &str,
+    ) -> Result<Vec<Version>, Failure> {
+        self.spent
+            .while_fetching(self.seam.versions(registry, package))
+            .await
     }
 }
 

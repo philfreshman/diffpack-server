@@ -261,6 +261,34 @@ async fn the_fetch_is_timed_apart_from_the_rest_when_there_was_one() {
     );
 }
 
+/// A catalogue read is a wait on a registry like any other.
+///
+/// `list_package_versions` fetches no archive and is otherwise the whole of
+/// what it does. Counting only archives would put it in the logs as a call
+/// that waited on nobody, and "no `fetch` phase" is what an operator reads as
+/// "this one never left the process" while hunting a slow registry.
+#[tokio::test]
+async fn a_call_that_only_read_a_catalogue_is_timed_as_a_wait_too() {
+    let listed = Capture::new();
+    call(
+        &listed,
+        "list_package_versions",
+        json!({ "registry": "npm", "package": "zod" }),
+    )
+    .await;
+
+    let line = one(&listed);
+    let fetch = line["ms"]["fetch"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("a call that read a catalogue waited on it, got {line}"));
+    let total = line["ms"]["total"].as_f64().expect("a call is timed");
+
+    assert!(
+        fetch <= total,
+        "the wait is part of the call, so it cannot outlast it: {fetch} of {total}"
+    );
+}
+
 /// The tool that reads two archives still leaves one line, not two.
 ///
 /// A guard rather than a cycle of its own: `diff_package_versions` is the

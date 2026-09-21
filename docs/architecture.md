@@ -118,9 +118,9 @@ means the seams it may reach: `Archive` and `Catalogue` today and `DiffStore`
 (#20) beside them, while `registry`, `page` and `handle` are named directly
 because a pure module has nothing to hand over. Beside them it carries what
 the dispatch needs and a handler never touches — the log's `Sink`, and the
-`Spent` that the phases of one call add up in. `Ctx::archive()` hands back the
-archive seam with that stopwatch already on it, so a fetch cannot go uncounted
-and a handler's call is unchanged.
+`Spent` that the phases of one call add up in. `Ctx::archive()` and
+`Ctx::catalogue()` hand back their seam with that stopwatch already on it, so
+a wait on a registry cannot go uncounted and a handler's call is unchanged.
 
 That factory is also the seam the suite drives: a test builds a `Ctx` over the
 fixture adapters and a capturing sink, and reaches both through the path
@@ -360,9 +360,13 @@ must not reach a model are one definition. Argument values are redacted and
 `?` and stops looking like one.
 
 Where a call's time goes is accumulated in `Spent`, which a `Ctx` holds for
-the length of one request and the seams write into. `Ctx::archive()` hands
-back the archive seam with the stopwatch already on it, so a handler is
-unchanged and there is no way to read an archive that goes uncounted.
+the length of one request and the seams write into. `Ctx::archive()` and
+`Ctx::catalogue()` both hand back their seam with the stopwatch already on
+it, so a handler is unchanged and there is no way to wait on a registry
+uncounted. One wrapper over both, because the phase answers how long the call
+waited rather than which document it waited for — and a tool that only reads
+a catalogue reporting no wait at all is the reading an operator would take
+for "this one never left the process".
 
 `Spent` keeps the *window* fetching spanned rather than the sum of each
 fetch's duration, because `diff_package_versions` asks for two versions
