@@ -15,6 +15,11 @@
 //! stronger fixture than any package. What this suite asserts is that this
 //! tool goes *through* that module rather than around it.
 //!
+//! Nor that no `description` an agent reads names a Rust path. That is a rule
+//! every tool is held to rather than a fact about this one, so `tests/tools.rs`
+//! holds it over the whole of `tools/list`. A copy here would have gone on
+//! passing on the day a new tool leaked one.
+//!
 //! Extraction is `tests/archive.rs`'s the same way. The archives below are
 //! the fixture set, so a fetch that built a URL of its own finds nothing.
 
@@ -147,42 +152,6 @@ async fn the_paging_arguments_document_the_numbers_that_bind() {
             .as_str()
             .is_some_and(|said| said.contains("unchanged")),
         "the description is the one `page::Cursor` writes, got {cursor}"
-    );
-}
-
-/// Nothing an agent reads names a Rust path.
-///
-/// Every description here reaches a model, and a model told that a field is
-/// "declared as [`crate::page`]'s type" is reading this repository's
-/// reasoning rather than anything it can act on. The reasoning belongs in the
-/// module, next to the code it is about; the schema is for the caller.
-#[tokio::test]
-async fn no_description_an_agent_reads_names_a_rust_path() {
-    let tool = listed(TOOL).await;
-
-    let mut leaked = Vec::new();
-    let mut visit = |value: &Value| {
-        if let Some(text) = value["description"].as_str() {
-            if text.contains("crate::") || text.contains("[`") {
-                leaked.push(text.to_owned());
-            }
-        }
-    };
-
-    visit(&tool);
-    for schema in ["inputSchema", "outputSchema"] {
-        for section in ["properties", "$defs"] {
-            if let Some(fields) = tool[schema][section].as_object() {
-                for field in fields.values() {
-                    visit(field);
-                }
-            }
-        }
-    }
-
-    assert!(
-        leaked.is_empty(),
-        "these reach a model and are written for us: {leaked:#?}"
     );
 }
 
