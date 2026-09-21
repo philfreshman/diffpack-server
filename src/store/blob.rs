@@ -357,11 +357,9 @@ impl Blob {
     /// Send `request`, trying again while the store's answer says trying
     /// again could help.
     ///
-    /// Two things are worth another attempt and nothing else is: a request
-    /// that never became a response, and a `5xx`. Both mean the store, not
-    /// the request — so the same bytes sent again may work. A `4xx` is the
-    /// store reading what was asked and refusing it, and sending it again
-    /// is asking a settled question twice.
+    /// A request that never became a response is always worth another
+    /// attempt, because there is no answer in it to read; which answers are
+    /// is [`again_might_work`].
     async fn send(
         &self,
         request: RequestBuilder,
@@ -375,7 +373,7 @@ impl Blob {
             let outcome = again.send().await;
 
             let worth_retrying = match &outcome {
-                Ok(response) => response.status().is_server_error(),
+                Ok(response) => again_might_work(response.status()),
                 Err(_) => true,
             };
 
@@ -439,6 +437,22 @@ impl Blob {
             doing: "building a blob store request",
         })
     }
+}
+
+/// Whether asking the same question again could get a different answer.
+///
+/// A `5xx` is the store rather than the request: the same bytes sent again
+/// may work. So is `429`, which is the one `4xx` that is about the moment
+/// instead of about what was asked — and a cache sweep deleting a page of
+/// blobs at a time is exactly what provokes one. Every other `4xx` is the
+/// store having read the request and refused it, and sending it again is
+/// asking a settled question twice.
+///
+/// How long to wait is this client's own and not the store's `Retry-After`:
+/// a cache that waited out the minute somebody else asked for would have
+/// spent the whole function on a lookup it can do without.
+fn again_might_work(status: reqwest::StatusCode) -> bool {
+    status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
 }
 
 /// The response, or the failure its status is.
@@ -990,6 +1004,31 @@ mod tests {
             stub.requests().len(),
             2,
             "a store that answered `503` should have been asked again"
+        );
+    }
+
+    /// `429` is the one `4xx` that asking again can get past, and a cache is
+    /// what provokes it: a sweep deletes a page of blobs at a time and a
+    /// cold function writes two of them at once. Reading it as a settled
+    /// refusal would give up on the one answer that changes by itself.
+    #[tokio::test]
+    async fn a_store_that_asked_for_a_moment_is_given_one() {
+        let stub = Stub::answering(vec![
+            Reply::refusing(StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
+            Reply::ok("{}"),
+        ])
+        .await;
+        let blob =
+            Blob::at(stub.base(), "a-test-store", "a-token").with_backoff(Duration::from_millis(1));
+
+        blob.put("diffs/v1/abc/meta.json", b"{}".to_vec())
+            .await
+            .expect("the second attempt is the one that worked");
+
+        assert_eq!(
+            stub.requests().len(),
+            2,
+            "a store that answered `429` should have been asked again"
         );
     }
 
