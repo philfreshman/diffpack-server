@@ -230,7 +230,58 @@ impl Registry {
                     .collect::<Vec<_>>()
             }
 
-            Self::Crates | Self::PyPi => return None,
+            Self::Crates => {
+                #[derive(Deserialize)]
+                struct Document {
+                    versions: Vec<Release>,
+                }
+                #[derive(Deserialize)]
+                struct Release {
+                    num: String,
+                    created_at: String,
+                }
+
+                let document: Document = serde_json::from_str(document).ok()?;
+                document
+                    .versions
+                    .into_iter()
+                    .map(|release| Version {
+                        version: release.num,
+                        published_at: release.created_at,
+                    })
+                    .collect::<Vec<_>>()
+            }
+
+            // deps.dev sorts these lexically by version string, which is
+            // neither end of the list: `requests` runs to 2.9.2 because
+            // "2.9.2" sorts after "2.34.2". The dates are the only thing in
+            // this document that puts releases in order.
+            Self::PyPi => {
+                #[derive(Deserialize)]
+                struct Document {
+                    versions: Vec<Release>,
+                }
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Release {
+                    version_key: VersionKey,
+                    published_at: String,
+                }
+                #[derive(Deserialize)]
+                struct VersionKey {
+                    version: String,
+                }
+
+                let document: Document = serde_json::from_str(document).ok()?;
+                document
+                    .versions
+                    .into_iter()
+                    .map(|release| Version {
+                        version: release.version_key.version,
+                        published_at: release.published_at,
+                    })
+                    .collect::<Vec<_>>()
+            }
         };
 
         // Newest first, and by the date rather than by the name. Ties keep

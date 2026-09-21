@@ -1,3 +1,5 @@
 {
-  "https://registry.npmjs.org/zod": "npm-zod.json"
+  "https://registry.npmjs.org/zod": "npm-zod.json",
+  "https://crates.io/api/v1/crates/tokio": "crates-tokio.json",
+  "https://api.deps.dev/v3/systems/pypi/packages/requests": "pypi-requests.json"
 }

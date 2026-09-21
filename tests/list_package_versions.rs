@@ -62,6 +62,67 @@ async fn an_npm_packages_versions_come_back_newest_first() {
     );
 }
 
+/// crates.io answers with an array where npm answers with an object, and its
+/// dates are spelled to the microsecond where npm's are to the millisecond.
+/// Out the other side they are the same listing.
+///
+/// The five releases below are `tokio`'s real ones, dates included, and they
+/// are here because of what they are not: 1.51.4 was published between 1.52.4
+/// and 1.52.3, so the order by date is not the order by version number. A
+/// listing that sorted on the number would put 1.52.3 above 1.51.4.
+#[tokio::test]
+async fn a_crates_io_packages_versions_come_back_newest_first() {
+    let result = call(json!({
+        "registry": "crates",
+        "package": "tokio",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "a crate the fixture set has is not an error, got {result}"
+    );
+
+    assert_eq!(
+        versions(&result),
+        vec!["1.53.1", "1.53.0", "1.52.4", "1.51.4", "1.52.3"],
+        "a backport published between two releases of a newer line sits where \
+         its date puts it, not where its version number would: got {result}"
+    );
+}
+
+/// PyPI, through deps.dev, and the case that says why the order is computed
+/// from a date rather than read off the document.
+///
+/// deps.dev sorts a package's versions **lexically by version string**, which
+/// is neither newest-first nor oldest-first. The five releases below are
+/// `requests`' real ones in deps.dev's real order, and `2.9.2` is last
+/// because `"2.9.2"` sorts after `"2.34.2"`. So a listing that reversed the
+/// document — which is what this tool's issue originally specified — would
+/// announce a 2016 release as the newest version of `requests`.
+#[tokio::test]
+async fn a_pypi_packages_versions_are_ordered_by_date_not_by_the_documents_order() {
+    let result = call(json!({
+        "registry": "pypi",
+        "package": "requests",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "a package the fixture set has is not an error, got {result}"
+    );
+
+    assert_eq!(
+        versions(&result),
+        vec!["2.34.2", "2.31.0", "2.9.2", "2.9.0", "0.10.0"],
+        "deps.dev lists these lexically, so the last entry is 2.9.2 and \
+         reversing the document would put a 2016 release on top: got {result}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Reading the answer
 // ---------------------------------------------------------------------------
