@@ -46,6 +46,7 @@ pub type FileMap = HashMap<String, engine::FileMapEntry>;
 pub const SIZE_LIMIT: u64 = 128 * 1024 * 1024;
 
 /// Where a version's files come from.
+#[derive(Debug)]
 pub struct Archive {
     source: Source,
     /// The most a body may weigh before this server refuses it. A field
@@ -61,6 +62,7 @@ pub struct Archive {
 /// buys has no buyer — and two arms of one `match` are read in a screen
 /// where two types are read in two files. The same reasoning as [ADR
 /// 0004](../docs/adr/0004-one-registry-module.md).
+#[derive(Debug)]
 enum Source {
     Live(live::Live),
     Fixture(fixture::Fixture),
@@ -160,7 +162,7 @@ impl Archive {
                 live.bytes(url, self.limit, registry, package, version)
                     .await?
             }
-            Source::Fixture(fixture) => fixture.bytes(url)?,
+            Source::Fixture(fixture) => fixture.bytes(url, registry, package, version)?,
         };
 
         let weight = bytes.len() as u64;
@@ -196,6 +198,25 @@ fn unreadable(package: &str, version: &str, reason: &str) -> Failure {
         package: package.to_owned(),
         version: version.to_owned(),
         reason: reason.to_owned(),
+    }
+}
+
+/// A package or a version the registry does not have, in the words a model
+/// reads.
+///
+/// Which half was wrong is not in a `404` and is not guessed at here: a
+/// version is the far commoner mistake, and a model sent to check the name
+/// when it mistyped the number has been sent the wrong way. #18 is what will
+/// let this carry the versions that do exist.
+///
+/// One constructor for both adapters, so the fixture set cannot answer
+/// something the registries would not.
+pub(super) fn not_found(registry: Registry, package: &str, version: &str) -> Failure {
+    Failure::NoSuchVersion {
+        registry: registry.name().to_owned(),
+        package: package.to_owned(),
+        version: version.to_owned(),
+        known: Vec::new(),
     }
 }
 

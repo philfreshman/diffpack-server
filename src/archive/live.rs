@@ -35,6 +35,7 @@ const USER_AGENT: &str = concat!(
 );
 
 /// The adapter that fetches.
+#[derive(Debug)]
 pub struct Live;
 
 impl Live {
@@ -90,17 +91,11 @@ fn success(
     }
 
     Err(match status {
-        // What a registry answers for an archive that is not there. Which
-        // half is wrong — the package or the version — is not in the status,
-        // and a version is the far commoner mistake; #18 is what will let
-        // this message carry the versions that do exist.
+        // What a registry answers for an archive that is not there.
+        // `super::not_found` is where the reasoning is, and it is the
+        // fixture adapter's refusal too.
         StatusCode::NOT_FOUND | StatusCode::FORBIDDEN | StatusCode::GONE => {
-            Failure::NoSuchVersion {
-                registry: registry.name().to_owned(),
-                package: package.to_owned(),
-                version: version.to_owned(),
-                known: Vec::new(),
-            }
+            super::not_found(registry, package, version)
         }
 
         StatusCode::TOO_MANY_REQUESTS => Failure::RateLimited {

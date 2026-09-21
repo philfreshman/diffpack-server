@@ -368,7 +368,11 @@ async fn call(arguments: Value) -> Value {
 }
 
 /// The archives the fetch path is served from, by the URL each stands in for.
-fn fixture_index() -> HashMap<String, String> {
+///
+/// A `null` value is a URL the fixture set says serves nothing, which is
+/// still a URL the set knows about — what this test asks is whether the
+/// answered URL is one the fetch path would have been served from at all.
+fn fixture_index() -> HashMap<String, Option<String>> {
     let index = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/fixtures/archives/index.json"
