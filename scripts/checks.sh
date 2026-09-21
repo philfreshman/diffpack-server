@@ -10,7 +10,7 @@
 #
 # Usage, from the repository root:
 #
-#   ./scripts/checks.sh                  # fmt, clippy, deny, audit, test
+#   ./scripts/checks.sh                  # fmt, seams, clippy, deny, audit, test
 #   ./scripts/checks.sh clippy test      # just those, in the order given
 #
 # Each check is independent, and the script runs every one it was asked for
@@ -19,7 +19,7 @@
 
 set -uo pipefail
 
-readonly ALL_CHECKS=(fmt clippy deny audit test)
+readonly ALL_CHECKS=(fmt seams clippy deny audit test)
 
 # `cargo deny` and `cargo audit` are not part of a Rust toolchain, so a fresh
 # clone does not have them. Missing tools are a hard failure rather than a
@@ -46,6 +46,24 @@ run_fmt() {
   #
   # When this fails: `cargo fmt --all`, and commit.
   cargo fmt --all --check
+}
+
+run_seams() {
+  # The boundaries this crate is held to that the compiler cannot see. One so
+  # far: `src/engine.rs` is the only importer of `diffpack_engine`.
+  #
+  # Second because, like `fmt`, it compiles nothing — a seam crossed is
+  # reported in a second rather than after the dependency graph has been
+  # built.
+  #
+  # The rule lives in a script of its own because it carries the paragraph
+  # explaining why it exists, which is the part that stops a future reader
+  # deleting it. What matters here is that nothing invokes it directly any
+  # more: `.githooks/pre-commit` and CI both arrive through this script, so a
+  # rule added there is a rule a commit is held to. It used to be the one
+  # check CI called on its own, which made it the one check a commit could
+  # break without hearing about it until the pull request was open.
+  ./scripts/check-engine-seam.sh
 }
 
 run_clippy() {
@@ -91,7 +109,7 @@ main() {
   local check
   for check in "${checks[@]}"; do
     case "$check" in
-      fmt | clippy | deny | audit | test) ;;
+      fmt | seams | clippy | deny | audit | test) ;;
       *)
         echo "error: unknown check '${check}' (expected one of: ${ALL_CHECKS[*]})" >&2
         exit 2

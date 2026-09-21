@@ -125,11 +125,18 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::warning file=fixtures/cache-key-vectors.json::Cache-key vectors changed - confirm they came from docs/cache-key.md"
 
-  # `src/engine.rs` is the only module allowed to import `diffpack_engine`.
-  # Its own job because it needs no toolchain and no compile.
-  seam:
-    name: engine seam
+  # The boundaries the compiler cannot see: `src/engine.rs` is the only module
+  # allowed to import `diffpack_engine`, and a module under `src/tools/`
+  # reaches the network and the store only through the seams. Its own job
+  # because it needs no toolchain and no compile.
+  #
+  # Through `scripts/checks.sh` like every other check, so the pre-commit hook
+  # runs it too. It used to call `check-engine-seam.sh` directly, which meant
+  # the one rule a commit could break without hearing about it until the pull
+  # request was open.
+  seams:
+    name: module seams
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: ./scripts/check-engine-seam.sh
+      - run: ./scripts/checks.sh seams
