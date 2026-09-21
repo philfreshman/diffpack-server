@@ -99,6 +99,14 @@ list of tools, and the generic call path where arguments are validated and
 `Failure` is put on its channel — which is why a handler returns
 `Result<Output, Failure>` and never names a result type of MCP's.
 
+`Ctx` is what a handler may reach, built once per request by the service
+factory `router::router_with` takes and cloned into every call. It carries
+`Archive` today and `DiffStore` (#20) beside it; `registry`, `page` and
+`handle` are not in it and do not need to be, because a pure module is named
+directly. That factory is also the seam the suite drives: a test builds a
+`Ctx` over the fixture archive adapter and reaches it through the path
+production takes, rather than around it.
+
 ### `src/registry.rs` — what a registry is
 
 npm, crates.io and PyPI, described once: the identifier used in a parameter and
@@ -141,6 +149,12 @@ and extraction. The fixture index is keyed by URL for the same reason — a
 fetch path that built a URL of its own instead of asking `registry` finds
 nothing there, so `tests/archive.rs` is a test of resolution as well as of
 extraction.
+
+The index has a third answer beside "here are the bytes" and "this URL is not
+in the set": `null`, meaning the registry serves nothing there. It is the
+offline suite's way of reaching the path a `404` takes, and the refusal it
+produces is built by the same constructor the live adapter uses, so the two
+cannot disagree about what a missing version reads like.
 
 Redirects are followed only while they stay on allowed hosts. A `302` is a
 request to wherever it points, so the alternative is an allowlist whose holes
