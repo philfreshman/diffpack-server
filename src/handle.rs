@@ -49,11 +49,19 @@ pub struct DiffHandle {
 
 impl DiffHandle {
     /// Mint a handle for the diff `inputs` describe.
+    ///
+    /// The caller supplies its half and no more. The engine version and the
+    /// schema are this build's, taken here rather than accepted, which is
+    /// what keeps a handle from naming a diff computed by code that is not
+    /// running.
     pub fn mint(inputs: Inputs) -> Self {
         Self { inputs }
     }
 
     /// What the caller asked for, for a tool that has to recompute.
+    ///
+    /// This is the whole of what a cache miss costs: with these a reading
+    /// tool fetches both archives and diffs them again, and answers.
     pub fn inputs(&self) -> &Inputs {
         &self.inputs
     }
@@ -78,12 +86,22 @@ impl DiffHandle {
     }
 
     /// The handle as it travels: a version prefix and a base64url payload.
+    ///
+    /// A payload that will not serialise produces an empty one, which is a
+    /// handle that will not decode — the fail-closed direction, and cheaper
+    /// than a panic inside a request. There is no such payload: every field
+    /// is a string, a bool or a number, and a non-finite threshold cannot
+    /// arrive from JSON in the first place.
     pub fn encode(&self) -> String {
         let payload = serde_json::to_vec(&Payload::of(self)).unwrap_or_default();
         format!("{HANDLE_VERSION}:{}", URL_SAFE_NO_PAD.encode(payload))
     }
 
-    /// Read back a handle this server minted.
+    /// Read back a handle this server minted, verification included.
+    ///
+    /// A [`Failure::InvalidParams`], which is `-32602`: every way this can
+    /// fail is something a client did, and none of them is anything a model
+    /// can act on.
     pub fn decode(text: &str) -> Result<Self, Failure> {
         parse(text).map_err(|message| Failure::InvalidParams { message })
     }
