@@ -288,3 +288,34 @@ The 4.5 MB Vercel allows a function's response body. Distinct from Budget,
 which is the blob store's 256 MB: this one is per answer and the platform's,
 that one is cumulative and ours.
 _Avoid_: response limit, size cap
+
+### Running it
+
+**Line**:
+What one tool call leaves behind: a single JSON object naming the tool, a
+summary of what it was asked for, where its time went and how it ended. One
+per call and written by the dispatch rather than by a tool, so a count of
+lines is a count of calls. Distinct from a Failure's message, which is
+written for a model and reaches a client — a Line is written for an operator
+and goes no further than the platform's logs.
+_Avoid_: log, log entry, event, trace, record
+
+**Phase**:
+One part of a call that is timed by itself. Two of them today: the whole
+call, and the part of it spent waiting for Archives. A Phase that did not
+happen is absent from a Line rather than zero, because zero is a measurement
+and a percentile taken over one describes neither population.
+
+Where two fetches overlap — a Diff asks for both versions at once — the
+Phase is the window they span and not the sum of their durations. It answers
+how much of the call went on waiting, which is the question it is next to the
+total to answer; how much Archive work the call caused is a different
+question and nothing asks it yet.
+_Avoid_: span, step, stage, timing
+
+**Cause**:
+Which Failure a call ended in, in one word, as a Line carries it —
+`no_such_version`, `rate_limited`, `too_large`. It is the Failure's kind and
+not its message: a message is a sentence carrying the package name a caller
+sent, so counting by it would give one bucket per call.
+_Avoid_: error, reason, status, code

@@ -52,6 +52,7 @@
 
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Instant;
 
 use rmcp::model::{CallToolResult, JsonObject, Tool as Definition, ToolAnnotations};
 use rmcp::ErrorData;
@@ -59,9 +60,11 @@ use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::archive::Archive;
+use crate::archive::{Archive, FileMap};
 use crate::catalogue::Catalogue;
 use crate::error::Failure;
+use crate::log::{Line, Sink, Spent};
+use crate::registry::Registry;
 
 /// Declare the tools, and build the collection and the dispatch from one list.
 ///
@@ -97,17 +100,20 @@ macro_rules! tools {
         }
 
         /// Run the tool `name`, or refuse a name that is not one of ours.
-        pub async fn call(
+        ///
+        /// Private, and reached only through [`call`], which is what makes
+        /// the log line a property of every dispatch rather than of the
+        /// tools that remembered to write one.
+        async fn dispatch(
             name: &str,
             arguments: Option<JsonObject>,
             ctx: &Ctx,
-        ) -> Result<CallToolResult, ErrorData> {
+        ) -> Result<CallToolResult, Failure> {
             match name {
                 $(<$module::$tool as Tool>::NAME => invoke::<$module::$tool>(arguments, ctx).await,)+
-                unknown => Failure::NoSuchTool {
+                unknown => Err(Failure::NoSuchTool {
                     name: unknown.to_owned(),
-                }
-                .respond(),
+                }),
             }
         }
     };
@@ -142,14 +148,27 @@ tools! {
 /// reaching for anything that is neither here nor a pure module has gone
 /// around a seam.
 ///
-/// Each is behind an [`Arc`] because this is cloned into every handler and an
-/// adapter is not free to rebuild: a live one shares the process's HTTP
-/// client and a fixture one is a path it reads from.
+/// Beside the seams it carries what the dispatch needs and a handler never
+/// touches: the [`Sink`] the one line per call is written to, and the
+/// [`Spent`] that call's phases add up in. That is the whole of the
+/// difference between what a `Ctx` is for a handler and what it is for a
+/// request — a handler reaches the seams, and a request is also the line it
+/// leaves behind.
+///
+/// Each seam is behind an [`Arc`] because this is cloned into every handler
+/// and an adapter is not free to rebuild: a live one shares the process's
+/// HTTP client and a fixture one is a path it reads from.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Ctx {
     archive: Arc<Archive>,
     catalogue: Arc<Catalogue>,
+    log: Sink,
+
+    /// Where this request's time has gone so far. Behind an [`Arc`] because
+    /// a `Ctx` is cloned into every handler and the phases they spend have
+    /// to add up to one call's.
+    spent: Arc<Spent>,
 }
 
 impl Ctx {
@@ -158,6 +177,8 @@ impl Ctx {
         Self {
             archive: Arc::new(Archive::live()),
             catalogue: Arc::new(Catalogue::live()),
+            log: Sink::default(),
+            spent: Arc::new(Spent::default()),
         }
     }
 
@@ -181,14 +202,79 @@ impl Ctx {
         }
     }
 
+    /// The same, writing its log lines to `log`.
+    ///
+    /// The other half of the seam `tests/log.rs` drives: production writes to
+    /// the runtime logs and the suite writes to a buffer it can read back,
+    /// through the same factory and the same [`call`].
+    pub fn logging_to(self, log: Sink) -> Self {
+        Self { log, ..self }
+    }
+
     /// A version's files.
-    pub fn archive(&self) -> &Archive {
-        &self.archive
+    ///
+    /// Returns the seam with a stopwatch on it rather than the seam itself,
+    /// so that there is no way to read an archive that is not counted. A
+    /// handler is unchanged by it: `ctx.archive().fetch(..)` is the same
+    /// call it always was.
+    pub fn archive(&self) -> Timed<'_> {
+        Timed {
+            archive: &self.archive,
+            spent: &self.spent,
+        }
     }
 
     /// What a package has released.
     pub fn catalogue(&self) -> &Catalogue {
         &self.catalogue
+    }
+}
+
+/// The archive seam, with the time a fetch takes recorded.
+///
+/// The same shape as [`crate::mcp::Guarded`]: a wrapper that adds one
+/// property to something a caller already knows how to use, so that the
+/// property is not a thing each caller has to remember.
+///
+/// `Copy`, and [`Timed::fetch`] takes it by value, because of how the one
+/// tool that reads two archives asks for them:
+///
+/// ```ignore
+/// try_join!(
+///     ctx.archive().fetch(registry, &package, &from),
+///     ctx.archive().fetch(registry, &package, &to),
+/// )
+/// ```
+///
+/// Each `ctx.archive()` there is a temporary that the statement drops while
+/// the futures are still running. Taken by reference, the borrow outlives
+/// what it borrows and the tool does not compile; moved into the future, it
+/// is two pointers that go where the work goes. The alternative was a `let`
+/// binding at each such call site, which is a thing to remember at the one
+/// place this seam is used concurrently — and the seam exists so that
+/// counting a fetch is not a thing to remember.
+#[derive(Debug, Clone, Copy)]
+pub struct Timed<'a> {
+    archive: &'a Archive,
+    spent: &'a Spent,
+}
+
+impl Timed<'_> {
+    /// The files in `version` of `package`, and the time it took on the
+    /// request's tally.
+    pub async fn fetch(
+        self,
+        registry: Registry,
+        package: &str,
+        version: &str,
+    ) -> Result<FileMap, Failure> {
+        let began = Instant::now();
+        let files = self.archive.fetch(registry, package, version).await;
+
+        // Recorded whether or not it worked. A registry that times out is
+        // exactly the call worth knowing the fetch time of.
+        self.spent.fetching(began, Instant::now());
+        files
     }
 }
 
@@ -237,8 +323,37 @@ pub trait Tool {
     ///
     /// The error type is [`Failure`] rather than anything of MCP's, which is
     /// what keeps a handler from putting a failure on the wrong channel:
-    /// [`Failure::respond`] decides that once, in [`invoke`], for every tool.
+    /// [`call`] decides that once, for every tool, after the line describing
+    /// the call has been written.
     fn call(args: Self::Args, ctx: &Ctx) -> impl Future<Output = Result<Self::Output, Failure>>;
+}
+
+/// Run the tool `name`, and leave one line behind saying what happened.
+///
+/// The line is written here rather than in a handler because "every tool call
+/// emits one" is a property of the dispatch: a tool that forgot would not
+/// fail to compile, and the gap would be invisible until the call nobody
+/// logged was the one being looked for.
+pub async fn call(
+    name: &str,
+    arguments: Option<JsonObject>,
+    ctx: &Ctx,
+) -> Result<CallToolResult, ErrorData> {
+    // Summarised before the dispatch, because the dispatch consumes them.
+    let line = Line::new(name).about(arguments.as_ref());
+
+    let started = Instant::now();
+    let answer = dispatch(name, arguments, ctx).await;
+    ctx.log
+        .write(&line.taking(started.elapsed(), &ctx.spent).ending(&answer));
+
+    // The one place a `Failure` is put on its channel. Every path into this
+    // function returns one, so there is no arm that can answer without
+    // having been described a line earlier.
+    match answer {
+        Ok(result) => Ok(result),
+        Err(failure) => failure.respond(),
+    }
 }
 
 /// The definition of `T`, as `tools/list` returns it.
@@ -255,40 +370,31 @@ fn definition<T: Tool>() -> Definition {
         )
 }
 
-/// Deserialize `arguments`, run `T`, and put the answer or the failure on the
-/// channel it belongs to.
+/// Deserialize `arguments` and run `T`.
 ///
 /// This is where every tool's error handling happens, which is why a handler
-/// has none of its own. Arguments that do not validate are the client's
-/// mistake and take the protocol channel; anything that goes wrong afterwards
-/// is [`Failure`]'s to place.
+/// has none of its own. Everything that can go wrong is a [`Failure`],
+/// including arguments that did not validate and an answer that would not
+/// serialise — which is what lets [`call`] name the outcome in a line before
+/// [`Failure::respond`] decides which channel it leaves on.
 async fn invoke<T: Tool>(
     arguments: Option<JsonObject>,
     ctx: &Ctx,
-) -> Result<CallToolResult, ErrorData> {
-    let args = match serde_json::from_value::<T::Args>(arguments.unwrap_or_default().into()) {
-        Ok(args) => args,
-        Err(invalid) => {
-            return Failure::InvalidParams {
-                message: invalid.to_string(),
-            }
-            .respond()
-        }
-    };
+) -> Result<CallToolResult, Failure> {
+    let args = serde_json::from_value::<T::Args>(arguments.unwrap_or_default().into()).map_err(
+        |invalid| Failure::InvalidParams {
+            message: invalid.to_string(),
+        },
+    )?;
 
-    let output = match T::call(args, ctx).await {
-        Ok(output) => output,
-        Err(failure) => return failure.respond(),
-    };
+    let output = T::call(args, ctx).await?;
 
     // A tool whose own output will not serialise is a bug in this crate, not
     // something the caller did, so it takes the internal channel rather than
     // being reported as the tool failing.
-    match serde_json::to_value(output) {
-        Ok(value) => Ok(CallToolResult::structured(value)),
-        Err(_) => Failure::Internal {
+    serde_json::to_value(output)
+        .map(CallToolResult::structured)
+        .map_err(|_| Failure::Internal {
             doing: "answering a tool call",
-        }
-        .respond(),
-    }
+        })
 }

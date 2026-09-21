@@ -11,6 +11,7 @@ pub mod error;
 pub mod fetch;
 pub mod handle;
 pub mod health;
+pub mod log;
 pub mod mcp;
 pub mod page;
 pub mod registry;
