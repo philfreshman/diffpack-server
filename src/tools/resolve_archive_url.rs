@@ -23,6 +23,11 @@
 //! the browser runs. This module matches on no registry name of its own: what
 //! a registry is has one home (ADR 0004, #42), and a copy here would be the
 //! fifth one that ADR rejects.
+//!
+//! Which is also why the note about that below is a `//` comment and not a
+//! `///` one: a doc comment on a field of [`Args`] reaches a model, and this
+//! is a thing to know about the code rather than about the argument. See
+//! [`crate::tools`].
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -45,12 +50,11 @@ pub struct ResolveArchiveUrl;
 pub struct Args {
     /// The registry that publishes the package: `npm` or `crates`.
     ///
-    /// The enum comes from [`crate::registry`], so the list an agent is shown
-    /// is the list this server has rather than a description of it.
-    ///
     /// `pypi` parses and is a registry this server knows, but this tool
     /// cannot resolve a URL for it: PyPI lists a version's files in its
     /// metadata rather than serving them from a predictable path.
+    // The enum itself comes from `crate::registry`, so the list an agent is
+    // shown is the list this server has rather than a description of one.
     pub registry: Registry,
 
     /// The package name as the registry spells it, scope included:
