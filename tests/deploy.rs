@@ -61,11 +61,11 @@ fn the_function_vercel_json_configures_is_the_one_cargo_builds() {
     );
 }
 
-/// Routing lives inside the function, not in the platform: `api/mcp.rs`
-/// matches on the path itself so that `/health` and (in #6) `/mcp` are one
-/// binary's business. That only holds if every path actually arrives, which
-/// is what the catch-all rewrite is for. A rewrite pointing somewhere the
-/// handler is not would strand every request.
+/// Routing lives inside the function, not in the platform: `src/router.rs`
+/// matches on the path itself, so `/health` and `/mcp` are one binary's
+/// business. That only holds if every path actually arrives, which is what
+/// the catch-all rewrite is for. A rewrite pointing somewhere the handler is
+/// not would strand every request.
 #[test]
 fn every_path_is_rewritten_to_the_handler() {
     let manifest = vercel_json();

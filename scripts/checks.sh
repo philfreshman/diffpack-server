@@ -10,7 +10,7 @@
 #
 # Usage, from the repository root:
 #
-#   ./scripts/checks.sh                  # clippy, deny, audit, test
+#   ./scripts/checks.sh                  # fmt, clippy, deny, audit, test
 #   ./scripts/checks.sh clippy test      # just those, in the order given
 #
 # Each check is independent, and the script runs every one it was asked for
@@ -19,7 +19,7 @@
 
 set -uo pipefail
 
-readonly ALL_CHECKS=(clippy deny audit test)
+readonly ALL_CHECKS=(fmt clippy deny audit test)
 
 # `cargo deny` and `cargo audit` are not part of a Rust toolchain, so a fresh
 # clone does not have them. Missing tools are a hard failure rather than a
@@ -36,6 +36,16 @@ error: cargo-${tool} is not installed, so the ${tool} check cannot run.
 EOF
     return 1
   fi
+}
+
+run_fmt() {
+  # First because it is the only check that compiles nothing: a misplaced
+  # brace is reported in a second rather than after the whole dependency
+  # graph has been built. `--all` covers `api/` and `tests/` as well as
+  # `src/`.
+  #
+  # When this fails: `cargo fmt --all`, and commit.
+  cargo fmt --all --check
 }
 
 run_clippy() {
@@ -81,7 +91,7 @@ main() {
   local check
   for check in "${checks[@]}"; do
     case "$check" in
-      clippy | deny | audit | test) ;;
+      fmt | clippy | deny | audit | test) ;;
       *)
         echo "error: unknown check '${check}' (expected one of: ${ALL_CHECKS[*]})" >&2
         exit 2
