@@ -24,6 +24,13 @@ path = "api/mcp.rs"
 # serverless function and not a web framework: no `http2` (Vercel speaks
 # HTTP/1.1 to the function), no `ws`, no `multipart`, no `tracing`.
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+# The diff handle's payload, base64url-encoded so that an agent carrying one
+# between calls has nothing in front of it that looks editable — see
+# `src/handle.rs`. Already in the graph as a transitive dependency; naming it
+# here adds a line to this file and no code to the binary. Decoding is where
+# base64 is fiddly (alphabet, padding, the bits a short group leaves over),
+# which is the part worth not writing again.
+base64 = "0.22"
 # Pinned to a tag, not a branch: a branch would make the build
 # unreproducible, and the engine version is a field in the cache key. The
 # crate is not published to crates.io, so a git dependency is the only

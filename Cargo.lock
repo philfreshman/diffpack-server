@@ -307,6 +307,7 @@ name = "diffpack-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "diffpack-engine",
  "futures",
  "http-body-util",
