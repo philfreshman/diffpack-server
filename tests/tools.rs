@@ -13,8 +13,12 @@
 //! everything an agent needs, and that its answer is structured, and that its
 //! two kinds of failure land on the two different channels.
 
+use std::collections::HashMap;
+
 use axum::body::Body;
 use axum::http::Request;
+use diffpack_server::archive::Archive;
+use diffpack_server::registry::Registry;
 use diffpack_server::router;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -175,6 +179,44 @@ async fn the_answer_is_structured_and_also_readable() {
     );
 }
 
+/// What this tool is *for* is letting an agent show where a diff's bytes came
+/// from, which is only true if the URL it answers with is the URL the fetch
+/// path asks for. The two agree by asking `registry` the same question rather
+/// than by holding two copies of a pattern, and this is where that is
+/// asserted instead of assumed.
+///
+/// `src/archive/`'s fixtures are keyed by URL, so the fetch below succeeds
+/// only if the path it took asked for a URL in that set — and the answer this
+/// tool gave is a key in it. A tool that built its own URL, or a fetch path
+/// that did, parts company here.
+#[tokio::test]
+async fn the_url_this_tool_answers_with_is_the_one_the_fetch_path_asks_for() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "@types/node",
+        "version": "20.1.0",
+    }))
+    .await;
+    let answered = result["structuredContent"]["url"]
+        .as_str()
+        .expect("the tool answers with a URL")
+        .to_owned();
+
+    let files = Archive::fixture(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/archives"))
+        .fetch(Registry::Npm, "@types/node", "20.1.0")
+        .await
+        .expect("the fetch path asks for an archive the fixture set has");
+
+    assert!(
+        !files.is_empty(),
+        "the fetch path came back with a version's files"
+    );
+    assert!(
+        fixture_index().contains_key(&answered),
+        "the answered URL should be the one the fetch path was served from, got {answered}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // How it fails
 // ---------------------------------------------------------------------------
@@ -323,6 +365,17 @@ async fn call(arguments: Value) -> Value {
         panic!("expected a result, got JSON-RPC error {error}");
     }
     answer["result"].clone()
+}
+
+/// The archives the fetch path is served from, by the URL each stands in for.
+fn fixture_index() -> HashMap<String, String> {
+    let index = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/archives/index.json"
+    ))
+    .expect("the fixture index is checked in");
+
+    serde_json::from_slice(&index).expect("the fixture index is JSON")
 }
 
 /// The per-request `_meta` a `2026-07-28` client attaches. See `tests/mcp.rs`.

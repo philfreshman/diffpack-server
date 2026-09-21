@@ -91,6 +91,20 @@ pub enum Failure {
     /// The registry did not answer inside [`UPSTREAM_TIMEOUT`].
     TimedOut { registry: String, waited: Duration },
 
+    /// The registry could not be reached at all.
+    ///
+    /// A name that did not resolve, a refused connection, a TLS handshake
+    /// that failed: there is no status to report, because there was no
+    /// answer. Distinct from [`Failure::Unavailable`], which is a registry
+    /// that answered and said no — the remedies differ, since that one is
+    /// about the registry's health and this one is as likely to be about
+    /// ours.
+    ///
+    /// No cause is carried. What a client would learn from a resolver's
+    /// complaint is nothing it can act on, and it is free text from a library
+    /// arriving in a message.
+    Unreachable { registry: String },
+
     /// The registry answered, but with nothing usable.
     Unavailable { registry: String, status: u16 },
 
@@ -253,6 +267,10 @@ impl Failure {
                 "{registry} did not answer within {} seconds. Try again.",
                 waited.as_secs()
             ),
+
+            Self::Unreachable { registry } => {
+                format!("{registry} could not be reached from this server. Try again shortly.")
+            }
 
             Self::Unavailable { registry, status } => format!(
                 "{registry} answered with HTTP {status}, which this server cannot use. \

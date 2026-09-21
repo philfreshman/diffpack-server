@@ -37,6 +37,7 @@ src/router.rs    Every route this function serves.
 src/mcp.rs       The MCP handler: identity, capabilities, the tool list.
 src/tools/       One module per tool: its definition and its handler.
 src/registry.rs  What a registry is: npm, crates.io, PyPI, described once.
+src/archive/     A version's files: fetch, size cap, extract, one interface.
 src/error.rs     Which channel a failure reaches the client on.
 src/health.rs    The /health body.
 src/page.rs      The 4.5 MB response ceiling: pages, and cut blobs.
@@ -47,7 +48,8 @@ tests/           The suite, driven at the seams: real requests through the
                  real router, and the vectors read from fixtures/.
 docs/            The architecture, the decisions, and the specifications that
                  are normative rather than descriptive.
-fixtures/        Golden vectors two languages are tested against.
+fixtures/        Golden vectors two languages are tested against, and the
+                 archives the suite reads instead of a registry.
 scripts/         The checks CI runs, and the hook installer that makes a
                  commit run them too.
 deny.toml        The policy over the dependency graph.
@@ -74,6 +76,7 @@ two are `./scripts/checks.sh seams`; the third is `cargo test`.
 
 ```bash
 cargo test                              # the suite
+cargo test --test networked -- --ignored # the same, against the real registries
 cargo fmt --all --check                 # formatting, no compile needed
 cargo clippy --all-targets -- -D warnings
 cargo build --release                   # produces the `mcp` binary
@@ -84,6 +87,14 @@ cargo build --release                   # produces the `mcp` binary
 The toolchain is pinned in `rust-toolchain.toml` so CI and Vercel's build
 container cannot drift apart silently. CI runs all of them on every pull
 request into `development` and into `main`.
+
+`tests/networked.rs` is the exception and is `#[ignore]`d for it: it fetches
+real archives from npm, crates.io and PyPI. The suite is otherwise offline —
+`src/archive/` reads `fixtures/archives/` instead — so a registry having a bad
+afternoon cannot fail a pull request. What the networked tests are *for* is the
+half that cannot be checked any other way: that the URLs this server builds
+are the URLs those three registries actually serve. Worth running when
+`src/registry.rs` or `src/archive/` changes.
 
 ## The checks that block a commit
 

@@ -110,8 +110,11 @@ tools! {
 /// rebuilt per call or stored somewhere that has to outlive an invocation.
 ///
 /// Empty today, deliberately. What fills it is the seams that carry state a
-/// request needs and a handler should not build: `archive` (#10) and `store`
-/// (#20). [`crate::registry`] and [`crate::page`] are not among them — both
+/// request needs and a handler should not build: `archive`, which arrives
+/// here with #11 — the first tool that reads a package's files — and `store`
+/// (#20). `archive` exists already and is not in `Ctx` yet for the same
+/// reason nothing else speculative is: the one tool this server has resolves
+/// a URL and fetches nothing. [`crate::registry`] and [`crate::page`] are not among them — both
 /// are pure, so a tool reaches them as modules and there is nothing to hand
 /// it. A tool reaching for anything that is neither here nor a pure module
 /// has gone around a seam.
