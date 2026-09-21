@@ -38,6 +38,15 @@ npm, a `.crate` from crates.io, an sdist from PyPI. It is bytes in flight —
 what was downloaded, before anything was read out of it.
 _Avoid_: tarball, bundle, download
 
+**Listing**:
+The metadata document a registry serves when a version's Archive is not at a
+path a caller could have constructed — PyPI's, today, and nobody else's. A
+Listing is fetched and *chosen from*: it names a version's files, one of
+which is the Archive. Which of the two a registry serves is the registry's
+fact and not a caller's, so a tool asks where a version's archive is and is
+given either.
+_Avoid_: metadata, index, manifest, JSON
+
 **FileMap**:
 An Archive after extraction: every file path in that version mapped to its
 entry, with the archive's top-level directory already stripped. It is what a
@@ -45,11 +54,33 @@ diff is computed from, and it is the boundary the rest of the crate sees — a
 tool asks for a FileMap, never for an Archive.
 _Avoid_: tree, file list, contents, extracted archive
 
+**Name rule**:
+What one registry's spelling of a package name costs a caller, in a sentence
+that can be shown to it: npm's scopes, crates.io's `-` against `_`, PyPI's
+absent normalisation. A rule is told, not enforced — nothing here refuses a
+name for breaking one, because the registry decides what exists. The version
+rule is the same kind of sentence, and is one sentence for all three.
+_Avoid_: validation, name format, constraint, schema
+
+**Allowed host**:
+A host this server may send an outbound request to. The set is derived from
+the URLs the registry module builds, so it grows when a Registry is added and
+never on its own. Distinct from an allowed *origin*, which points the other
+way: a browser this server will answer.
+_Avoid_: allowlist (unqualified), whitelist, origin, domain
+
 ### Diffs
 
 **Diff**:
 The comparison of one version of a package against another, in one direction.
 A→B is not B→A.
+
+**Engine**:
+The `diffpack-engine` release this build computes with — the same code the
+web app runs, pinned. It is a field in the DiffKey rather than a label on the
+build: a new Engine means new Diffs, so Entries written by the previous one
+are a different key rather than a stale answer.
+_Avoid_: core, library, differ, version (unqualified)
 
 **DiffKey**:
 The seven fields that decide whether two Diffs are the same Diff: engine
@@ -95,7 +126,8 @@ _Avoid_: rename threshold, match score
 
 **Entry**:
 One cached Diff result: `meta.json` and `patches.json` under one diff_id,
-written together and evicted together. Half an Entry is not a cache hit.
+written together and evicted together. Half an Entry is not a cache hit, and
+a FileMap's entry is a file rather than one of these.
 _Avoid_: record, object, blob, cached diff
 
 **DiffStore**:
@@ -116,6 +148,23 @@ One MCP tool: a name, a description, an input schema and the handler that runs
 it, all in one module under `src/tools/`. "A tool" means all four, not just the
 definition a client sees.
 _Avoid_: command, endpoint, action, handler (alone)
+
+**Ctx**:
+What a Tool's handler is allowed to reach: the seams that carry state a
+handler should not build — `archive`, the DiffStore — built once per request
+and handed to every call. A pure module is not in it and does not need to be:
+a handler names `registry`, `page` and `handle` directly. Anything a handler
+needs that is neither in Ctx nor a pure module is a seam it has gone around.
+_Avoid_: state, globals, services, dependencies
+
+**Hints**:
+The three facts a Tool states about itself beside its schema: read-only,
+idempotent, open-world. Each is that tool's own answer and none has a
+default, because both ways of being wrong are spent on a person: read-only
+guessed false asks for a confirmation nobody needed, and guessed true skips
+one somebody wanted.
+_Avoid_: flags, options, metadata, annotations (the MCP field that carries
+them is not the fact)
 
 **Resource**:
 Something an agent reads by URI (`diffpack://…`) rather than calls. A Resource
@@ -148,6 +197,13 @@ Where a walk of a sequence resumes. One format across every paginating tool,
 minted by `src/page.rs` and opaque to a client: it is passed back unchanged or
 not at all. A cursor a client wrote for itself is refused.
 _Avoid_: token, offset, page number
+
+**Limit**:
+How many items a caller asks one Page for. Clamped to a documented maximum
+and filled in when absent, both by `src/page.rs`. It is politeness about how
+much an agent reads at once rather than protection: the Response ceiling is
+the protection, and a Page inside a Limit can still be cut short by it.
+_Avoid_: count, size, max results, budget
 
 **Response ceiling**:
 The 4.5 MB Vercel allows a function's response body. Distinct from Budget,
