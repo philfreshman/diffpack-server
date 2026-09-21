@@ -34,6 +34,8 @@
 //! The freshness hint a diff wants is a resource's to carry, which is #16 —
 //! the same answer #11, #19 and #42 arrived at before this.
 
+use std::collections::HashMap;
+
 use axum::body::Body;
 use axum::http::Request;
 use diffpack_server::handle::{DiffHandle, Inputs};
@@ -602,6 +604,94 @@ async fn the_description_says_unchanged_is_rarely_what_is_wanted() {
         said.contains("unchanged"),
         "and the status worth excluding is named: {said}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The two things the engine does that an agent has to be told
+// ---------------------------------------------------------------------------
+
+/// A directory's counts are the sum of what is under it.
+///
+/// Held over every directory of two comparisons rather than one worked
+/// example, because the property is what an agent needs in order to read the
+/// numbers at all: adding a directory's lines to its files' lines counts the
+/// same change twice, which is the mistake this makes possible and the
+/// description warns about.
+///
+/// The sum is over immediate children, which is the same thing recursively:
+/// each child already carries its own subtree's total.
+#[tokio::test]
+async fn a_directorys_counts_are_the_sum_of_its_childrens() {
+    for package in ["diffable", "churny", "moved"] {
+        let nodes = walk(json!({ "handle": handle(package, "1.0.0", "2.0.0") })).await;
+
+        let mut summed: HashMap<String, (u64, u64)> = HashMap::new();
+        for node in &nodes {
+            let path = node["path"].as_str().expect("every node has a path");
+            let parent = match path.rsplit_once('/') {
+                Some((parent, _)) => parent.to_owned(),
+                // The comparison's root is not listed, so a top-level node's
+                // parent is nothing this walk will check.
+                None => continue,
+            };
+            let counts = summed.entry(parent).or_default();
+            counts.0 += node["lines_added"].as_u64().unwrap_or(0);
+            counts.1 += node["lines_removed"].as_u64().unwrap_or(0);
+        }
+
+        for directory in nodes.iter().filter(|node| node["type"] == "directory") {
+            let path = directory["path"].as_str().expect("every node has a path");
+            let (added, removed) = summed.get(path).copied().unwrap_or_default();
+
+            assert_eq!(
+                (
+                    directory["lines_added"].as_u64(),
+                    directory["lines_removed"].as_u64()
+                ),
+                (Some(added), Some(removed)),
+                "`{path}` in `{package}` should carry what is under it: got {directory}"
+            );
+        }
+    }
+}
+
+/// A directory a rename emptied is gone from the comparison entirely.
+///
+/// `moved` is one file and one directory: `src/legacy/reporter.js` becomes
+/// `src/reporter.js`, so nothing is left in `src/legacy` and the engine does
+/// not list an empty directory. An agent reading the first version's files
+/// and then this comparison would otherwise look for a directory that is
+/// simply not there, which is why it is asserted rather than left as a
+/// surprise — and why asking for that path answers with an empty page rather
+/// than a refusal.
+#[tokio::test]
+async fn a_directory_a_rename_emptied_is_not_in_the_tree_at_all() {
+    let handle = handle("moved", "1.0.0", "2.0.0");
+    let nodes = walk(json!({ "handle": handle })).await;
+
+    assert_eq!(
+        paths(&nodes),
+        ["README.md", "src", "src/reporter.js"],
+        "`src/legacy` held one file and the file left"
+    );
+
+    let moved = &nodes[2];
+    assert_eq!(moved["status"], json!("renamed"), "got {moved}");
+    assert_eq!(
+        moved["old_path"],
+        json!("src/legacy/reporter.js"),
+        "where it came from is the half an agent cannot work out from where \
+         it is now: got {moved}"
+    );
+
+    let gone = call(TOOL, json!({ "handle": handle, "path": "src/legacy" })).await;
+    assert_eq!(
+        gone["structuredContent"]["total"],
+        json!(0),
+        "a directory the comparison does not have is empty rather than an \
+         error: got {gone}"
+    );
+    assert_eq!(gone["isError"], json!(false), "got {gone}");
 }
 
 // ---------------------------------------------------------------------------
