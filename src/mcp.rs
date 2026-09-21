@@ -76,8 +76,18 @@ pub struct Diffpack {
 }
 
 impl Diffpack {
+    /// What the deployed function serves: archives from the registries.
     pub fn new() -> Self {
-        Self { ctx: Ctx::new() }
+        Self::with_ctx(Ctx::new())
+    }
+
+    /// The same handler, with what its tools may reach supplied.
+    ///
+    /// The other half of the seam `router_with` opens. A factory that builds
+    /// this is how the suite puts the fixture archive adapter behind every
+    /// tool without any tool knowing which adapter it has.
+    pub fn with_ctx(ctx: Ctx) -> Self {
+        Self { ctx }
     }
 }
 

@@ -13,6 +13,11 @@
   "https://pypi.org/pypi/numpy/1.9.0/json": "numpy-1.9.0.json",
   "https://files.pythonhosted.org/packages/9a/54/numpy-1.9.0.zip": "numpy-1.9.0.zip",
 
+  "https://registry.npmjs.org/many-files/-/many-files-1.0.0.tgz": "many-files-1.0.0.tgz",
+
   "https://pypi.org/pypi/sneaky/1.0.0/json": "sneaky-1.0.0.json",
-  "https://cdn.example.invalid/sneaky-1.0.0.tar.gz": "sneaky-1.0.0.tar.gz"
+  "https://cdn.example.invalid/sneaky-1.0.0.tar.gz": "sneaky-1.0.0.tar.gz",
+
+  "https://registry.npmjs.org/zod/-/zod-99.99.99.tgz": null,
+  "https://static.crates.io/crates/not-a-real-crate/not-a-real-crate-1.0.0.crate": null
 }
