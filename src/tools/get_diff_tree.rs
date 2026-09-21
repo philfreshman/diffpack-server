@@ -97,7 +97,8 @@ pub struct Args {
     #[serde(default)]
     pub depth: Option<u32>,
 
-    /// Only entries with one of these statuses. Omit it for all of them.
+    /// Only files and directories with one of these statuses. Omit it for
+    /// all of them.
     ///
     /// Most of a comparison is `unchanged`: a version bump moves a handful
     /// of files in a package that ships thousands, and paging through the
@@ -294,11 +295,11 @@ impl Tool for GetDiffTree {
         for which kinds of change you want. Ask for `added`, `removed`, \
         `modified` and `renamed` to read what changed — most of a package is \
         `unchanged` between two versions, and paging through that is a call \
-        spent on what did not happen. Every entry carries its full path, \
-        whether it is a file or a directory, what happened to it, where it \
-        came from if it moved, and how many lines it gained and lost. A \
-        directory's line counts are the sum of everything under it, so \
-        counting files and directories together counts every change more \
+        spent on what did not happen. Each file and directory in the answer \
+        carries its full path, which of the two it is, what happened to it, \
+        where it came from if it moved, and how many lines it gained and \
+        lost. A directory's line counts are the sum of everything under it, \
+        so counting files and directories together counts every change more \
         than once.";
 
     /// It downloads and compares; it changes nothing anywhere.
@@ -334,9 +335,10 @@ impl Tool for GetDiffTree {
             inputs.ignore_whitespace,
         );
 
-        // The slash a caller may or may not have written, removed exactly
-        // once. An empty one left over is the whole comparison, which is
-        // what `/` means and what omitting the argument means.
+        // A trailing slash a caller may or may not have written, gone
+        // either way, so `src/` and `src` are one directory. Nothing left
+        // over is the whole comparison, which is what `/` means and what
+        // omitting the argument means.
         let listing = match args.path.as_deref().map(|path| path.trim_end_matches('/')) {
             Some(path) if !path.is_empty() => subtree(&tree, path),
             _ => Some(&tree),
