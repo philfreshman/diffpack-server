@@ -58,6 +58,31 @@ rendering of a binary file and not the file. Nothing downstream can undo
 that, which is why a tool returning content says whether it happened.
 _Avoid_: tree, file list, contents, extracted archive
 
+**Index**:
+The document a registry publishes naming everything it has — PyPI's, today,
+and nobody else's. It is fetched and *searched*: a query is matched against
+it here rather than sent, because PyPI has no search endpoint to send one to.
+Distinct from a Listing, which is about one version of one package, and from
+the cached Entries of the DiffStore, which are this server's own.
+_Avoid_: catalogue (that is the module), simple index, package list
+
+**Hit**:
+One package a search found: the name to pass to any other tool, and beside
+it the latest version and the description *where the source carries them*.
+npm and crates.io carry all three; PyPI's Index carries a name and nothing
+else, so a PyPI hit has a name and nothing else. An absent version is a
+source that does not say, never a package with no releases.
+_Avoid_: result, match, search result, package (unqualified)
+
+**Catalogue**:
+What a registry says it publishes, and the interface the rest of the crate
+has to it: search it for a query, get Hits. It is the Archive's sibling and
+not the Archive — nothing here is downloaded, extracted or diffed — and a
+tool asks it a question rather than learning that one registry answers with
+a ranked reply and another with its whole Index.
+_Avoid_: search (the tool is the search), index (that is the document),
+directory
+
 **Name rule**:
 What one registry's spelling of a package name costs a caller, in a sentence
 that can be shown to it: npm's scopes, crates.io's `-` against `_`, PyPI's

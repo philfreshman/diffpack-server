@@ -15,6 +15,8 @@ src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
 src/tools/          one module per tool: definition and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
+src/catalogue/      search(registry, query, limit) -> Vec<Hit>
+src/http.rs         the one HTTP client, private to this crate
 src/store/          DiffStore: get(&DiffKey) / put(entry)                   #20 #21 #22
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
@@ -40,10 +42,12 @@ build otherwise. See [ADR 0007](adr/0007-one-importer-of-the-engine.md).
 
 **A tool module goes through the seams, not around them.** A module under
 `src/tools/` may import the standard library, the MCP and serialisation
-crates, and `crate::{archive, cache_key, engine, error, handle, page,
-registry, store}`. It may not name an HTTP client or the blob store: those are
-`archive`'s and `store`'s business, and eight tools that each know how to
-fetch is eight places to fix a timeout.
+crates, and `crate::{archive, cache_key, catalogue, engine, error, handle,
+page, registry, store}`. It may not name an HTTP client or the blob store:
+those are `archive`'s, `catalogue`'s and `store`'s business, and eight tools
+that each know how to fetch is eight places to fix a timeout. `crate::http` is
+deliberately *not* on that list — it is where the client lives, and a tool
+that could name it would be a tool that can fetch.
 [`scripts/check-tool-seams.sh`](../scripts/check-tool-seams.sh) fails the build
 otherwise, and its allow-list is the list above.
 
@@ -86,8 +90,8 @@ task of their own.
 
 One file per MCP tool, holding its definition and its handler together, so
 that adding a tool is adding a file and reviewing a tool is reading one. What
-a tool module does is: ask `registry` or `archive` or `store` for what it
-needs, shape an answer through `page`, and fail through `error`. What it does
+a tool module does is: ask `registry`, `archive`, `catalogue` or `store` for
+what it needs, shape an answer through `page`, and fail through `error`. What it does
 not do is fetch, cache or paginate by hand.
 
 A tool writes down types rather than JSON. The `Tool` trait's associated
@@ -101,10 +105,10 @@ list of tools, and the generic call path where arguments are validated and
 
 `Ctx` is what a handler may reach, built once per request by the service
 factory `router::router_with` takes and cloned into every call. It carries
-`Archive` today and `DiffStore` (#20) beside it; `registry`, `page` and
-`handle` are not in it and do not need to be, because a pure module is named
-directly. That factory is also the seam the suite drives: a test builds a
-`Ctx` over the fixture archive adapter and reaches it through the path
+`Archive` and `Catalogue` today, with `DiffStore` (#20) beside them;
+`registry`, `page` and `handle` are not in it and do not need to be, because a
+pure module is named directly. That factory is also the seam the suite drives:
+a test builds a `Ctx` over a fixture adapter and reaches it through the path
 production takes, rather than around it.
 
 ### `src/registry.rs` — what a registry is
@@ -124,9 +128,11 @@ of the URLs this module builds — `archive` may fetch what `registry::allows`
 permits and nothing else — so a source added here is reachable the moment it exists,
 rather than through a second list someone has to remember to widen.
 
-It fetches nothing. This module says *where* and *what shape*; `archive` does
-the fetching, and that is what lets every registry fact be tested with no
-network at all. The `diffpack://registries` resource (#16) is a projection of
+It fetches nothing. This module says *where* and *what shape*; `archive` and
+`catalogue` do the fetching, and that is what lets every registry fact be
+tested with no network at all — the URL npm is asked for, the media type
+PyPI's index needs, and the order a query ranks its names in are all asserted
+without a socket. The `diffpack://registries` resource (#16) is a projection of
 this module rather than a hand-written copy of it, and Go support (#28) is a
 value added here rather than an edit in five places. See [ADR
 0004](adr/0004-one-registry-module.md).
@@ -134,9 +140,10 @@ value added here rather than an edit in five places. See [ADR
 ### `src/archive/` — a version's files
 
 `fetch(registry, package, version) -> FileMap`. Everything on the other side of
-that signature — resolving the download URL, PyPI's second hop, the HTTP
-client, the timeout, the size cap, decompressing, untarring, stripping the
-top-level directory — is this module's and nobody else's. Two adapters sit
+that signature — resolving the download URL, PyPI's second hop, what a status
+means, the size cap, decompressing, untarring, stripping the top-level
+directory — is this module's and nobody else's. The client it makes the
+request with is `http`'s, shared with `catalogue`. Two adapters sit
 behind the same interface: the live one over `reqwest`, and a fixture one
 reading `fixtures/archives/`, which is what lets the suite assert what a
 version's files are with no network and what lets the conformance suite (#24)
@@ -159,6 +166,40 @@ cannot disagree about what a missing version reads like.
 Redirects are followed only while they stay on allowed hosts. A `302` is a
 request to wherever it points, so the alternative is an allowlist whose holes
 the registry chooses.
+
+### `src/catalogue/` — what a registry says it publishes
+
+`search(registry, query, limit) -> Vec<Hit>`. The archive seam's sibling, and
+deliberately not the archive seam: the question is *what does this registry
+have* rather than *what is in this version*, there is no version to name, and
+no `FileMap` comes out of it. Two adapters behind the one interface, as
+`archive` has: the live one, and a fixture one reading `fixtures/searches/`
+keyed by URL — so an offline test is a test of where each registry is asked as
+well as of what comes back, and its `null` entry is how the suite reaches the
+path a source being down takes. See [ADR
+0010](adr/0010-what-a-registry-publishes-is-its-own-seam.md).
+
+Where a search is asked, what to ask it for, and how to read the answer are
+`registry`'s, not this module's. What is this module's is the request, the
+size cap, and the one policy a catalogue needs that an archive does not:
+PyPI's source is the index of everything it publishes rather than a reply to a
+query, so a warm instance holds the document it already fetched for as long as
+PyPI's own `cache-control` says it is current. That is a document, not an
+answer — every query is matched against it afresh — so no search result is
+cached anywhere, and nothing here goes near the blob store.
+
+`list_package_versions` (#18) is the second caller this seam is shaped for.
+
+### `src/http.rs` — the one HTTP client
+
+A timeout, a user agent, and redirects that cannot leave the allowlist, in one
+place because there are now two adapters that fetch. What leaves it is a
+response, bytes, or a `Failure` — never a status code, because what a status
+*means* differs between the two: a `404` from an archive URL is a version that
+does not exist, and a `404` from a search source is the source itself being
+broken.
+
+Private to the crate, and absent from the tool allow-list on purpose.
 
 ### `src/store/` — cached diff results
 
