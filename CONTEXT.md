@@ -1,0 +1,216 @@
+# diffpack-server
+
+An MCP server that diffs two published versions of a package and lets an agent
+read the result. These are the nouns its tools, resources and errors are
+written in; where those nouns live in the tree is
+[`docs/architecture.md`](docs/architecture.md), and why they are shaped this
+way is [`docs/adr/`](docs/adr/).
+
+A term used in a tool name, a parameter, a field or a message means what it
+means here. Where two terms are easy to confuse, the definition says what
+distinguishes them rather than restating the name.
+
+## Language
+
+### Packages and their contents
+
+**Registry**:
+One of the three package hosts this server knows: npm, crates.io, PyPI. The
+identifier in a key or a parameter is `npm`, `crates`, `pypi`; the name in a
+message to a model is the one the registry uses for itself — `npm`,
+`crates.io`, `PyPI`.
+_Avoid_: package manager, source, ecosystem, repository
+
+**Package**:
+One named thing on a registry, across all of its versions. The name is taken
+verbatim — `@types/node` keeps the `@` and the `/`, `Typing.Extensions` keeps
+its case.
+_Avoid_: library, crate, module, dependency
+
+**Version**:
+One release of a package, as the registry spells it. `v4.0.0` and `4.0.0` are
+different versions here, because nothing is normalised.
+_Avoid_: release, tag, revision
+
+**Archive**:
+The single compressed file a registry serves for one version: a `.tgz` from
+npm, a `.crate` from crates.io, an sdist from PyPI. It is bytes in flight —
+what was downloaded, before anything was read out of it.
+_Avoid_: tarball, bundle, download
+
+**Listing**:
+The metadata document a registry serves when a version's Archive is not at a
+path a caller could have constructed — PyPI's, today, and nobody else's. A
+Listing is fetched and *chosen from*: it names a version's files, one of
+which is the Archive. Which of the two a registry serves is the registry's
+fact and not a caller's, so a tool asks where a version's archive is and is
+given either.
+_Avoid_: metadata, index, manifest, JSON
+
+**FileMap**:
+An Archive after extraction: every file path in that version mapped to its
+entry, with the archive's top-level directory already stripped. It is what a
+diff is computed from, and it is the boundary the rest of the crate sees — a
+tool asks for a FileMap, never for an Archive.
+_Avoid_: tree, file list, contents, extracted archive
+
+**Name rule**:
+What one registry's spelling of a package name costs a caller, in a sentence
+that can be shown to it: npm's scopes, crates.io's `-` against `_`, PyPI's
+absent normalisation. A rule is told, not enforced — nothing here refuses a
+name for breaking one, because the registry decides what exists. The version
+rule is the same kind of sentence, and is one sentence for all three.
+_Avoid_: validation, name format, constraint, schema
+
+**Allowed host**:
+A host this server may send an outbound request to. The set is derived from
+the URLs the registry module builds, so it grows when a Registry is added and
+never on its own. Distinct from an allowed *origin*, which points the other
+way: a browser this server will answer.
+_Avoid_: allowlist (unqualified), whitelist, origin, domain
+
+### Diffs
+
+**Diff**:
+The comparison of one version of a package against another, in one direction.
+A→B is not B→A.
+
+**Engine**:
+The `diffpack-engine` release this build computes with — the same code the
+web app runs, pinned. It is a field in the DiffKey rather than a label on the
+build: a new Engine means new Diffs, so Entries written by the previous one
+are a different key rather than a stale answer.
+_Avoid_: core, library, differ, version (unqualified)
+
+**DiffKey**:
+The seven fields that decide whether two Diffs are the same Diff: engine
+version, registry, package, from, to, similarity threshold, ignore-whitespace —
+plus the schema number. [`docs/cache-key.md`](docs/cache-key.md) is normative
+and defines them exactly.
+_Avoid_: cache key (the string), diff params
+
+**diff_id**:
+`sha256` of a DiffKey's canonical string, as 64 lowercase hex characters. It
+names a Diff and cannot be read back: a diff_id on its own does not say which
+package it came from, which is why a handle passed between tools carries its
+inputs beside it ([ADR 0006](docs/adr/0006-the-handle-carries-its-inputs.md)).
+_Avoid_: hash, cache key, id
+
+**Handle**:
+What a Diff is asked for again by, and the only way it is: the diff_id
+together with the inputs it was minted from, encoded as one opaque string.
+`diff_package_versions` mints it and the tools that read a Diff back take it.
+It is not a diff_id — a diff_id names a Diff and a Handle is enough to produce
+one — and it is minted, never written: a Handle whose halves disagree is
+refused ([ADR 0006](docs/adr/0006-the-handle-carries-its-inputs.md)).
+_Avoid_: token, reference, diff id (for the handle), session
+
+**Status**:
+What happened to one file between the two versions: `added`, `removed`,
+`modified`, `renamed`, `unchanged`. The engine's five, deliberately unchanged —
+a sixth or a rename of one of these would be a difference between what the web
+app shows and what an agent is told.
+_Avoid_: change type, state, kind
+
+**Patch**:
+One file's rendered unified diff — the text with `@@` hunks in it. A Diff
+covers a whole version pair; a Patch covers one file inside it.
+_Avoid_: hunk, delta, file diff
+
+**Similarity threshold**:
+How alike a removed file and an added file must be before the engine calls the
+pair a rename. Part of the DiffKey, because changing it changes the Statuses.
+_Avoid_: rename threshold, match score
+
+### The cache
+
+**Entry**:
+One cached Diff result: `meta.json` and `patches.json` under one diff_id,
+written together and evicted together. Half an Entry is not a cache hit, and
+a FileMap's entry is a file rather than one of these.
+_Avoid_: record, object, blob, cached diff
+
+**DiffStore**:
+The interface the rest of the crate has to cached results: get an Entry for a
+DiffKey, put one. Which store is behind it, how many requests it makes and how
+it stays inside the budget are its own business.
+_Avoid_: cache, blob client, storage
+
+**Budget**:
+The hard 256 MB this project's blob store may hold. Staying inside it is the
+DiffStore's job, by evicting the oldest Entries first.
+_Avoid_: quota, limit (unqualified — the response ceiling is also a limit)
+
+### The protocol surface
+
+**Tool**:
+One MCP tool: a name, a description, an input schema and the handler that runs
+it, all in one module under `src/tools/`. "A tool" means all four, not just the
+definition a client sees.
+_Avoid_: command, endpoint, action, handler (alone)
+
+**Ctx**:
+What a Tool's handler is allowed to reach: the seams that carry state a
+handler should not build — `archive`, the DiffStore — built once per request
+and handed to every call. A pure module is not in it and does not need to be:
+a handler names `registry`, `page` and `handle` directly. Anything a handler
+needs that is neither in Ctx nor a pure module is a seam it has gone around.
+_Avoid_: state, globals, services, dependencies
+
+**Hints**:
+The three facts a Tool states about itself beside its schema: read-only,
+idempotent, open-world. Each is that tool's own answer and none has a
+default, because both ways of being wrong are spent on a person: read-only
+guessed false asks for a confirmation nobody needed, and guessed true skips
+one somebody wanted.
+_Avoid_: flags, options, metadata, annotations (the MCP field that carries
+them is not the fact)
+
+**Resource**:
+Something an agent reads by URI (`diffpack://…`) rather than calls. A Resource
+answers "what is there"; a Tool does something.
+_Avoid_: document, asset
+
+**Failure**:
+Anything that goes wrong, together with which of MCP's two channels it reaches
+the client on: a *protocol error* the model never sees, or a *tool error* — a
+successful response carrying `isError: true` — which it does see and can act
+on.
+_Avoid_: error (unqualified), exception, fault
+
+**Page**:
+As much of an answer as fits under the 4.5 MB response ceiling, with a cursor
+for the rest. Every listing tool answers with a Page, whether or not there is
+more.
+_Avoid_: chunk, batch, slice
+
+**Excerpt**:
+The same ceiling over an answer that is one thing rather than a sequence: a
+file's content, a file's Patch. An Excerpt has a marker and a real byte count
+where a Page has a cursor and a total — which is the whole of the difference,
+and why both live in `src/page.rs` ([ADR
+0005](docs/adr/0005-one-module-owns-the-response-ceiling.md)).
+_Avoid_: snippet, preview, head
+
+**Cursor**:
+Where a walk of a sequence resumes. One format across every paginating tool,
+minted by `src/page.rs` and opaque to a client: it is passed back unchanged or
+not at all. A cursor a client wrote for itself is refused. A tool declares it
+as that module's type, so the rule reaches an agent in the schema rather than
+in a sentence the tool wrote.
+_Avoid_: token, offset, page number
+
+**Limit**:
+How many items a caller asks one Page for. Clamped to a documented maximum
+and filled in when absent, both by `src/page.rs` — and documented by it too:
+a tool declares that module's type, so the default and the range in its schema
+are the ones that bind. It is politeness about how much an agent reads at once
+rather than protection: the Response ceiling is the protection, and a Page
+inside a Limit can still be cut short by it.
+_Avoid_: count, size, max results, budget
+
+**Response ceiling**:
+The 4.5 MB Vercel allows a function's response body. Distinct from Budget,
+which is the blob store's 256 MB: this one is per answer and the platform's,
+that one is cumulative and ours.
+_Avoid_: response limit, size cap

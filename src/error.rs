@@ -112,8 +112,51 @@ pub enum Failure {
         limit: u64,
     },
 
+    /// One item of an answer is larger than a whole response.
+    ///
+    /// Distinct from [`Failure::TooLarge`], which is about an archive this
+    /// server declined to download. This one is about an answer it built and
+    /// cannot send: a single entry whose serialised form is over the
+    /// response ceiling fits on no page, however small the `limit`.
+    ///
+    /// `resume` is the way forward, and it is why this is a refusal rather
+    /// than a silent skip. Dropping the item would leave a walk that claims
+    /// to have covered the sequence and has not — a wrong answer an agent
+    /// cannot detect. Naming the cursor that continues past it makes the skip
+    /// the agent's decision instead of ours.
+    ItemTooLarge {
+        position: usize,
+        bytes: usize,
+        ceiling: usize,
+        resume: String,
+    },
+
+    /// A registry whose archive URL cannot be built from a package name and
+    /// a version.
+    ///
+    /// npm and crates.io serve an archive from a path anyone can construct.
+    /// PyPI lists a version's files in its own metadata and nowhere else, so
+    /// there is nothing to build — which is a property of that registry
+    /// rather than a gap here. #10 answers it by asking PyPI.
+    ///
+    /// `resolvable` is the way forward, and it comes from the caller for the
+    /// same reason [`Failure::NoSuchVersion`]'s `known` does: the registries
+    /// that can be resolved are [`crate::registry`]'s to know, and a list
+    /// written out here would be a copy that #28 has to find.
+    UnresolvableArchiveUrl {
+        registry: String,
+        resolvable: Vec<String>,
+    },
+
     /// The caller's parameters did not validate.
     InvalidParams { message: String },
+
+    /// A tool name that is not one of ours.
+    ///
+    /// A protocol error for the same reason [`Failure::NoSuchResource`] is:
+    /// there is no tool to have failed, so there is no tool error to report,
+    /// and the client — which was told the list — is who can fix the call.
+    NoSuchTool { name: String },
 
     /// A resource URI that does not resolve.
     ///
@@ -147,6 +190,10 @@ impl Failure {
             )),
             Self::NoSuchResource { ref uri } => Err(ErrorData::invalid_params(
                 format!("No resource at `{}`.", redact(uri)),
+                None,
+            )),
+            Self::NoSuchTool { ref name } => Err(ErrorData::invalid_params(
+                format!("No tool named `{}`.", redact(name)),
                 None,
             )),
             Self::Internal { doing } => Err(ErrorData::new(
@@ -235,12 +282,39 @@ impl Failure {
                 limit / 1_000_000,
             ),
 
-            // These three never reach a model — `respond` sends them down the
+            Self::ItemTooLarge {
+                position,
+                bytes,
+                ceiling,
+                resume,
+            } => format!(
+                "Entry {position} of this answer is {bytes} bytes on its own, over the \
+                 {ceiling} a single response can carry, so it fits on no page. Ask for that \
+                 one entry with a tool that returns it by itself and truncates it, or pass \
+                 the cursor `{resume}` to continue past it."
+            ),
+
+            Self::UnresolvableArchiveUrl {
+                registry,
+                resolvable,
+            } => {
+                let mut message = format!(
+                    "`{registry}` does not serve a version's archive from a path that can be \
+                     built out of a package name and a version, so there is no URL to resolve."
+                );
+                if !resolvable.is_empty() {
+                    let _ = write!(message, " These do: {}.", resolvable.join(", "));
+                }
+                message
+            }
+
+            // These four never reach a model — `respond` sends them down the
             // protocol channel — but a `message` that lied about them would
             // be a trap for the next person to add a variant.
             Self::InvalidParams { message } => redact(message),
             Self::NoSuchResource { uri } => format!("No resource at `{}`.", redact(uri)),
             Self::Internal { doing } => format!("diffpack failed while {doing}."),
+            Self::NoSuchTool { name } => format!("No tool named `{}`.", redact(name)),
         }
     }
 }
