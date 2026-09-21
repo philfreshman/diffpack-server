@@ -12,7 +12,7 @@
 //! and `archive` (#10) is what fetches.
 
 use diffpack_server::registry::{
-    self, ArchiveSource, Order, Registry, SearchSource, VersionSource,
+    self, ArchiveSource, Hit, Order, Registry, SearchSource, VersionSource,
 };
 
 /// The identifier is what a parameter and a cache key spell; the name is what
@@ -270,6 +270,40 @@ fn search_comes_from_the_registrys_own_index_where_there_is_one() {
         Registry::PyPi.search("requests", 10),
         None,
         "PyPI's search source is #19's to choose; until it does there is none"
+    );
+}
+
+/// What a search answers with is this module's to read, for the same reason
+/// where to ask it is: the three sources agree about nothing — npm wraps a
+/// package in an `objects` array, crates.io returns `crates`, and PyPI's
+/// index is a list of names with no version and no summary anywhere in it. A
+/// caller left to tell them apart would be the per-registry `match` this
+/// module exists to hold.
+///
+/// The body below is npm's own shape, cut down to the three fields a hit
+/// carries. #19 is where the fields are fixed.
+#[test]
+fn npms_search_answer_reads_as_hits() {
+    let body = r#"{"objects":[
+        {"package":{"name":"zod","version":"4.0.0","description":"TypeScript-first schema validation"}},
+        {"package":{"name":"zod-to-json-schema","version":"3.23.0","description":"Converts Zod schemas to JSON schemas"}}
+    ],"total":2}"#;
+
+    assert_eq!(
+        Registry::Npm.read_hits(body, "zod", 10),
+        Some(vec![
+            Hit {
+                name: "zod".to_owned(),
+                version: Some("4.0.0".to_owned()),
+                description: Some("TypeScript-first schema validation".to_owned()),
+            },
+            Hit {
+                name: "zod-to-json-schema".to_owned(),
+                version: Some("3.23.0".to_owned()),
+                description: Some("Converts Zod schemas to JSON schemas".to_owned()),
+            },
+        ]),
+        "npm carries all three fields, in the order it ranked them"
     );
 }
 

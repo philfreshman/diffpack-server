@@ -207,6 +207,45 @@ impl Registry {
         Some(SearchSource { url })
     }
 
+    /// The hits a search answer names, or nothing if it is not an answer
+    /// this registry's source gives.
+    ///
+    /// The other half of [`search`](Self::search), and here for the reason
+    /// that one is: the three sources agree about nothing. npm wraps each
+    /// package in an `objects` array, crates.io answers with `crates`, and
+    /// PyPI's index is every name it publishes and no versions at all. A
+    /// caller that had to tell them apart would be carrying this module's
+    /// job.
+    ///
+    /// `query` is here for the source that does not take one. npm and
+    /// crates.io are asked the query and answer it; PyPI's index is the
+    /// whole list, so the matching happens on this side and the query is
+    /// what it matches against.
+    ///
+    /// `None` rather than an error, as [`choose_archive`](Self::choose_archive)
+    /// does: a body that will not read is the source serving something
+    /// broken, and the caller is the one holding the registry and the query
+    /// that belong in that message.
+    pub fn read_hits(self, body: &str, _query: &str, limit: u32) -> Option<Vec<Hit>> {
+        let hits: Vec<Hit> = match self {
+            Self::Npm => {
+                let answer: NpmSearch = serde_json::from_str(body).ok()?;
+                answer
+                    .objects
+                    .into_iter()
+                    .map(|object| Hit {
+                        name: object.package.name,
+                        version: object.package.version,
+                        description: object.package.description,
+                    })
+                    .collect()
+            }
+            Self::Crates | Self::PyPi => return None,
+        };
+
+        Some(hits.into_iter().take(limit as usize).collect())
+    }
+
     /// Every host this registry is allowed to be reached at.
     ///
     /// Derived, not declared: the set is the hosts of the URLs this module
@@ -397,6 +436,52 @@ pub struct VersionSource {
 pub struct SearchSource {
     /// The document to fetch, query and limit included.
     pub url: String,
+}
+
+/// One package a search found.
+///
+/// The fields a model is shown, and they are optional because the sources
+/// differ in what they carry rather than because a registry sometimes
+/// forgets: npm and crates.io answer with a version and a summary, and
+/// PyPI's index answers with a name and nothing else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct Hit {
+    /// The package name, spelled as the registry spells it. Pass it back
+    /// verbatim to any tool that takes a package.
+    pub name: String,
+
+    /// The latest version the search source knows of, where it carries one.
+    /// Absent is not "no releases" — it is a source that does not say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+
+    /// What the package says it is, in the registry's own words, where the
+    /// search source carries it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// npm's search answer, cut to the fields a [`Hit`] carries.
+///
+/// A type of this module's rather than the engine's: the engine builds
+/// archive URLs and knows nothing about search, and a `serde_json::Value`
+/// walked by hand here would be the same fields with the spelling mistakes
+/// left to run time.
+#[derive(Deserialize)]
+struct NpmSearch {
+    objects: Vec<NpmObject>,
+}
+
+#[derive(Deserialize)]
+struct NpmObject {
+    package: NpmPackage,
+}
+
+#[derive(Deserialize)]
+struct NpmPackage {
+    name: String,
+    version: Option<String>,
+    description: Option<String>,
 }
 
 /// Which end of a version list the newest release is at.
