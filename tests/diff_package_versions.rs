@@ -521,6 +521,13 @@ async fn lowering_the_similarity_threshold_finds_more_renames() {
     let moved = &lenient["structuredContent"]["most_changed"][0];
     assert_eq!(moved["path"], json!("src/processor.js"), "got {lenient}");
     assert_eq!(moved["old_path"], json!("src/handler.js"), "got {lenient}");
+
+    assert_ne!(
+        strict["structuredContent"]["diff_id"], lenient["structuredContent"]["diff_id"],
+        "the threshold changes the statuses, so it changes what names the \
+         diff — which is what the answer tells an agent it does: got {strict} \
+         and {lenient}"
+    );
 }
 
 // ---------------------------------------------------------------------------

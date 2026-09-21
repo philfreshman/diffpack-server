@@ -92,8 +92,11 @@ pub struct Output {
     /// opaque: it is issued here and passed on unchanged.
     pub handle: String,
 
-    /// The identifier of this comparison, as 64 hexadecimal characters. The
-    /// same package and versions always produce the same one.
+    /// The identifier of this comparison, as 64 lowercase hexadecimal
+    /// characters. Every argument you passed names it, not the package and
+    /// the two versions alone: the same pair compared at a different
+    /// similarity threshold, or with whitespace ignored, is a different
+    /// comparison and is given a different identifier.
     pub diff_id: String,
 
     /// The version compared from.
