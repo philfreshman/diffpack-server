@@ -70,6 +70,11 @@ async fn fetch(source: &SearchSource, limit: u64, registry: Registry) -> Result<
         &About {
             registry,
             accept: Some(source.accept),
+            // The source that is a whole index is the one worth decoding on
+            // the way in, and it is the same flag because it is the same
+            // fact: a source that answers every query with one document is
+            // the one whose document is large. See `fetch::About`.
+            compressed: source.whole_index,
             // A search URL names no package, so there is nothing for one of
             // these to be missing: a source answering as though there were
             // is a source that has moved.

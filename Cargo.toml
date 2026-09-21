@@ -61,11 +61,16 @@ futures = { version = "0.3.34", default-features = false, features = ["std"] }
 # compressed already — true, and it stopped being the whole story when the
 # search source chosen for PyPI turned out to be the index it publishes:
 # 44 MB raw and 25 s against a 30 s upstream timeout, against 9.7 MB and 4.4 s
-# compressed. The size cap is unaffected, because the running total is counted
-# on decoded chunks as they arrive; what weakens is the shortcut that refuses a
-# body on its declared length, which a compressed body no longer states. An
-# archive negotiates nothing it did not before: a registry serving a `.tgz`
-# does not gzip it a second time.
+# compressed.
+#
+# Switching the feature on would have negotiated it for every request the
+# client makes, because that is what the feature does to a request that names
+# no encoding. So `src/fetch.rs` names one — `identity` — for every caller but
+# the one that asked, and the archive path is byte for byte the request it was.
+# The reason to keep it that way is the size cap: the running total is counted
+# on decoded chunks either way, but the cheap half, refusing a body on its
+# declared length before reading one, does not survive a body the client
+# decodes, and an archive is the body most worth refusing unread.
 #
 # `rustls-no-provider` rather than `rustls`: the default provider is
 # `aws-lc-rs`, which wants a C toolchain at build time and carries the OpenSSL

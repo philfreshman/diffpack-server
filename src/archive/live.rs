@@ -41,6 +41,9 @@ impl Live {
                 // One representation at each of these URLs, so there is
                 // nothing to ask for by name.
                 accept: None,
+                // An archive is compressed already; negotiating it again
+                // would trade the cheap half of the cap for nothing.
+                compressed: false,
                 // Which of the three statuses it was does not change what a
                 // model does about a version that is not there.
                 missing: &|_| super::not_found(registry, package, version),

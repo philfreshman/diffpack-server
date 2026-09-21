@@ -36,6 +36,7 @@ impl Live {
             &About {
                 registry,
                 accept: None,
+                compressed: false,
                 missing: &|_| super::no_such_package(registry, package),
                 too_large: &|bytes| super::too_large(registry, package, bytes, limit),
             },
