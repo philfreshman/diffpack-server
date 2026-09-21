@@ -73,7 +73,7 @@ const BACKOFF: Duration = Duration::from_millis(200);
 /// room to do the work the cache was there to save.
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-/// One blob, as the store describes it.
+/// One blob, as the store describes it — `CONTEXT.md`'s noun exactly.
 ///
 /// Three fields out of the many the API returns, because three is what the
 /// cache is built on: the pathname says which entry a blob belongs to, the
@@ -87,13 +87,19 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 /// a calendar.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct Info {
+pub(crate) struct Blob {
     pub(crate) pathname: String,
     pub(crate) size: u64,
     pub(crate) uploaded_at: String,
 }
 
 /// One page of a listing, as the API answers it.
+///
+/// Not called a Page: that word is `src/page.rs`'s, for as much of an answer
+/// as fits under the response ceiling, and this is the store's own paging of
+/// its own contents on the way in. Nothing outside this module sees either
+/// one of these, which is exactly when two meanings of a word get written
+/// down by accident.
 ///
 /// Both fields end the walk, because either one alone can be wrong in a way
 /// the other catches. `has_more` is the store saying it is finished, and
@@ -103,8 +109,8 @@ pub(crate) struct Info {
 /// loop by another route.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Page {
-    blobs: Vec<Info>,
+struct Listing {
+    blobs: Vec<Blob>,
     cursor: Option<String>,
     has_more: bool,
 }
@@ -177,7 +183,12 @@ impl Credentials {
 }
 
 /// The Vercel Blob API, as this server talks to it.
-pub(crate) struct Blob {
+///
+/// Named for the thing it talks to rather than for what it holds, because
+/// [`Blob`] is what a blob is here and a type cannot be both. What a caller
+/// asks this for is an operation; what it gets back is a [`Blob`] or
+/// nothing.
+pub(crate) struct Api {
     /// The API's base URL, without a trailing slash.
     base: String,
     /// The store this client writes to, in the spelling the header wants.
@@ -196,7 +207,7 @@ pub(crate) struct Blob {
     timeout: Duration,
 }
 
-impl Blob {
+impl Api {
     /// A client for the store `store_id` at `base`.
     ///
     /// `store_id` is taken as it is provisioned — `store_a-test-store` —
@@ -272,7 +283,7 @@ impl Blob {
     /// The parameter is spelled `url` because the API takes either a blob's
     /// URL or its pathname there; this client only ever has a pathname, so
     /// that is what it sends.
-    pub(crate) async fn head(&self, pathname: &str) -> Result<Option<Info>, Failure> {
+    pub(crate) async fn head(&self, pathname: &str) -> Result<Option<Blob>, Failure> {
         let mut url = self.url(&self.base)?;
         url.query_pairs_mut().append_pair("url", pathname);
 
@@ -297,7 +308,7 @@ impl Blob {
     /// at every call site, and the one place it matters — the size the
     /// budget is counted against — is the one place an unfinished walk
     /// looks like a correct small number.
-    pub(crate) async fn list(&self, prefix: &str) -> Result<Vec<Info>, Failure> {
+    pub(crate) async fn list(&self, prefix: &str) -> Result<Vec<Blob>, Failure> {
         const DOING: &str = "listing what the blob store holds";
 
         let mut blobs = Vec::new();
@@ -312,7 +323,7 @@ impl Blob {
 
             let response = self.send(self.request(Method::GET, url)?, DOING).await?;
 
-            let page: Page = self.read(succeeded(response, DOING)?, DOING).await?;
+            let page: Listing = self.read(succeeded(response, DOING)?, DOING).await?;
             blobs.extend(page.blobs);
 
             match page.cursor.filter(|_| page.has_more) {
@@ -702,9 +713,9 @@ mod tests {
     #[tokio::test]
     async fn a_put_carries_its_pathname_in_the_query_and_its_body_in_the_body() {
         let stub = Stub::start().await;
-        let blob = Blob::at(stub.base(), "a-test-store", "a-token");
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
 
-        blob.put("diffs/v1/abc/meta.json", b"{\"cached\":true}".to_vec())
+        api.put("diffs/v1/abc/meta.json", b"{\"cached\":true}".to_vec())
             .await
             .expect("the stub answers the way the API does");
 
@@ -726,9 +737,9 @@ mod tests {
     #[tokio::test]
     async fn every_request_names_the_api_version_the_store_and_the_bearer() {
         let stub = Stub::start().await;
-        let blob = Blob::at(stub.base(), "a-test-store", "a-token");
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
 
-        blob.put("diffs/v1/abc/meta.json", b"{}".to_vec())
+        api.put("diffs/v1/abc/meta.json", b"{}".to_vec())
             .await
             .expect("the stub answers the way the API does");
 
@@ -747,9 +758,9 @@ mod tests {
     #[tokio::test]
     async fn a_store_id_reaches_the_header_without_the_prefix_it_is_provisioned_with() {
         let stub = Stub::start().await;
-        let blob = Blob::at(stub.base(), "store_a-test-store", "a-token");
+        let api = Api::at(stub.base(), "store_a-test-store", "a-token");
 
-        blob.put("diffs/v1/abc/meta.json", b"{}".to_vec())
+        api.put("diffs/v1/abc/meta.json", b"{}".to_vec())
             .await
             .expect("the stub answers the way the API does");
 
@@ -769,9 +780,9 @@ mod tests {
     #[tokio::test]
     async fn a_write_lands_at_the_pathname_it_was_given_and_does_not_replace_what_is_there() {
         let stub = Stub::start().await;
-        let blob = Blob::at(stub.base(), "a-test-store", "a-token");
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
 
-        blob.put("diffs/v1/abc/meta.json", b"{}".to_vec())
+        api.put("diffs/v1/abc/meta.json", b"{}".to_vec())
             .await
             .expect("the stub answers the way the API does");
 
@@ -788,9 +799,9 @@ mod tests {
     #[tokio::test]
     async fn a_write_declares_the_access_the_api_will_not_assume() {
         let stub = Stub::start().await;
-        let blob = Blob::at(stub.base(), "a-test-store", "a-token");
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
 
-        blob.put("diffs/v1/abc/meta.json", b"{}".to_vec())
+        api.put("diffs/v1/abc/meta.json", b"{}".to_vec())
             .await
             .expect("the stub answers the way the API does");
 
@@ -809,9 +820,9 @@ mod tests {
                 "uploadedAt":"2026-09-21T10:00:00.000Z"}"#,
         )])
         .await;
-        let blob = Blob::at(stub.base(), "a-test-store", "a-token");
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
 
-        let found = blob
+        let found = api
             .head("diffs/v1/abc/meta.json")
             .await
             .expect("the stub answers the way the API does")
@@ -834,9 +845,9 @@ mod tests {
     #[tokio::test]
     async fn a_head_of_a_blob_the_store_does_not_hold_is_a_miss_and_not_a_failure() {
         let stub = Stub::answering(vec![Reply::refusing(StatusCode::NOT_FOUND, "not_found")]).await;
-        let blob = Blob::at(stub.base(), "a-test-store", "a-token");
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
 
-        let found = blob
+        let found = api
             .head("diffs/v1/nothing-here/meta.json")
             .await
             .expect("a cold cache is not a failure");
@@ -868,9 +879,9 @@ mod tests {
             ),
         ])
         .await;
-        let blob = Blob::at(stub.base(), "a-test-store", "a-token");
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
 
-        let blobs = blob
+        let blobs = api
             .list("diffs/v1/")
             .await
             .expect("the stub answers the way the API does");
@@ -903,9 +914,9 @@ mod tests {
                 "uploadedAt":"2026-09-21T10:00:00.000Z"}],"hasMore":true}"#,
         )])
         .await;
-        let blob = Blob::at(stub.base(), "a-test-store", "a-token");
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
 
-        let blobs = blob
+        let blobs = api
             .list("diffs/v1/")
             .await
             .expect("a page with nowhere to resume from is the end of the walk");
@@ -926,9 +937,9 @@ mod tests {
     #[tokio::test]
     async fn a_delete_takes_every_path_it_is_given_in_one_request() {
         let stub = Stub::start().await;
-        let blob = Blob::at(stub.base(), "a-test-store", "a-token");
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
 
-        blob.delete(&["diffs/v1/aaa/meta.json", "diffs/v1/aaa/patches.json"])
+        api.delete(&["diffs/v1/aaa/meta.json", "diffs/v1/aaa/patches.json"])
             .await
             .expect("the stub answers the way the API does");
 
@@ -959,9 +970,9 @@ mod tests {
     #[tokio::test]
     async fn deleting_a_blob_that_is_already_gone_is_not_a_failure() {
         let stub = Stub::answering(vec![Reply::refusing(StatusCode::NOT_FOUND, "not_found")]).await;
-        let blob = Blob::at(stub.base(), "a-test-store", "a-token");
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
 
-        blob.delete(&["diffs/v1/evicted-already/meta.json"])
+        api.delete(&["diffs/v1/evicted-already/meta.json"])
             .await
             .expect("a blob that is already gone is the outcome that was asked for");
     }
@@ -975,9 +986,9 @@ mod tests {
     #[tokio::test]
     async fn a_write_the_store_refuses_is_a_failure_and_not_a_silent_success() {
         let stub = Stub::answering(vec![Reply::refusing(StatusCode::FORBIDDEN, "forbidden")]).await;
-        let blob = Blob::at(stub.base(), "a-test-store", "a-token");
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
 
-        blob.put("diffs/v1/abc/meta.json", b"{}".to_vec())
+        api.put("diffs/v1/abc/meta.json", b"{}".to_vec())
             .await
             .expect_err("a write the store refused is not a write");
     }
@@ -993,10 +1004,10 @@ mod tests {
             Reply::ok("{}"),
         ])
         .await;
-        let blob =
-            Blob::at(stub.base(), "a-test-store", "a-token").with_backoff(Duration::from_millis(1));
+        let api =
+            Api::at(stub.base(), "a-test-store", "a-token").with_backoff(Duration::from_millis(1));
 
-        blob.put("diffs/v1/abc/meta.json", b"{}".to_vec())
+        api.put("diffs/v1/abc/meta.json", b"{}".to_vec())
             .await
             .expect("the second attempt is the one that worked");
 
@@ -1018,10 +1029,10 @@ mod tests {
             Reply::ok("{}"),
         ])
         .await;
-        let blob =
-            Blob::at(stub.base(), "a-test-store", "a-token").with_backoff(Duration::from_millis(1));
+        let api =
+            Api::at(stub.base(), "a-test-store", "a-token").with_backoff(Duration::from_millis(1));
 
-        blob.put("diffs/v1/abc/meta.json", b"{}".to_vec())
+        api.put("diffs/v1/abc/meta.json", b"{}".to_vec())
             .await
             .expect("the second attempt is the one that worked");
 
@@ -1049,11 +1060,11 @@ mod tests {
             Reply::stalling(),
         ])
         .await;
-        let blob = Blob::at(stub.base(), "a-test-store", "a-token")
+        let api = Api::at(stub.base(), "a-test-store", "a-token")
             .with_backoff(Duration::from_millis(1))
             .with_timeout(Duration::from_millis(50));
 
-        blob.head("diffs/v1/abc/meta.json")
+        api.head("diffs/v1/abc/meta.json")
             .await
             .expect_err("a store that never answered did not answer");
     }
@@ -1067,10 +1078,10 @@ mod tests {
     #[tokio::test]
     async fn a_refusal_the_store_would_only_repeat_is_not_tried_again() {
         let stub = Stub::answering(vec![Reply::refusing(StatusCode::NOT_FOUND, "not_found")]).await;
-        let blob =
-            Blob::at(stub.base(), "a-test-store", "a-token").with_backoff(Duration::from_millis(1));
+        let api =
+            Api::at(stub.base(), "a-test-store", "a-token").with_backoff(Duration::from_millis(1));
 
-        blob.head("diffs/v1/nothing-here/meta.json")
+        api.head("diffs/v1/nothing-here/meta.json")
             .await
             .expect("a cold cache is not a failure");
 
@@ -1111,10 +1122,10 @@ mod tests {
             stall: None,
         }])
         .await;
-        let blob = Blob::at(stub.base(), "a-test-store", token.clone())
+        let api = Api::at(stub.base(), "a-test-store", token.clone())
             .with_backoff(Duration::from_millis(1));
 
-        let failure = blob
+        let failure = api
             .put("diffs/v1/abc/meta.json", b"{}".to_vec())
             .await
             .expect_err("the store refused this write");
