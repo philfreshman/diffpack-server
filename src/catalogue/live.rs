@@ -24,24 +24,17 @@ impl Live {
 
     /// Whatever `url` serves, as text, refusing anything over `limit`.
     pub async fn body(&self, url: &str, limit: u64, registry: Registry) -> Result<String, Failure> {
-        let name = registry.name();
         let response = success(http::get(url, registry).await?, registry)?;
 
-        let bytes = http::read_within(response, limit, name, |_| Failure::Unavailable {
-            registry: name.to_owned(),
-            // A body this server will not hold is not an HTTP status, and
-            // there is no status to report because the answer arrived. `0`
-            // is the one number that cannot be mistaken for one a registry
-            // sent, and the message a model reads is the same either way:
-            // this source answered with something unusable.
-            status: 0,
-        })
-        .await?;
+        // An answer this server will not hold, and one that is not text, are
+        // the same thing to a caller: the source answered and what it sent
+        // is unusable. The status it answered *with* is carried rather than
+        // invented, so the message names something that really happened.
+        let status = response.status().as_u16();
+        let unusable = || super::unavailable(registry, status);
 
-        String::from_utf8(bytes).map_err(|_| Failure::Unavailable {
-            registry: name.to_owned(),
-            status: 0,
-        })
+        let bytes = http::read_within(response, limit, registry.name(), |_| unusable()).await?;
+        String::from_utf8(bytes).map_err(|_| unusable())
     }
 }
 
@@ -63,9 +56,6 @@ fn success(response: Response, registry: Registry) -> Result<Response, Failure> 
             retry_after: http::retry_after(&response),
         },
 
-        other => Failure::Unavailable {
-            registry: registry.name().to_owned(),
-            status: other.as_u16(),
-        },
+        other => super::unavailable(registry, other.as_u16()),
     })
 }

@@ -20,9 +20,12 @@
 use axum::body::Body;
 use axum::http::Request;
 use diffpack_server::catalogue::Catalogue;
+use diffpack_server::error::Failure;
 use diffpack_server::mcp::Diffpack;
+use diffpack_server::registry::Registry;
 use diffpack_server::router;
-use diffpack_server::tools::Ctx;
+use diffpack_server::tools::search_packages::{Args, SearchPackages};
+use diffpack_server::tools::{Ctx, Tool};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -33,6 +36,33 @@ const TOOL: &str = "search_packages";
 
 /// The search answers this suite is served, instead of the registries'.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/searches");
+
+// ---------------------------------------------------------------------------
+// At the handler
+// ---------------------------------------------------------------------------
+
+/// Which failure a quiet source produces, which is the question the wire
+/// cannot answer: `isError` and a sentence look the same whichever variant
+/// built them, and the variant is what decides whether the sentence says
+/// "try again".
+#[tokio::test]
+async fn the_handler_returns_the_failure_that_says_the_source_is_unwell() {
+    let failure = SearchPackages::call(
+        Args {
+            registry: Registry::Npm,
+            query: "outage".to_owned(),
+            limit: None,
+        },
+        &Ctx::with_catalogue(Catalogue::fixture(FIXTURES)),
+    )
+    .await
+    .expect_err("this source is not answering");
+
+    match failure {
+        Failure::Unavailable { registry, .. } => assert_eq!(registry, "npm"),
+        other => panic!("a source that did not answer should say so, got {other:?}"),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // What a client is told
@@ -221,6 +251,108 @@ async fn a_pypi_search_answers_with_names_and_says_no_more_than_that() {
         items[1]["name"], "yamldown",
         "and the rest are ranked against the query here — `yamldown` before \
          `yamllint` because the two are the same length, got {items}"
+    );
+}
+
+/// A limit is asked *of the source*, not applied to what comes back. The
+/// fixture set is keyed by URL, so this passes only if the number a caller
+/// gave reached the request npm was sent — which is the difference between
+/// politeness about how much an agent reads and politeness about how much
+/// somebody else's server is made to send.
+#[tokio::test]
+async fn a_limit_is_what_the_source_is_asked_for() {
+    let result = call(json!({
+        "registry": "npm",
+        "query": "zod",
+        "limit": 1,
+    }))
+    .await;
+
+    let page = &result["structuredContent"];
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(1),
+        "one hit was asked for, got {page}"
+    );
+    assert_eq!(
+        page["items"][0]["name"], "zod",
+        "and it is the best one, got {page}"
+    );
+    assert_eq!(
+        page["total"], 1,
+        "a total is the length of what there was to page, which is what a \
+         source asked for one hit returned, got {page}"
+    );
+}
+
+/// A query nobody publishes anything for is an empty answer and not a
+/// failure: there is nothing for a model to fix, and an `isError` here would
+/// have it apologising for a registry's silence or retrying a search that
+/// worked.
+#[tokio::test]
+async fn a_query_that_matches_nothing_is_an_empty_page() {
+    let result = call(json!({
+        "registry": "npm",
+        "query": "zzqqxxnotapackage",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["items"],
+        json!([]),
+        "got {result}"
+    );
+    assert_eq!(result["structuredContent"]["total"], 0, "got {result}");
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "finding nothing is an answer, got {result}"
+    );
+}
+
+/// A source that is not answering is a tool error the model reads, not a
+/// protocol error it never sees: the remedy is to try again or to search
+/// somewhere else, and only the model can choose. The message says which
+/// registry went quiet and that trying again is worth it, which is the
+/// distinction #7 exists to keep.
+#[tokio::test]
+async fn a_source_that_is_not_answering_is_a_tool_error_a_model_can_retry() {
+    let result = call(json!({
+        "registry": "npm",
+        "query": "outage",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(true),
+        "a source that did not answer is a failure, got {result}"
+    );
+
+    let said = result["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(
+        said.contains("npm"),
+        "the message should name the registry that went quiet, got {said:?}"
+    );
+    assert!(
+        said.contains("Try again"),
+        "and should say that trying again is worth it, got {said:?}"
+    );
+}
+
+/// And it takes out that registry's search rather than the tool. An agent
+/// that met one failing source and concluded `search_packages` was broken
+/// would stop using it for the two registries that are answering perfectly
+/// well.
+#[tokio::test]
+async fn one_source_being_down_leaves_the_others_answering() {
+    let down = call(json!({ "registry": "npm", "query": "outage" })).await;
+    assert_eq!(down["isError"], json!(true), "got {down}");
+
+    let up = call(json!({ "registry": "crates", "query": "serde" })).await;
+    assert_eq!(
+        up["structuredContent"]["items"][0]["name"], "serde",
+        "the next call to another registry answers as it always did, got {up}"
     );
 }
 

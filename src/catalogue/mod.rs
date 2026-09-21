@@ -20,6 +20,13 @@
 //! with no network — and what makes a fixture test a test of *where* each
 //! registry is asked, since a search that built a URL of its own finds
 //! nothing there.
+//!
+//! The fixture index has a third answer beside "here is the body" and "this
+//! URL is not in the set": `null`, meaning the source is not answering. It is
+//! how the offline suite reaches the path a source being down takes, and the
+//! refusal it produces is built by [`unavailable`] — the live adapter's own
+//! constructor — so the two cannot disagree about what a quiet source reads
+//! like.
 
 mod fixture;
 mod live;
@@ -114,7 +121,7 @@ impl Catalogue {
 
         let body = match &self.source {
             Source::Live(live) => live.body(&url, self.limit, registry).await?,
-            Source::Fixture(fixture) => fixture.body(&url)?,
+            Source::Fixture(fixture) => fixture.body(&url, registry)?,
         };
 
         registry
@@ -122,5 +129,19 @@ impl Catalogue {
             .ok_or(Failure::Internal {
                 doing: "reading what a registry publishes",
             })
+    }
+}
+
+/// A search source that did not give this server something it can use, in the
+/// words a model reads.
+///
+/// One constructor for both adapters, so the fixture set cannot answer
+/// something the registries would not. It is a tool error rather than a
+/// protocol one because the remedy is a model's to choose: try again, or
+/// search another registry, or ask for a package by the name it already has.
+pub(super) fn unavailable(registry: Registry, status: u16) -> Failure {
+    Failure::Unavailable {
+        registry: registry.name().to_owned(),
+        status,
     }
 }
