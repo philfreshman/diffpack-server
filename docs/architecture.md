@@ -198,6 +198,16 @@ output, so `text`, `truncated` and `bytes` are fields of the answer rather
 than a nested object. Their descriptions reach a model that way, which is why
 they are written for that reader.
 
+Not every answer is one of the two. `diff_package_versions` returns a
+Summary: totals over the whole comparison, and a fixed-size sample of the
+files that moved most. It does not reach this module, and that is the rule
+rather than an exception to it — a Page and an Excerpt exist because an
+answer's size follows from its subject, and a Summary's does not. Twenty
+entries is twenty entries whether the pair moved one file or nine thousand,
+so there is no ceiling to stay under and nothing for a cursor to resume.
+The tree it samples from *is* subject to both, which is why walking it is
+`get_diff_tree`'s job (#14) and not this one's.
+
 Three things a caller does not do: count bytes, encode a cursor, or decide
 what "too big" means. The ceiling is on *serialised* bytes and is a third of
 the platform's cap, because `tools::invoke` puts a tool's answer on the wire
