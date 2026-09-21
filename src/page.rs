@@ -200,3 +200,103 @@ impl Cursor {
 
 /// The cursor format's version, and the whole of what makes it one format.
 const CURSOR_VERSION: &str = "p1";
+
+// ---------------------------------------------------------------------------
+// The other half: one blob, cut loudly
+// ---------------------------------------------------------------------------
+
+/// As much of one thing as fits, and the truth about the rest.
+///
+/// The blob-shaped half of this module. #12 returns a file's content and #15
+/// a file's diff; neither is a sequence, so neither has a next cursor. What
+/// they share with a [`Page`] is the ceiling and the rule that a cut is
+/// stated rather than hidden — a silently cut file is how an agent concludes
+/// a function does not exist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct Excerpt {
+    /// The text, with the marker on the end if it was cut.
+    pub text: String,
+
+    /// Whether `text` is the whole of it.
+    pub truncated: bool,
+
+    /// How many bytes the whole thing is, cut or not.
+    ///
+    /// The real total. A tool that reported the returned length here would be
+    /// telling an agent that a file it has seen a tenth of is a tenth long.
+    pub bytes: usize,
+}
+
+/// Return as much of `text` as fits, and say so when that is not all of it.
+///
+/// `max_bytes` is the caller's own cap, in the text's own bytes, for a tool
+/// that wants less than everything. It narrows the cut; it cannot widen it,
+/// because the ceiling is not the caller's to raise. Omitting it means the
+/// ceiling alone — which is what makes "the server applies a default
+/// regardless" (#12) true without a tool having to remember to ask.
+pub fn truncate(text: &str, max_bytes: Option<usize>) -> Excerpt {
+    let bytes = text.len();
+    let raw_cap = max_bytes.unwrap_or(usize::MAX);
+
+    // The marker is part of what has to fit, and its own length depends on
+    // where the cut lands, so the room for content is the ceiling less the
+    // longest the marker could ever be rather than less what it turns out to
+    // be. Two more for the quotes around the JSON string.
+    let room = PAYLOAD_CEILING.saturating_sub(MARKER_RESERVE + 2);
+
+    let mut kept = 0;
+    let mut encoded = 0;
+    for character in text.chars() {
+        let raw = character.len_utf8();
+        let cost = encoded_cost(character);
+        if kept + raw > raw_cap || encoded + cost > room {
+            break;
+        }
+        kept += raw;
+        encoded += cost;
+    }
+
+    if kept == bytes {
+        return Excerpt {
+            text: text.to_owned(),
+            truncated: false,
+            bytes,
+        };
+    }
+
+    // `kept` is a sum of whole characters' widths, so it is a character
+    // boundary and this slice cannot panic.
+    let mut shown = text[..kept].to_owned();
+    shown.push_str(&format!(
+        "\n[truncated by diffpack: {kept} of {bytes} bytes shown]"
+    ));
+
+    Excerpt {
+        text: shown,
+        truncated: true,
+        bytes,
+    }
+}
+
+/// The most the marker can cost, once escaped.
+///
+/// Two usize decimals is forty digits and the rest is a fixed ASCII phrase
+/// with one newline in it, so eighty-odd is the real number and this is the
+/// round one above it. Reserving the maximum rather than measuring the actual
+/// marker is what breaks the circle: the marker names the cut, and the cut
+/// has to leave room for the marker.
+const MARKER_RESERVE: usize = 128;
+
+/// What one character costs inside a JSON string.
+///
+/// `serde_json`'s escaping rules, which is the encoder every answer here goes
+/// through. Non-ASCII is emitted as itself rather than as `\u` escapes, so a
+/// multi-byte character costs its UTF-8 width and no more.
+fn encoded_cost(character: char) -> usize {
+    match character {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{08}' | '\u{0c}' => 2,
+        // Every other control character is written out as `\u00XX`.
+        control if (control as u32) < 0x20 => 6,
+        other => other.len_utf8(),
+    }
+}

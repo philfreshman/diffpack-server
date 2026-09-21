@@ -383,3 +383,162 @@ fn a_cursor_past_the_end_ends_the_walk_rather_than_failing_it() {
         "and there is nothing after it to ask for"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The other half: one blob, cut loudly
+// ---------------------------------------------------------------------------
+//
+// #12 and #15 do not paginate. They return one thing — a file's content, a
+// file's diff — and it is either whole or it is not. The ceiling is shared
+// with the pages above; the next cursor is what a blob does not have.
+
+/// Text that fits comes back untouched, and says it is whole. `bytes` is the
+/// text's own length either way, which is the field that has to be the real
+/// one rather than the returned one.
+#[test]
+fn a_blob_under_the_ceiling_comes_back_whole() {
+    let content = "fn main() {\n    println!(\"hello\");\n}\n";
+
+    let excerpt = page::truncate(content, None);
+
+    assert_eq!(
+        excerpt.text, content,
+        "nothing was cut, so nothing was added"
+    );
+    assert!(!excerpt.truncated);
+    assert_eq!(excerpt.bytes, content.len());
+}
+
+/// Over the ceiling it is cut, and the cut is loud: an explicit marker in the
+/// text a model reads, a flag beside it, and the real byte count rather than
+/// the returned one. The text is multi-byte throughout, so a cut taken on a
+/// byte offset rather than a character boundary would not survive being a
+/// `String` at all.
+#[test]
+fn a_blob_over_the_ceiling_is_cut_and_says_so_in_the_text() {
+    let content = "日本語のコード\n".repeat(80_000);
+    assert!(
+        content.len() > page::PAYLOAD_CEILING,
+        "the test's own input must not fit"
+    );
+
+    let excerpt = page::truncate(&content, None);
+
+    assert!(excerpt.truncated, "it did not fit, so it was cut");
+    assert_eq!(
+        excerpt.bytes,
+        content.len(),
+        "the real size of the whole thing, not of what came back"
+    );
+
+    let marker = excerpt
+        .text
+        .find("[truncated")
+        .expect("an explicit marker, in the text a model reads");
+    assert!(
+        content.starts_with(&excerpt.text[..marker]),
+        "what was shown is a prefix of what there was, cut on a character boundary"
+    );
+    assert!(
+        excerpt.text[marker..].contains(&content.len().to_string()),
+        "the marker states the real total: {}",
+        &excerpt.text[marker..]
+    );
+    assert!(
+        serde_json::to_vec(&excerpt.text)
+            .expect("text serialises")
+            .len()
+            <= page::PAYLOAD_CEILING,
+        "a cut excerpt is an excerpt under the ceiling"
+    );
+}
+
+/// The cut is on serialised bytes here too, which is the same trap in its
+/// other shape: a file of quotes and backslashes costs twice its own length
+/// once it is a JSON string, so a cut taken on raw length would produce an
+/// excerpt that measures under the ceiling and a response that is over it.
+///
+/// Two blobs of identical length, one of them the worst content there is.
+/// Half as much of it survives — and the answer, framed the way
+/// `tools::invoke` frames one, fits.
+#[test]
+fn a_cut_blob_is_cut_on_what_it_costs_encoded_not_on_its_own_length() {
+    let worst = page::truncate(&"\"".repeat(4_000_000), None);
+    let plain = page::truncate(&"x".repeat(4_000_000), None);
+
+    let shown = |excerpt: &page::Excerpt| {
+        excerpt
+            .text
+            .find("\n[truncated")
+            .expect("a cut blob carries its marker")
+    };
+
+    assert!(worst.truncated && plain.truncated);
+    assert_eq!(
+        worst.bytes, plain.bytes,
+        "the two blobs are the same length before anything is cut"
+    );
+    assert_eq!(
+        shown(&worst) * 2,
+        shown(&plain),
+        "a character that escapes to two bytes costs two bytes of the ceiling"
+    );
+
+    let framed = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": u64::MAX,
+        "result": rmcp::model::CallToolResult::structured(
+            serde_json::to_value(&worst).expect("an excerpt serialises"),
+        ),
+    });
+    let bytes = serde_json::to_vec(&framed)
+        .expect("a result serialises")
+        .len();
+
+    assert!(
+        bytes <= page::RESPONSE_CEILING,
+        "the worst excerpt there is framed to {bytes} bytes, over the {} allowed",
+        page::RESPONSE_CEILING
+    );
+}
+
+/// `max_bytes` is a tool's own cap — #12 takes one — and it narrows the cut
+/// rather than replacing it. A caller asking for less gets less; a caller
+/// asking for more than the response can carry still gets what fits, because
+/// the ceiling is not a caller's to raise.
+#[test]
+fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
+    let content = "abcdefghij".repeat(1_000);
+
+    let asked_for_less = page::truncate(&content, Some(100));
+    let shown = asked_for_less
+        .text
+        .find("\n[truncated")
+        .expect("a cut blob carries its marker");
+    assert_eq!(
+        shown, 100,
+        "the cap the caller asked for, in the text's own bytes"
+    );
+    assert!(asked_for_less.truncated);
+    assert_eq!(asked_for_less.bytes, 10_000, "and still the real total");
+
+    let asked_for_everything = page::truncate(&content, Some(usize::MAX));
+    assert_eq!(
+        asked_for_everything.text, content,
+        "a cap larger than the text is not a cut"
+    );
+    assert!(!asked_for_everything.truncated);
+
+    let huge = "x".repeat(page::PAYLOAD_CEILING * 2);
+    let refused_the_raise = page::truncate(&huge, Some(usize::MAX));
+    assert!(
+        refused_the_raise.truncated,
+        "asking for all of it does not make it fit"
+    );
+    assert!(
+        serde_json::to_vec(&refused_the_raise.text)
+            .expect("text serialises")
+            .len()
+            <= page::PAYLOAD_CEILING
+    );
+}
