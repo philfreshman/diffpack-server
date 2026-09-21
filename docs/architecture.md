@@ -12,7 +12,7 @@ reasoning behind each seam is in [`adr/`](adr/).
 api/mcp.rs          entry point: wraps the router in VercelLayer
 src/router.rs       routes, panic guard over the transport, origin config
 src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
-src/tools/          one module per tool: definition() and call() together   #41
+src/tools/          one module per tool: definition and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)        #42
 src/archive/        fetch(registry, package, version) -> FileMap            #10
 src/store/          DiffStore: get(&DiffKey) / put(entry)                   #20 #21 #22
@@ -83,11 +83,20 @@ task of their own.
 
 ### `src/tools/` — one module per tool
 
-One file per MCP tool, holding its `Tool` definition and its handler together,
-so that adding a tool is adding a file and reviewing a tool is reading one.
-What a tool module does is: validate its parameters, ask `registry` or
-`archive` or `store` for what it needs, shape an answer through `page`, and
-fail through `error`. What it does not do is fetch, cache or paginate by hand.
+One file per MCP tool, holding its definition and its handler together, so
+that adding a tool is adding a file and reviewing a tool is reading one. What
+a tool module does is: ask `registry` or `archive` or `store` for what it
+needs, shape an answer through `page`, and fail through `error`. What it does
+not do is fetch, cache or paginate by hand.
+
+A tool writes down types rather than JSON. The `Tool` trait's associated
+`Args` and `Output` generate the input schema, the output schema and the
+structured answer, so a schema cannot disagree with the handler beside it; the
+description and the three behaviour hints are required associated items, so a
+tool that omits one does not compile. `mod.rs` holds the interface, the one
+list of tools, and the generic call path where arguments are validated and
+`Failure` is put on its channel — which is why a handler returns
+`Result<Output, Failure>` and never names a result type of MCP's.
 
 ### `src/registry.rs` — what a registry is
 
