@@ -39,6 +39,7 @@ src/tools/       One module per tool: its definition and its handler.
 src/registry.rs  What a registry is: npm, crates.io, PyPI, described once.
 src/error.rs     Which channel a failure reaches the client on.
 src/health.rs    The /health body.
+src/page.rs      The 4.5 MB response ceiling: pages, and cut blobs.
 src/cache_key.rs The deterministic diff cache key.
 src/engine.rs    The one module allowed to import diffpack-engine.
 tests/           The suite, driven at the seams: real requests through the

@@ -112,6 +112,25 @@ pub enum Failure {
         limit: u64,
     },
 
+    /// One item of an answer is larger than a whole response.
+    ///
+    /// Distinct from [`Failure::TooLarge`], which is about an archive this
+    /// server declined to download. This one is about an answer it built and
+    /// cannot send: a single entry whose serialised form is over the
+    /// response ceiling fits on no page, however small the `limit`.
+    ///
+    /// `resume` is the way forward, and it is why this is a refusal rather
+    /// than a silent skip. Dropping the item would leave a walk that claims
+    /// to have covered the sequence and has not — a wrong answer an agent
+    /// cannot detect. Naming the cursor that continues past it makes the skip
+    /// the agent's decision instead of ours.
+    ItemTooLarge {
+        position: usize,
+        bytes: usize,
+        ceiling: usize,
+        resume: String,
+    },
+
     /// A registry whose archive URL cannot be built from a package name and
     /// a version.
     ///
@@ -261,6 +280,18 @@ impl Failure {
                  Diff a smaller package, or ask for a single file instead of the whole tree.",
                 bytes / 1_000_000,
                 limit / 1_000_000,
+            ),
+
+            Self::ItemTooLarge {
+                position,
+                bytes,
+                ceiling,
+                resume,
+            } => format!(
+                "Entry {position} of this answer is {bytes} bytes on its own, over the \
+                 {ceiling} a single response can carry, so it fits on no page. Ask for that \
+                 one entry with a tool that returns it by itself and truncates it, or pass \
+                 the cursor `{resume}` to continue past it."
             ),
 
             Self::UnresolvableArchiveUrl {

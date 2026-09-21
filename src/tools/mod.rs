@@ -109,10 +109,12 @@ tools! {
 /// handed to every handler, so that shared state is cloned in rather than
 /// rebuilt per call or stored somewhere that has to outlive an invocation.
 ///
-/// Empty today, deliberately: the modules that will fill it — `archive`
-/// (#10), `registry` (#42), `store` (#20) and `page` (#43) — do not exist
-/// yet, and this is the parameter they arrive in. A tool reaching for
-/// anything that is not here has gone around a seam.
+/// Empty today, deliberately. What fills it is the seams that carry state a
+/// request needs and a handler should not build: `archive` (#10) and `store`
+/// (#20). [`crate::registry`] and [`crate::page`] are not among them — both
+/// are pure, so a tool reaches them as modules and there is nothing to hand
+/// it. A tool reaching for anything that is neither here nor a pure module
+/// has gone around a seam.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct Ctx;

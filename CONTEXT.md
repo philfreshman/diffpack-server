@@ -125,3 +125,23 @@ As much of an answer as fits under the 4.5 MB response ceiling, with a cursor
 for the rest. Every listing tool answers with a Page, whether or not there is
 more.
 _Avoid_: chunk, batch, slice
+
+**Excerpt**:
+The same ceiling over an answer that is one thing rather than a sequence: a
+file's content, a file's Patch. An Excerpt has a marker and a real byte count
+where a Page has a cursor and a total — which is the whole of the difference,
+and why both live in `src/page.rs` ([ADR
+0005](docs/adr/0005-one-module-owns-the-response-ceiling.md)).
+_Avoid_: snippet, preview, head
+
+**Cursor**:
+Where a walk of a sequence resumes. One format across every paginating tool,
+minted by `src/page.rs` and opaque to a client: it is passed back unchanged or
+not at all. A cursor a client wrote for itself is refused.
+_Avoid_: token, offset, page number
+
+**Response ceiling**:
+The 4.5 MB Vercel allows a function's response body. Distinct from Budget,
+which is the blob store's 256 MB: this one is per answer and the platform's,
+that one is cumulative and ours.
+_Avoid_: response limit, size cap
