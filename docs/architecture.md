@@ -15,6 +15,8 @@ src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
 src/tools/          one module per tool: definition and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
+src/catalogue/      versions(registry, package) -> Vec<Version>, newest first
+src/fetch.rs        the one HTTP client: user agent, timeout, redirects, cap
 src/store/          DiffStore: get(&DiffKey) / put(entry)                   #20 #21 #22
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
@@ -41,9 +43,9 @@ build otherwise. See [ADR 0007](adr/0007-one-importer-of-the-engine.md).
 **A tool module goes through the seams, not around them.** A module under
 `src/tools/` may import the standard library, the MCP and serialisation
 crates, `futures` for the one case where a tool waits on two fetches at once,
-and `crate::{archive, cache_key, engine, error, handle, page, registry,
-store}`. It may not name an HTTP client or the blob store: those are
-`archive`'s and `store`'s business, and eight tools that each know how to
+and `crate::{archive, cache_key, catalogue, engine, error, handle, page,
+registry, store}`. It may not name an HTTP client or the blob store: those
+are `fetch`'s and `store`'s business, and eight tools that each know how to
 fetch is eight places to fix a timeout.
 [`scripts/check-tool-seams.sh`](../scripts/check-tool-seams.sh) fails the build
 otherwise, and its allow-list is the list above.
@@ -160,6 +162,45 @@ cannot disagree about what a missing version reads like.
 Redirects are followed only while they stay on allowed hosts. A `302` is a
 request to wherever it points, so the alternative is an allowlist whose holes
 the registry chooses.
+
+### `src/catalogue/` — what a package has released
+
+`versions(registry, package) -> Vec<Version>`, newest first. The second seam
+over the network, beside `archive` and shaped the same way: one interface, two
+adapters, and a fixture set keyed by the URL `registry` builds.
+
+It is not part of `archive` because that seam *is* a `FileMap` ([ADR
+0001](adr/0001-the-archive-seam-is-a-filemap.md)) and this is none of it: a
+document that is read rather than extracted, about a package rather than one
+version of one, and never cached.
+
+**Newest first means most recently published first**, and the date it is
+computed from is the only thing in these documents that can produce the
+order. Not a direction to read the document in: deps.dev sorts PyPI's versions
+lexically by version string, so `requests` ends at 2.9.2 and reversing it
+announces a 2016 release as the newest; and npm's own order is gone before
+this crate sees it, because its versions are a JSON object and `serde_json`'s
+map here is a `BTreeMap`. A version the source gives no date for — one of
+`requests`' 161, thirty-seven of `numpy`'s — is still a published version, so
+it is listed last rather than dropped.
+
+Nothing here is cached. The 256 MB budget is for diff results, and a package's
+version list goes stale the moment somebody publishes.
+
+### `src/fetch.rs` — the one HTTP client
+
+Every outbound request this server makes. It was `archive`'s until `catalogue`
+needed one too, and two copies would be two places to fix a timeout, a user
+agent or a redirect policy — which is the thing ADR 0001 argued against in the
+first place. What leaves this module is bytes or a `Failure`, never a status
+code and never a `reqwest` type, so the seams above it stay the only things a
+tool sees.
+
+A caller passes the two refusals that differ between seams rather than this
+module guessing them. A `404` is a missing *version* to `archive` and a
+missing *package* to `catalogue`, and a body over the cap is named after
+whichever of the two was being read — an archive has a smaller thing to ask
+for instead and a version list does not.
 
 ### `src/store/` — cached diff results
 

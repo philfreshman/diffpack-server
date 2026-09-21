@@ -126,6 +126,37 @@ pub enum Failure {
         limit: u64,
     },
 
+    /// The registry's list of a package's versions arrived and could not be
+    /// read.
+    ///
+    /// [`Failure::MalformedArchive`]'s counterpart for a document rather than
+    /// an archive, and separate because the remedies are not the same: an
+    /// archive that will not extract is one version, and a version list that
+    /// will not read takes the whole package with it.
+    ///
+    /// `reason` is chosen at the call site rather than threaded out from a
+    /// parser, so there is no library's free text in it. It is redacted on
+    /// the way out regardless.
+    UnreadableVersions {
+        registry: String,
+        package: String,
+        reason: String,
+    },
+
+    /// The registry's list of a package's versions is larger than this
+    /// function will read.
+    ///
+    /// Distinct from [`Failure::TooLarge`], which is an archive a caller can
+    /// do something about by asking for one file instead of a whole tree.
+    /// There is no smaller version of a package's release history to ask
+    /// for, so the message does not pretend there is.
+    VersionsTooLarge {
+        registry: String,
+        package: String,
+        bytes: u64,
+        limit: u64,
+    },
+
     /// The version has no file at that path.
     ///
     /// The commonest way an agent arrives here is by writing the archive's
@@ -300,6 +331,29 @@ impl Failure {
             Self::Unavailable { registry, status } => format!(
                 "{registry} answered with HTTP {status}, which this server cannot use. \
                  Try again shortly."
+            ),
+
+            Self::UnreadableVersions {
+                registry,
+                package,
+                reason,
+            } => format!(
+                "The versions of `{package}` on {registry} could not be read: {}. \
+                 There is nothing to retry — ask for a version you already know, \
+                 or try another registry.",
+                redact(reason),
+            ),
+
+            Self::VersionsTooLarge {
+                registry,
+                package,
+                bytes,
+                limit,
+            } => format!(
+                "The versions {registry} has published for `{package}` come to {} MB, over \
+                 this server's {} MB limit for them. There is no shorter answer to ask for.",
+                bytes / 1_000_000,
+                limit / 1_000_000,
             ),
 
             Self::MalformedArchive {

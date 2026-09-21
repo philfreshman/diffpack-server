@@ -1,0 +1,22 @@
+{
+  "name": "prereleases",
+  "dist-tags": {
+    "latest": "2.0.1"
+  },
+  "versions": {
+    "1.0.0": { "name": "prereleases", "version": "1.0.0" },
+    "2.0.0-alpha.1": { "name": "prereleases", "version": "2.0.0-alpha.1" },
+    "2.0.0-rc.1": { "name": "prereleases", "version": "2.0.0-rc.1" },
+    "2.0.0": { "name": "prereleases", "version": "2.0.0" },
+    "2.0.1+build.5": { "name": "prereleases", "version": "2.0.1+build.5" }
+  },
+  "time": {
+    "created": "2021-01-01T00:00:00.000Z",
+    "modified": "2021-05-01T00:00:00.000Z",
+    "1.0.0": "2021-01-01T00:00:00.000Z",
+    "2.0.0-alpha.1": "2021-02-01T00:00:00.000Z",
+    "2.0.0-rc.1": "2021-03-01T00:00:00.000Z",
+    "2.0.0": "2021-04-01T00:00:00.000Z",
+    "2.0.1+build.5": "2021-05-01T00:00:00.000Z"
+  }
+}
