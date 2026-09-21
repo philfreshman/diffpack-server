@@ -13,4 +13,5 @@ pub mod mcp;
 pub mod page;
 pub mod registry;
 pub mod router;
+pub mod store;
 pub mod tools;
