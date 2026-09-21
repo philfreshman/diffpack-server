@@ -1,6 +1,6 @@
 # 0001. The archive seam is a FileMap, not an HTTP client
 
-**Status:** accepted, 2026-09-21. Implemented by #10.
+**Status:** accepted, 2026-09-21. Implemented in #10.
 
 Eight tools need the files in a published version of a package. The interface
 they get is `archive::fetch(registry, package, version) -> FileMap`: a whole

@@ -14,7 +14,7 @@ src/router.rs       routes, panic guard over the transport, origin config
 src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
 src/tools/          one module per tool: definition and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
-src/archive/        fetch(registry, package, version) -> FileMap            #10
+src/archive/        fetch(registry, package, version) -> FileMap
 src/store/          DiffStore: get(&DiffKey) / put(entry)                   #20 #21 #22
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
@@ -112,12 +112,12 @@ what a fourth registry owes.
 Two things are *derived* here rather than written down beside it. The `registry`
 enum in every tool's schema is generated from the variant list, so a registry
 cannot reach a model's schema late. And the outbound host allowlist is the hosts
-of the URLs this module builds — #10 may fetch what `registry::allows` permits
-and nothing else — so a source added here is reachable the moment it exists,
+of the URLs this module builds — `archive` may fetch what `registry::allows`
+permits and nothing else — so a source added here is reachable the moment it exists,
 rather than through a second list someone has to remember to widen.
 
-It fetches nothing. This module says *where* and *what shape*; `archive` (#10)
-does the fetching, and that is what lets every registry fact be tested with no
+It fetches nothing. This module says *where* and *what shape*; `archive` does
+the fetching, and that is what lets every registry fact be tested with no
 network at all. The `diffpack://registries` resource (#16) is a projection of
 this module rather than a hand-written copy of it, and Go support (#28) is a
 value added here rather than an edit in five places. See [ADR
@@ -126,12 +126,25 @@ value added here rather than an edit in five places. See [ADR
 ### `src/archive/` — a version's files
 
 `fetch(registry, package, version) -> FileMap`. Everything on the other side of
-that signature — resolving the download URL, the HTTP client, the timeout,
-decompressing, untarring, stripping the top-level directory — is this module's
-and nobody else's. Two adapters sit behind the same interface: the live one
-over `reqwest`, and a fixture one reading local tarballs, which is what lets
-the conformance suite (#24) run offline. See [ADR
-0001](adr/0001-the-archive-seam-is-a-filemap.md).
+that signature — resolving the download URL, PyPI's second hop, the HTTP
+client, the timeout, the size cap, decompressing, untarring, stripping the
+top-level directory — is this module's and nobody else's. Two adapters sit
+behind the same interface: the live one over `reqwest`, and a fixture one
+reading `fixtures/archives/`, which is what lets the suite assert what a
+version's files are with no network and what lets the conformance suite (#24)
+run offline. See [ADR 0001](adr/0001-the-archive-seam-is-a-filemap.md).
+
+Three things are the same code for both adapters rather than the live one's
+alone, because each is a rule about what this server does rather than about
+where bytes come from: the host allowlist `registry` derives, the size cap,
+and extraction. The fixture index is keyed by URL for the same reason — a
+fetch path that built a URL of its own instead of asking `registry` finds
+nothing there, so `tests/archive.rs` is a test of resolution as well as of
+extraction.
+
+Redirects are followed only while they stay on allowed hosts. A `302` is a
+request to wherever it points, so the alternative is an allowlist whose holes
+the registry chooses.
 
 ### `src/store/` — cached diff results
 

@@ -62,6 +62,15 @@ name for breaking one, because the registry decides what exists. The version
 rule is the same kind of sentence, and is one sentence for all three.
 _Avoid_: validation, name format, constraint, schema
 
+**Size cap**:
+The most one downloaded body may weigh before this server refuses it
+unread. It is about what comes *in*: an 80 MB crate is an ordinary thing to
+diff and a five-gigabyte one is somebody using a package name to fill this
+function's memory. Distinct from the Response ceiling, which bounds one
+answer on the way out, and from the Budget, which is cumulative and the blob
+store's.
+_Avoid_: size limit, max size, quota, ceiling
+
 **Allowed host**:
 A host this server may send an outbound request to. The set is derived from
 the URLs the registry module builds, so it grows when a Registry is added and
