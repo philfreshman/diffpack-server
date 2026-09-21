@@ -171,10 +171,11 @@ fn a_missing_package_is_not_a_missing_version() {
     );
 }
 
-/// Five upstream causes, five remedies: wait and retry, slow down, check the
-/// name, report a broken archive, ask for something smaller. A single
-/// "registry error" string would leave a model guessing which one it is
-/// looking at, so every one of them has to read differently.
+/// Six upstream causes, six remedies: wait and retry, slow down, check the
+/// name, report a broken archive, ask for something smaller, and — the one
+/// with no status behind it — a registry this server could not reach at all.
+/// A single "registry error" string would leave a model guessing which one it
+/// is looking at, so every one of them has to read differently.
 #[test]
 fn every_upstream_cause_reads_differently() {
     let messages = [
@@ -200,6 +201,9 @@ fn every_upstream_cause_reads_differently() {
             version: "4.0.0".to_owned(),
             bytes: 300_000_000,
             limit: 256 * 1024 * 1024,
+        }),
+        message_of(Failure::Unreachable {
+            registry: "npm".to_owned(),
         }),
     ];
 
@@ -228,6 +232,12 @@ fn the_transient_failures_say_so_and_the_permanent_ones_do_not() {
         Failure::RateLimited {
             registry: "PyPI".to_owned(),
             retry_after: None,
+        },
+        // A name that did not resolve, a refused connection, a TLS handshake
+        // that failed: the registry never answered, so there is no status to
+        // report and nothing for the caller to have done differently.
+        Failure::Unreachable {
+            registry: "PyPI".to_owned(),
         },
     ] {
         let message = message_of(transient);
