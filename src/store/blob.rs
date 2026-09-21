@@ -56,6 +56,23 @@ const ATTEMPTS: u32 = 3;
 /// has an answer and is only trying to remember it.
 const BACKOFF: Duration = Duration::from_millis(200);
 
+/// How long one attempt may take before it is abandoned.
+///
+/// Every request needs one or a store that accepts a connection and then
+/// says nothing holds this function until the platform kills it — with no
+/// answer to the caller and nothing in the log about which of the two was
+/// waiting. That is the failure [ADR
+/// 0001](../docs/adr/0001-the-archive-seam-is-a-filemap.md) is about, and a
+/// second client is a second place to have forgotten it.
+///
+/// Shorter than [`crate::error::UPSTREAM_TIMEOUT`], which is what this server
+/// waits on a registry, because the two are waiting for different things. A
+/// registry holds the only copy of what is being asked for, so waiting is the
+/// whole of the remedy. The store holds a copy of an answer this function can
+/// work out again, so three attempts and the sleeps between them still leave
+/// room to do the work the cache was there to save.
+const TIMEOUT: Duration = Duration::from_secs(5);
+
 /// One blob, as the store describes it.
 ///
 /// Three fields out of the many the API returns, because three is what the
@@ -172,6 +189,11 @@ pub(crate) struct Blob {
     /// millisecond instead of making the suite wait out a real backoff —
     /// the same reason `Archive` carries its size limit.
     backoff: Duration,
+    /// How long one attempt may take. A field for the same reason as
+    /// `backoff`, and set on the request rather than on the client, because
+    /// the client is built once for the process and this is a policy a test
+    /// has to be able to reach.
+    timeout: Duration,
 }
 
 impl Blob {
@@ -190,6 +212,7 @@ impl Blob {
                 .to_owned(),
             token: token.into(),
             backoff: BACKOFF,
+            timeout: TIMEOUT,
         }
     }
 
@@ -206,6 +229,11 @@ impl Blob {
     /// The same client, waiting `backoff` before its second attempt.
     pub(crate) fn with_backoff(self, backoff: Duration) -> Self {
         Self { backoff, ..self }
+    }
+
+    /// The same client, giving one attempt `timeout` and no more.
+    pub(crate) fn with_timeout(self, timeout: Duration) -> Self {
+        Self { timeout, ..self }
     }
 
     /// Write `body` to `pathname`.
@@ -385,6 +413,8 @@ impl Blob {
     /// operations and missing in the fourth is a failure that only the
     /// fourth shows — and the store id in particular is not something the
     /// token carries, so a request without it is a request about no store.
+    /// The timeout is here for the same reason: an operation that forgot one
+    /// would be the operation that hangs the function.
     ///
     /// `bearer_auth` rather than a `header` call: reqwest marks the value
     /// sensitive, so the credential stays out of the client's own `Debug`
@@ -392,6 +422,7 @@ impl Blob {
     fn request(&self, method: Method, url: Url) -> Result<RequestBuilder, Failure> {
         Ok(client()?
             .request(method, url)
+            .timeout(self.timeout)
             .header("x-api-version", API_VERSION)
             .header("x-vercel-blob-store-id", &self.store_id)
             .bearer_auth(&self.token))
@@ -509,6 +540,10 @@ mod tests {
     struct Reply {
         status: StatusCode,
         body: String,
+        /// How long the stub holds the request before answering it. A store
+        /// that accepts a connection and then says nothing is the case a
+        /// status code cannot stand in for.
+        stall: Option<Duration>,
     }
 
     impl Reply {
@@ -516,6 +551,15 @@ mod tests {
             Self {
                 status: StatusCode::OK,
                 body: body.to_owned(),
+                stall: None,
+            }
+        }
+
+        /// A store that took the request and never answered it.
+        fn stalling() -> Self {
+            Self {
+                stall: Some(Duration::from_secs(30)),
+                ..Self::ok("{}")
             }
         }
 
@@ -525,6 +569,7 @@ mod tests {
             Self {
                 status,
                 body: format!(r#"{{"error":{{"code":"{code}"}}}}"#),
+                stall: None,
             }
         }
     }
@@ -624,6 +669,10 @@ mod tests {
             .expect("the stub's lock is not poisoned")
             .pop_front()
             .unwrap_or_else(|| Reply::ok("{}"));
+
+        if let Some(stall) = reply.stall {
+            tokio::time::sleep(stall).await;
+        }
 
         Response::builder()
             .status(reply.status)
@@ -944,6 +993,32 @@ mod tests {
         );
     }
 
+    /// A store that takes the request and then says nothing is the failure a
+    /// status code cannot stand in for: there is no answer to read, so
+    /// without a deadline this waits until the platform kills the function —
+    /// and what the caller gets is a dropped connection rather than a
+    /// recomputed diff it could have had in the same time.
+    ///
+    /// Three attempts each bounded is what makes the whole call bounded,
+    /// which is why the deadline is on the request rather than on the
+    /// operation: an operation that forgot one is the operation that hangs.
+    #[tokio::test]
+    async fn a_store_that_never_answers_is_given_up_on_rather_than_waited_out() {
+        let stub = Stub::answering(vec![
+            Reply::stalling(),
+            Reply::stalling(),
+            Reply::stalling(),
+        ])
+        .await;
+        let blob = Blob::at(stub.base(), "a-test-store", "a-token")
+            .with_backoff(Duration::from_millis(1))
+            .with_timeout(Duration::from_millis(50));
+
+        blob.head("diffs/v1/abc/meta.json")
+            .await
+            .expect_err("a store that never answered did not answer");
+    }
+
     /// The other edge of the same rule, and the one that costs something to
     /// get wrong. A `404` is the store having read the request and answered
     /// it; asking again is asking a settled question twice, and doing it
@@ -994,6 +1069,7 @@ mod tests {
         let stub = Stub::answering(vec![Reply {
             status: StatusCode::FORBIDDEN,
             body: format!(r#"{{"error":{{"code":"forbidden","message":"token {token} denied"}}}}"#),
+            stall: None,
         }])
         .await;
         let blob = Blob::at(stub.base(), "a-test-store", token.clone())
