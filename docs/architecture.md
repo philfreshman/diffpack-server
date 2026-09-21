@@ -132,7 +132,7 @@ It is built two ways and only two: `Ctx::new` is every seam live and
 in each of them and its author answers for production and for the suite at
 once. There is deliberately no builder that supplies one seam and fills the
 rest, because filling them meant filling them live: a test naming the archive
-carried a live catalogue beside it, and the first tool to read a version list
+carried a live catalogue beside it, and the first tool to read a catalogue
 through such a context would have asked npm from CI. `tests/ctx.rs` is what
 holds this — it drives every seam a context carries rather than a tool.
 

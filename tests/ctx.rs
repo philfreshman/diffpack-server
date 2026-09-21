@@ -88,9 +88,9 @@ async fn every_seam_a_context_carries_is_the_fixture_set() {
 ///
 /// This is what the two builders it replaced could not promise. Each filled
 /// the seam it was not given from the live constructor, so `Ctx` over a
-/// fixture archive carried a live catalogue: the first tool to read a version
-/// list through one would have made a real request, in CI, intermittently,
-/// and reported it as the registry being unreachable.
+/// fixture archive carried a live catalogue: the first tool to read a
+/// catalogue through one would have made a real request, in CI,
+/// intermittently, and reported it as the registry being unreachable.
 #[tokio::test]
 async fn no_seam_a_context_carries_can_reach_a_registry() {
     for (tool, arguments, doing) in [
