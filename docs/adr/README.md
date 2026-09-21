@@ -16,7 +16,7 @@ directory was created (#40).
 | [0003](0003-the-cache-seam-is-a-store.md) | The cache seam is a DiffStore, not a blob client | #20 #21 #22 |
 | [0004](0004-one-registry-module.md) | One Registry module | done, #42 |
 | [0005](0005-one-module-owns-the-response-ceiling.md) | One module owns the response ceiling | done, #43 |
-| [0006](0006-the-handle-carries-its-inputs.md) | The diff handle carries its inputs | #44 |
+| [0006](0006-the-handle-carries-its-inputs.md) | The diff handle carries its inputs | done, #44 |
 | [0007](0007-one-importer-of-the-engine.md) | `src/engine.rs` is the only importer of `diffpack-engine` | done, #4 |
 | [0008](0008-no-sessions.md) | No sessions, for any client | done, #6 |
 | [0009](0009-origin-validation-on-host-validation-off.md) | `Origin` validation on, `Host` validation off | done, #6 |

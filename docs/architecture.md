@@ -17,6 +17,7 @@ src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap            #10
 src/store/          DiffStore: get(&DiffKey) / put(entry)                   #20 #21 #22
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
+src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
 src/error.rs        Failure, the two channels, redaction
 src/engine.rs       the only importer of diffpack_engine
@@ -39,8 +40,8 @@ build otherwise. See [ADR 0007](adr/0007-one-importer-of-the-engine.md).
 
 **A tool module goes through the seams, not around them.** A module under
 `src/tools/` may import the standard library, the MCP and serialisation
-crates, and `crate::{archive, cache_key, engine, error, page, registry,
-store}`. It may not name an HTTP client or the blob store: those are
+crates, and `crate::{archive, cache_key, engine, error, handle, page,
+registry, store}`. It may not name an HTTP client or the blob store: those are
 `archive`'s and `store`'s business, and eight tools that each know how to
 fetch is eight places to fix a timeout.
 [`scripts/check-tool-seams.sh`](../scripts/check-tool-seams.sh) fails the build
@@ -162,6 +163,31 @@ the platform's cap, because `tools::invoke` puts a tool's answer on the wire
 twice — as `structuredContent` and as the escaped text block rmcp mirrors it
 into. A tool that counted items instead would be correct until someone diffed
 a package whose paths are long.
+
+### `src/handle.rs` — the handle a diff is asked for again by
+
+What passes between the tool that computes a diff (#13) and the three that
+read one back (#14, #15, #16). It carries the `diff_id` — the cache lookup,
+and the string #27 needs — and beside it the inputs that `diff_id` was minted
+from, so that a reading tool whose entry has been evicted recomputes rather
+than refusing. See [ADR 0006](adr/0006-the-handle-carries-its-inputs.md).
+
+It travels as one opaque string. `DiffHandle` serialises as that string and
+deserialises by decoding it, which is what makes a tool's `-32602` automatic:
+`tools::invoke` reads a handler's `Args` before the handler runs, so a handle
+that does not decode never reaches one and no handler has to remember to
+verify it.
+
+The module sits beside `cache_key` rather than inside it. The two answer
+different questions — `cache_key` implements a document that is a contract
+with another language, and this is a wire format between two of this server's
+own tools — and keeping the second out of the first is what makes "#44 does
+not touch `docs/cache-key.md`" a property of the tree rather than a promise.
+
+This is also where `similarity_threshold` and `ignore_whitespace` stop being
+arguments. They are fixed by the handle, so the reading tools do not accept
+them: two option sets are two diffs, and a tool that let one be changed after
+the fact would be answering about a diff nobody computed.
 
 ### `src/cache_key.rs` — `DiffKey`, `diff_id`, blob paths
 

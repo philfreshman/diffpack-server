@@ -65,6 +65,15 @@ package it came from, which is why a handle passed between tools carries its
 inputs beside it ([ADR 0006](docs/adr/0006-the-handle-carries-its-inputs.md)).
 _Avoid_: hash, cache key, id
 
+**Handle**:
+What a Diff is asked for again by, and the only way it is: the diff_id
+together with the inputs it was minted from, encoded as one opaque string.
+`diff_package_versions` mints it and the tools that read a Diff back take it.
+It is not a diff_id — a diff_id names a Diff and a Handle is enough to produce
+one — and it is minted, never written: a Handle whose halves disagree is
+refused ([ADR 0006](docs/adr/0006-the-handle-carries-its-inputs.md)).
+_Avoid_: token, reference, diff id (for the handle), session
+
 **Status**:
 What happened to one file between the two versions: `added`, `removed`,
 `modified`, `renamed`, `unchanged`. The engine's five, deliberately unchanged —

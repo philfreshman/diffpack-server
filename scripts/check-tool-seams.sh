@@ -50,9 +50,10 @@ readonly TOOLS="src/tools"
 readonly ALLOWED_ROOTS=(crate self super std core alloc rmcp serde serde_json schemars)
 
 # The crate's own modules a tool may reach. The seams, plus `error` because
-# every handler ends in one and `cache_key` because minting a handle is how a
-# diff-taking tool answers at all.
-readonly ALLOWED_MODULES=(archive cache_key engine error page registry store tools)
+# every handler ends in one, `handle` because minting one is how a diff-taking
+# tool answers at all, and `cache_key` because a tool may still need the key a
+# handle names.
+readonly ALLOWED_MODULES=(archive cache_key engine error handle page registry store tools)
 
 # Names that mean a seam was crossed, wherever they appear.
 readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN'
@@ -140,8 +141,9 @@ if [[ ${#offenders[@]} -gt 0 ]]; then
 
 A module under ${TOOLS}/ is one tool and nothing else. It gets a package's
 files from \`crate::archive\`, asks \`crate::registry\` what a registry is,
-caches through \`crate::store\`, stays inside the response ceiling with
-\`crate::page\`, and fails through \`crate::error\`. The HTTP client and the
+caches through \`crate::store\`, names a diff with \`crate::handle\`, stays
+inside the response ceiling with \`crate::page\`, and fails through
+\`crate::error\`. The HTTP client and the
 blob store are those modules' business, not a tool's: eight tools that each
 know how to fetch is eight places to fix a timeout, a retry or a user agent.
 

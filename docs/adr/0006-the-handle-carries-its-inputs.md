@@ -37,3 +37,45 @@ in hand, a miss costs time and nothing else.
 
 The cost is a larger handle and one more thing for #23 to describe to an agent.
 Worth it: the alternative's cost is an error a user cannot act on.
+
+## The shape: one opaque string
+
+A version prefix and a base64url payload — `d1:…` — holding the `diff_id` and
+the whole key it was computed from. A tool takes it as one string argument and
+returns it as one string field.
+
+## Rejected: an object an agent fills in
+
+The readable alternative: `{ diff_id, registry, package, from_version,
+to_version, similarity_threshold, ignore_whitespace }` as a nested argument.
+
+It reads better in a transcript, and that is the whole of its case. Against it:
+a handle an agent can read is a handle an agent will edit — change
+`to_version` and keep the `diff_id`, because the second looks like an opaque
+detail and the first looks like the thing being asked about. What arrives is a
+handle naming one diff and describing another, and no error message that is
+both truthful and useful. An opaque string is not a security measure; it is a
+signal about what the value is for, in the one place an agent decides whether
+to construct one.
+
+So the handle is opaque *and* verified. Decode recomputes the `diff_id` from
+the inputs beside it and refuses a handle whose two halves disagree, with
+`-32602` — the protocol channel, because a client built that, not a model.
+Verification is what makes opacity honest rather than decorative: without it
+the payload is base64 the way a cookie is, and a determined caller edits it
+anyway.
+
+The cost is a longer argument to read in a transcript and a value nobody can
+inspect while debugging. Against that, the inputs are in the tool call that
+minted it, one message earlier.
+
+## A handle names a build, not only a diff
+
+`engine` and `schema` are in the key and therefore in the handle, and decode
+checks both against this build. A handle from an earlier deployment is refused
+in its own words rather than as a mismatch.
+
+The alternative — recomputing from an old handle — writes a diff this engine
+computed under the key the old engine's would have had, which is the one thing
+`docs/cache-key.md` exists to prevent. Refusing costs an agent one call across
+a deploy that had already invalidated every entry it might have hit.
