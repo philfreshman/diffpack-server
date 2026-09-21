@@ -51,6 +51,7 @@
 //! [`docs/architecture.md`](../../docs/architecture.md) and ADR 0002.
 
 use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -64,7 +65,7 @@ use crate::archive::{Archive, FileMap};
 use crate::catalogue::Catalogue;
 use crate::error::Failure;
 use crate::log::{Line, Sink, Spent};
-use crate::registry::Registry;
+use crate::registry::{Registry, Version};
 
 /// Declare the tools, and build the collection and the dispatch from one list.
 ///
@@ -158,6 +159,29 @@ tools! {
 /// Each seam is behind an [`Arc`] because this is cloned into every handler
 /// and an adapter is not free to rebuild: a live one shares the process's
 /// HTTP client and a fixture one is a path it reads from.
+///
+/// # Two constructors, and why there is no third
+///
+/// [`Ctx::new`] is every seam live and [`Ctx::fixture`] is every seam reading
+/// from disk. Both name every field, so adding a seam is a compile error in
+/// each of them and its author answers for both worlds at once.
+///
+/// What they replace is a builder per seam — `with_archive(archive)` filling
+/// the rest from `Self::new()`. Naming one seam there left the others live,
+/// so a test that reached a seam it had not named went to a registry. That is
+/// a passing test until the day it is a flake, and the flake names the
+/// registry rather than the context that let it be asked.
+///
+/// [`Ctx::logging_to`] is not a third, and the difference is the whole rule:
+/// it spreads `..self`, so it changes a context that has already chosen its
+/// world. A spread of `..Self::new()` is what reopens this, whatever it is
+/// called.
+///
+/// What the compiler checks there is that every field was answered for, not
+/// that the answer was a fixture one. [`Ctx::seams`] is the half it cannot
+/// check: it names the seams by taking this struct apart, so a field added
+/// here has to be called a seam or not, and `tests/ctx.rs` holds its own list
+/// of calls to whatever that answer was.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Ctx {
@@ -182,23 +206,28 @@ impl Ctx {
         }
     }
 
-    /// The same, with the archive source supplied.
+    /// What the suite hands a handler: both seams reading from `fixtures`.
     ///
-    /// A seam the suite drives. `router_with` takes the service factory that
-    /// builds this, so a test reaches a fixture adapter through the path
-    /// production takes rather than around it.
-    pub fn with_archive(archive: Archive) -> Self {
+    /// `fixtures` is the root the checked-in sets live under, and each seam
+    /// is given its own directory inside it. One argument rather than one per
+    /// seam because the suite has no use for mixing sets — what it needs is
+    /// that nothing it builds can reach a registry, which a constructor that
+    /// mentions no live adapter is.
+    ///
+    /// `router_with` takes the service factory that builds this, so a test
+    /// reaches the fixture adapters through the path production takes rather
+    /// than around it.
+    ///
+    /// The log and the tally are the same here as in production: neither is a
+    /// seam, and a suite that wants the lines back asks for them with
+    /// [`Ctx::logging_to`].
+    pub fn fixture(fixtures: impl AsRef<Path>) -> Self {
+        let fixtures = fixtures.as_ref();
         Self {
-            archive: Arc::new(archive),
-            ..Self::new()
-        }
-    }
-
-    /// The same, with the version source supplied.
-    pub fn with_catalogue(catalogue: Catalogue) -> Self {
-        Self {
-            catalogue: Arc::new(catalogue),
-            ..Self::new()
+            archive: Arc::new(Archive::fixture(fixtures.join("archives"))),
+            catalogue: Arc::new(Catalogue::fixture(fixtures.join("versions"))),
+            log: Sink::default(),
+            spent: Arc::new(Spent::default()),
         }
     }
 
@@ -211,33 +240,69 @@ impl Ctx {
         Self { log, ..self }
     }
 
+    /// The seams this carries, by name.
+    ///
+    /// Taking `Self` apart is the point of the first line. It names every
+    /// field and spreads nothing, so a seam added to this struct does not
+    /// compile until somebody has said whether it is one — and `tests/ctx.rs`
+    /// answers this rather than a list of its own, so a seam nobody wrote a
+    /// call for fails there instead of going unasserted until the day it is
+    /// live.
+    ///
+    /// The log and the tally are not seams. Nothing outside this process is
+    /// behind either of them, which is the whole of what a seam is here.
+    pub fn seams(&self) -> &'static [&'static str] {
+        let Self {
+            archive: _,
+            catalogue: _,
+            log: _,
+            spent: _,
+        } = self;
+
+        &["archive", "catalogue"]
+    }
+
     /// A version's files.
     ///
     /// Returns the seam with a stopwatch on it rather than the seam itself,
     /// so that there is no way to read an archive that is not counted. A
     /// handler is unchanged by it: `ctx.archive().fetch(..)` is the same
     /// call it always was.
-    pub fn archive(&self) -> Timed<'_> {
-        Timed {
-            archive: &self.archive,
-            spent: &self.spent,
-        }
+    pub fn archive(&self) -> Timed<'_, Archive> {
+        self.timed(&self.archive)
     }
 
     /// What a package has released.
-    pub fn catalogue(&self) -> &Catalogue {
-        &self.catalogue
+    ///
+    /// Timed for the same reason and by the same wrapper. Reading a
+    /// catalogue is a request to a registry, and a `fetch` phase that only
+    /// counted archives would report the one tool that does nothing else as
+    /// a call that waited on nobody — which is the reading an operator makes
+    /// when the phase is absent.
+    pub fn catalogue(&self) -> Timed<'_, Catalogue> {
+        self.timed(&self.catalogue)
+    }
+
+    /// `seam`, with this request's tally attached.
+    fn timed<'a, S>(&'a self, seam: &'a S) -> Timed<'a, S> {
+        Timed {
+            seam,
+            spent: &self.spent,
+        }
     }
 }
 
-/// The archive seam, with the time a fetch takes recorded.
+/// A seam that waits on a registry, with that wait recorded.
 ///
 /// The same shape as [`crate::mcp::Guarded`]: a wrapper that adds one
 /// property to something a caller already knows how to use, so that the
-/// property is not a thing each caller has to remember.
+/// property is not a thing each caller has to remember. One wrapper over both
+/// seams rather than one each, because "how long did this call wait on a
+/// registry" is a question about the request and not about which of them
+/// answered it — two wrappers would be two places for that to drift.
 ///
-/// `Copy`, and [`Timed::fetch`] takes it by value, because of how the one
-/// tool that reads two archives asks for them:
+/// `Copy`, and each method takes it by value, because of how the one tool
+/// that reads two archives asks for them:
 ///
 /// ```ignore
 /// try_join!(
@@ -253,13 +318,24 @@ impl Ctx {
 /// binding at each such call site, which is a thing to remember at the one
 /// place this seam is used concurrently — and the seam exists so that
 /// counting a fetch is not a thing to remember.
-#[derive(Debug, Clone, Copy)]
-pub struct Timed<'a> {
-    archive: &'a Archive,
+#[derive(Debug)]
+pub struct Timed<'a, S> {
+    seam: &'a S,
     spent: &'a Spent,
 }
 
-impl Timed<'_> {
+// Derived, these would ask the seam behind the reference to be `Copy` too,
+// which neither adapter is and neither needs to be: what is copied is two
+// pointers.
+impl<S> Clone for Timed<'_, S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S> Copy for Timed<'_, S> {}
+
+impl Timed<'_, Archive> {
     /// The files in `version` of `package`, and the time it took on the
     /// request's tally.
     pub async fn fetch(
@@ -268,13 +344,23 @@ impl Timed<'_> {
         package: &str,
         version: &str,
     ) -> Result<FileMap, Failure> {
-        let began = Instant::now();
-        let files = self.archive.fetch(registry, package, version).await;
+        self.spent
+            .while_fetching(self.seam.fetch(registry, package, version))
+            .await
+    }
+}
 
-        // Recorded whether or not it worked. A registry that times out is
-        // exactly the call worth knowing the fetch time of.
-        self.spent.fetching(began, Instant::now());
-        files
+impl Timed<'_, Catalogue> {
+    /// Every published version of `package`, newest first, and the time it
+    /// took on the request's tally.
+    pub async fn versions(
+        self,
+        registry: Registry,
+        package: &str,
+    ) -> Result<Vec<Version>, Failure> {
+        self.spent
+            .while_fetching(self.seam.versions(registry, package))
+            .await
     }
 }
 

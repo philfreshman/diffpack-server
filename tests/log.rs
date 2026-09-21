@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::http::Request;
-use diffpack_server::archive::Archive;
 use diffpack_server::log::{Capture, Spent};
 use diffpack_server::mcp::Diffpack;
 use diffpack_server::router;
@@ -25,8 +24,12 @@ use tower::ServiceExt;
 
 const CURRENT: &str = "2026-07-28";
 
-/// The archives this suite is served from, instead of the registries.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/archives");
+/// The fixture sets this suite is served from, instead of the registries.
+///
+/// The root rather than one seam's directory inside it: `Ctx::fixture` gives
+/// every seam a fixture adapter, so nothing this suite builds can reach a
+/// registry — including a seam this suite's calls do not use today.
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 /// The question every other assertion here depends on: a call that went
 /// through the endpoint left exactly one line behind, and that line says
@@ -255,6 +258,34 @@ async fn the_fetch_is_timed_apart_from_the_rest_when_there_was_one() {
     assert!(
         line["ms"]["fetch"].is_null(),
         "a tool that fetched nothing should report no fetch rather than zero, got {line}"
+    );
+}
+
+/// A catalogue read is a wait on a registry like any other.
+///
+/// `list_package_versions` fetches no archive and is otherwise the whole of
+/// what it does. Counting only archives would put it in the logs as a call
+/// that waited on nobody, and "no `fetch` phase" is what an operator reads as
+/// "this one never left the process" while hunting a slow registry.
+#[tokio::test]
+async fn a_call_that_only_read_a_catalogue_is_timed_as_a_wait_too() {
+    let listed = Capture::new();
+    call(
+        &listed,
+        "list_package_versions",
+        json!({ "registry": "npm", "package": "zod" }),
+    )
+    .await;
+
+    let line = one(&listed);
+    let fetch = line["ms"]["fetch"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("a call that read a catalogue waited on it, got {line}"));
+    let total = line["ms"]["total"].as_f64().expect("a call is timed");
+
+    assert!(
+        fetch <= total,
+        "the wait is part of the call, so it cannot outlast it: {fetch} of {total}"
     );
 }
 
@@ -507,7 +538,7 @@ async fn post(log: &Capture, body: Value) -> Value {
     let router = router::router_with(
         move || {
             Ok(Diffpack::with_ctx(
-                Ctx::with_archive(Archive::fixture(FIXTURES)).logging_to(log.sink()),
+                Ctx::fixture(FIXTURES).logging_to(log.sink()),
             ))
         },
         Vec::new(),

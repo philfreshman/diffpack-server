@@ -96,11 +96,13 @@ request into `development` and into `main`.
 
 `tests/networked.rs` is the exception and is `#[ignore]`d for it: it fetches
 real archives from npm, crates.io and PyPI. The suite is otherwise offline —
-`src/archive/` reads `fixtures/archives/` instead — so a registry having a bad
-afternoon cannot fail a pull request. What the networked tests are *for* is the
-half that cannot be checked any other way: that the URLs this server builds
-are the URLs those three registries actually serve. Worth running when
-`src/registry.rs` or `src/archive/` changes.
+`Ctx::fixture` gives every seam an adapter that reads the checked-in sets
+under `fixtures/`, and there is no way to build a context that has one of
+them and not the others — so a registry having a bad afternoon cannot fail a
+pull request. What the networked tests are *for* is the half that cannot be
+checked any other way: that the URLs this server builds are the URLs those
+three registries actually serve. Worth running when `src/registry.rs`,
+`src/archive/` or `src/catalogue/` changes.
 
 ## The checks that block a commit
 

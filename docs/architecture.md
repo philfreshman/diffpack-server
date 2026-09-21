@@ -114,17 +114,38 @@ list of tools, and the generic call path where arguments are validated and
 
 `Ctx` is what one request carries, built once by the service factory
 `router::router_with` takes and cloned into every call. For a handler that
-means the seams it may reach: `Archive` today and `DiffStore` (#20) beside it,
-while `registry`, `page` and `handle` are named directly because a pure module
-has nothing to hand over. Beside them it carries what the dispatch needs and a
-handler never touches — the log's `Sink`, and the `Spent` that the phases of
-one call add up in. `Ctx::archive()` hands back the archive seam with that
-stopwatch already on it, so a fetch cannot go uncounted and a handler's call
-is unchanged.
+means the seams it may reach: `Archive` and `Catalogue` today and `DiffStore`
+(#20) beside them, while `registry`, `page` and `handle` are named directly
+because a pure module has nothing to hand over. Beside them it carries what
+the dispatch needs and a handler never touches — the log's `Sink`, and the
+`Spent` that the phases of one call add up in. `Ctx::archive()` and
+`Ctx::catalogue()` hand back their seam with that stopwatch already on it, so
+a wait on a registry cannot go uncounted and a handler's call is unchanged.
 
 That factory is also the seam the suite drives: a test builds a `Ctx` over the
-fixture archive adapter and a capturing sink, and reaches both through the
-path production takes rather than around it.
+fixture adapters and a capturing sink, and reaches both through the path
+production takes rather than around it.
+
+It is built two ways and only two: `Ctx::new` is every seam live and
+`Ctx::fixture` is every seam reading from the checked-in sets under
+`fixtures/`. Both name every field, so a seam added later is a compile error
+in each of them and its author answers for production and for the suite at
+once. There is deliberately no builder that supplies one seam and fills the
+rest, because filling them meant filling them live: a test naming the archive
+carried a live catalogue beside it, and the first tool to read a catalogue
+through such a context would have asked npm from CI.
+
+What the compiler checks there is that every field was answered for, not that
+the answer was a fixture one, so the second half is `Ctx::seams`. It names the
+seams by taking the struct apart, which is a compile error the moment a field
+is added, and `tests/ctx.rs` drives what it returns rather than a list of its
+own. Adding a seam is therefore three edits the compiler and the suite ask for
+in turn: both constructors, the name, and the shortest call that reaches it.
+
+`Ctx::logging_to` is not a third way and shows what a fourth would have to
+look like: it takes `self` and spreads `..self`, so it changes a context that
+has already chosen its world rather than filling in the half it was not
+given. A spread of `..Self::new()` is the shape that reopens this.
 
 ### `src/registry.rs` — what a registry is
 
@@ -339,9 +360,13 @@ must not reach a model are one definition. Argument values are redacted and
 `?` and stops looking like one.
 
 Where a call's time goes is accumulated in `Spent`, which a `Ctx` holds for
-the length of one request and the seams write into. `Ctx::archive()` hands
-back the archive seam with the stopwatch already on it, so a handler is
-unchanged and there is no way to read an archive that goes uncounted.
+the length of one request and the seams write into. `Ctx::archive()` and
+`Ctx::catalogue()` both hand back their seam with the stopwatch already on
+it, so a handler is unchanged and there is no way to wait on a registry
+uncounted. One wrapper over both, because the phase answers how long the call
+waited rather than which document it waited for — and a tool that only reads
+a catalogue reporting no wait at all is the reading an operator would take
+for "this one never left the process".
 
 `Spent` keeps the *window* fetching spanned rather than the sum of each
 fetch's duration, because `diff_package_versions` asks for two versions

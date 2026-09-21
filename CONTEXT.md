@@ -192,10 +192,13 @@ _Avoid_: command, endpoint, action, handler (alone)
 
 **Ctx**:
 What a Tool's handler is allowed to reach: the seams that carry state a
-handler should not build — `archive`, the DiffStore — built once per request
-and handed to every call. A pure module is not in it and does not need to be:
-a handler names `registry`, `page` and `handle` directly. Anything a handler
-needs that is neither in Ctx nor a pure module is a seam it has gone around.
+handler should not build — `archive`, `catalogue`, the DiffStore — built once
+per request and handed to every call. A pure module is not in it and does not
+need to be: a handler names `registry`, `page` and `handle` directly. Anything
+a handler needs that is neither in Ctx nor a pure module is a seam it has gone
+around. It is built whole or not at all: every seam live, or every seam
+reading from the fixture sets. There is no half of one, because the half that
+was not asked for would have to be live.
 _Avoid_: state, globals, services, dependencies
 
 **Hints**:
@@ -302,14 +305,17 @@ _Avoid_: log, log entry, event, trace, record
 
 **Phase**:
 One part of a call that is timed by itself. Two of them today: the whole
-call, and the part of it spent waiting for Archives. A Phase that did not
-happen is absent from a Line rather than zero, because zero is a measurement
-and a percentile taken over one describes neither population.
+call, and the part of it spent waiting for a Registry. Every seam that leaves
+this process counts towards the second — an Archive and a Catalogue alike —
+because the question is the wait and not which document was waited for. A
+Phase that did not happen is absent from a Line rather than zero, because
+zero is a measurement and a percentile taken over one describes neither
+population.
 
 Where two fetches overlap — a Diff asks for both versions at once — the
 Phase is the window they span and not the sum of their durations. It answers
 how much of the call went on waiting, which is the question it is next to the
-total to answer; how much Archive work the call caused is a different
+total to answer; how much Registry work the call caused is a different
 question and nothing asks it yet.
 _Avoid_: span, step, stage, timing
 
