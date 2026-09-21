@@ -127,6 +127,29 @@
       "matchDepNames": ["axum", "vercel_runtime"]
     },
     {
+      // reqwest and rustls move together, and this is the pair whose
+      // disagreement CI would not catch.
+      //
+      // `rustls` is in `Cargo.toml` for one line of code: the `ring` provider
+      // installed in `src/archive/live.rs`. Which cryptography rustls uses
+      // has no default, so somebody has to choose, and reqwest resolves its
+      // own rustls. While the two are the same version that is the same
+      // global; across a major they are two globals, and the provider gets
+      // installed into the one reqwest is not reading.
+      //
+      // What that looks like is worth stating, because it is not a compile
+      // error. Building the client fails at runtime, `src/archive/live.rs`
+      // turns that into an internal failure, and every fetch this server
+      // makes stops working — while the suite stays green, since the offline
+      // tests read `fixtures/archives/` and never build a client.
+      // `tests/networked.rs` is what notices, and it is `#[ignore]`d. One
+      // pull request carrying both is what puts the two versions in front of
+      // the same person.
+      "description": "reqwest resolves the rustls the provider is installed into",
+      "groupName": "reqwest and rustls",
+      "matchDepNames": ["reqwest", "rustls"]
+    },
+    {
       // The engine, which is ours and is not like the others.
       //
       // Three things are true of an engine bump that are not true of a
