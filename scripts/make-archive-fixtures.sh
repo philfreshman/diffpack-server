@@ -63,11 +63,15 @@ write() {
   printf '%s' "$2" >"$1"
 }
 
-# A gzip'd tar of $2 (a directory under $work), at $ARCHIVES/$1.
+# A gzip'd tar of $2 (a directory under $3, or under $work) at $ARCHIVES/$1.
+#
+# The base is a parameter because two archives here wrap their contents in the
+# same directory name, and building both under one root would put the first
+# one's files inside the second.
 targz() {
-  local out=$1 root=$2
-  find "$work/$root" -exec touch -t "$STAMP" {} +
-  (cd "$work" && tar "${tar_owner[@]}" -cf - "$root") | gzip -n -9 >"${ARCHIVES}/${out}"
+  local out=$1 root=$2 base=${3:-$work}
+  find "$base/$root" -exec touch -t "$STAMP" {} +
+  (cd "$base" && tar "${tar_owner[@]}" -cf - "$root") | gzip -n -9 >"${ARCHIVES}/${out}"
 }
 
 # A zip of $2's contents (a directory), at $ARCHIVES/$1, or of $2 under the
@@ -164,6 +168,27 @@ setup(name="numpy", version="1.9.0")
 write "$zipsdist/numpy/__init__.py" '__version__ = "1.9.0"
 '
 zip_up "numpy-1.9.0.zip" "$work/numpy-1.9.0" "numpy-1.9.0"
+
+# --- a package with thousands of files ------------------------------------
+#
+# Every other archive here is a handful of files, chosen for a shape. This one
+# is chosen for a *count*: it is what proves a listing tool answers with a page
+# rather than with everything, which is a property no small package can fail.
+#
+# The files are empty and the paths are ordinary. What is being generated is
+# the number of entries, not their content, so an archive of a few kilobytes
+# stands in for a package nobody wants to check in.
+readonly MANY=2500
+many=$work/many
+mkdir -p "$many/package"
+for i in $(seq 1 "$MANY"); do
+  # Spread over directories the way a real package is, so the listing has
+  # directory entries between its files rather than one flat run of names.
+  printf -v padded '%04d' "$i"
+  write "${many}/package/src/${padded:0:2}/module-${padded}.js" "export const n = ${i};
+"
+done
+targz "many-files-1.0.0.tgz" "package" "$many"
 
 # --- the archive this server will not fetch -------------------------------
 #
