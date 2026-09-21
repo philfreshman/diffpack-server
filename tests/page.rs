@@ -46,7 +46,7 @@ fn a_payload_filled_to_the_ceiling_still_fits_in_the_response_that_carries_it() 
     let answer = serde_json::json!({
         "items": [payload],
         "total": usize::MAX,
-        "next_cursor": format!("p1:{}", usize::MAX),
+        "nextCursor": format!("p1:{}", usize::MAX),
     });
     let framed = serde_json::json!({
         "jsonrpc": "2.0",

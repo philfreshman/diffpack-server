@@ -66,7 +66,13 @@ pub const MAX_LIMIT: usize = 1_000;
 /// `total` is the length of the whole sequence and not of `items`. That is
 /// the field a client needs to know there is more, and the one a tool that
 /// counted its own answer would get wrong.
+///
+/// `next_cursor` travels as `nextCursor`, which is how the specification
+/// spells the field on every other paginated result a client reads. A page
+/// that named it otherwise would be this one server's spelling of the one
+/// thing a client is meant to pass back without looking at it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct Page<T> {
     /// The items on this page, in the sequence's own order.
     pub items: Vec<T>,
