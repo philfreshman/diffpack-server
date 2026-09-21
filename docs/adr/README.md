@@ -20,6 +20,7 @@ directory was created (#40).
 | [0007](0007-one-importer-of-the-engine.md) | `src/engine.rs` is the only importer of `diffpack-engine` | done, #4 |
 | [0008](0008-no-sessions.md) | No sessions, for any client | done, #6 |
 | [0009](0009-origin-validation-on-host-validation-off.md) | `Origin` validation on, `Host` validation off | done, #6 |
+| [0010](0010-newest-first-is-a-date.md) | Newest first is a date, not a direction | done, #18 |
 
 A new one goes in at the next number. The bar is the usual three: hard to
 reverse, surprising without the context, and the result of a real trade-off. A

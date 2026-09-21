@@ -11,9 +11,7 @@
 //! registry fact cheap to assert: this module says *where* and *what shape*,
 //! and `archive` (#10) is what fetches.
 
-use diffpack_server::registry::{
-    self, ArchiveSource, Order, Registry, SearchSource, VersionSource,
-};
+use diffpack_server::registry::{self, ArchiveSource, Registry, SearchSource, VersionSource};
 
 /// The identifier is what a parameter and a cache key spell; the name is what
 /// a message to a model says. They are deliberately different strings —
@@ -209,18 +207,21 @@ fn a_listing_is_read_for_the_archive_a_diff_wants() {
 // Where the rest of a registry's answers come from
 // ---------------------------------------------------------------------------
 
-/// #18 asks every registry for versions newest-first, and only one of the
-/// three answers that way already. The source and the direction travel
-/// together because apart they are a table in an issue: a tool told where to
-/// ask and left to remember which way the answer runs is a tool that lists
-/// npm backwards.
+/// Where each registry's versions are listed.
+///
+/// This used to assert a direction beside each URL — which end of the
+/// document the newest release is at — and the direction was wrong. deps.dev
+/// sorts PyPI's versions lexically by version string rather than by date, so
+/// "oldest first, reversed" reported `requests` 2.9.2 as its newest release
+/// instead of 2.34.2; and npm's order never survived parsing, because its
+/// versions are a JSON object and this crate's map is a `BTreeMap`. Newest
+/// first is a date now, and `read_versions` is where it is asserted.
 #[test]
-fn every_registry_says_where_versions_come_from_and_which_way_they_run() {
+fn every_registry_says_where_its_versions_are_listed() {
     assert_eq!(
         Registry::Npm.versions("zod"),
         VersionSource {
             url: "https://registry.npmjs.org/zod".to_owned(),
-            order: Order::OldestFirst,
         }
     );
     assert_eq!(
@@ -232,15 +233,12 @@ fn every_registry_says_where_versions_come_from_and_which_way_they_run() {
         Registry::Crates.versions("serde"),
         VersionSource {
             url: "https://crates.io/api/v1/crates/serde".to_owned(),
-            order: Order::NewestFirst,
-        },
-        "crates.io is the one source that already answers the way #18 wants"
+        }
     );
     assert_eq!(
         Registry::PyPi.versions("requests"),
         VersionSource {
             url: "https://api.deps.dev/v3/systems/pypi/packages/requests".to_owned(),
-            order: Order::OldestFirst,
         },
         "PyPI's own index is not a version list a client can read, so deps.dev is the source"
     );

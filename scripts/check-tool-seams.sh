@@ -24,9 +24,27 @@
 #      which is the point: the client this is meant to keep out is hand-rolled
 #      over `reqwest` inside `src/store/`, so there is no dependency name for
 #      this script to have guessed at.
+#
+#      `src/tools/mod.rs` is exempt from this one, because it is the only file
+#      here that is not a tool: it is the collection, the `Ctx` every handler
+#      is given, and the dispatch that runs one. Those need things a tool must
+#      not have
+#      — `crate::log`, for one, because the single line per call is written by
+#      the dispatch and a tool that wrote its own would make "one line per
+#      call" false. Exempting the file is the honest version of that: the
+#      alternative is adding `log` to the list below, which would permit in
+#      nineteen tools the thing this paragraph exists to forbid.
+#
+#      That one path and no other. A tool is free to be a directory when it
+#      grows one, and `src/tools/thing/mod.rs` is then a tool like any other —
+#      so the exemption is written as the path it is about rather than as a
+#      file name, which would hand every such tool the collection's licence.
 #   2. A deny-list over the whole file, for the names that mean a seam was
 #      crossed even when there is no `use` to catch: `reqwest::get(..)` spelled
-#      out in full, a blob token read from the environment.
+#      out in full, a blob token read from the environment. This one covers
+#      `mod.rs` too — the collection has no more business holding an HTTP
+#      client than a tool does, so the exemption above is from the import
+#      list and not from the rules.
 #
 # The deny-list is a backstop, not the defence. The defence is privacy: the
 # Blob client (#20) is a private module inside `src/store/`, so a tool cannot
@@ -62,7 +80,7 @@ readonly ALLOWED_ROOTS=(crate self super std core alloc futures rmcp serde serde
 # every handler ends in one, `handle` because minting one is how a diff-taking
 # tool answers at all, and `cache_key` because a tool may still need the key a
 # handle names.
-readonly ALLOWED_MODULES=(archive cache_key engine error handle page registry store tools)
+readonly ALLOWED_MODULES=(archive cache_key catalogue engine error handle page registry store tools)
 
 # Names that mean a seam was crossed, wherever they appear.
 readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN|BLOB_STORE_ID|VERCEL_OIDC_TOKEN'
@@ -91,6 +109,10 @@ while IFS= read -r hit; do
   rest=${hit#*:}
   line=${rest#*:}
   where="${where}:${rest%%:*}"
+
+  # The collection is not a tool. See the header: this is the one path, and a
+  # tool that becomes a directory does not inherit it.
+  [[ "${where%%:*}" == "${TOOLS}/mod.rs" ]] && continue
 
   path=${line#*use }
   path=${path%%;*}

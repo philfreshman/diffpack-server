@@ -33,3 +33,17 @@ do exist is a next call; a `404` is not.
 
 `scripts/check-tool-seams.sh` enforces this rather than leaving it to review: a
 module under `src/tools/` that names an HTTP client fails the build.
+
+## Since: the client moved, the seam did not
+
+#18 needed a second thing fetched — a package's version list — which is a
+document rather than an archive and becomes no `FileMap`. The client that was
+this module's now lives in `src/fetch.rs` with `archive` and `catalogue` above
+it, for the reason this record already gives: two copies of it would be two
+places to fix a timeout.
+
+That is not the `Fetcher` seam rejected above. `fetch` is below the seams, not
+in place of them, and a tool still cannot name it — the allow-list in
+`check-tool-seams.sh` does not have it, and what leaves it is bytes or a
+`Failure` rather than a status code. The leak this record is about is a tool
+knowing where crates.io puts a `.crate`, and no tool does.

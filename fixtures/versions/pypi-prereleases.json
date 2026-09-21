@@ -1,0 +1,62 @@
+{
+  "packageKey": {
+    "system": "PYPI",
+    "name": "prereleases"
+  },
+  "versions": [
+    {
+      "versionKey": {
+        "system": "PYPI",
+        "name": "prereleases",
+        "version": "1.0"
+      },
+      "publishedAt": "2021-05-01T00:00:00Z",
+      "isDefault": false
+    },
+    {
+      "versionKey": {
+        "system": "PYPI",
+        "name": "prereleases",
+        "version": "1.0.dev1"
+      },
+      "publishedAt": "2021-01-01T00:00:00Z",
+      "isDefault": false
+    },
+    {
+      "versionKey": {
+        "system": "PYPI",
+        "name": "prereleases",
+        "version": "1.0.post1"
+      },
+      "publishedAt": "2021-06-01T00:00:00Z",
+      "isDefault": true
+    },
+    {
+      "versionKey": {
+        "system": "PYPI",
+        "name": "prereleases",
+        "version": "1.0a1"
+      },
+      "publishedAt": "2021-02-01T00:00:00Z",
+      "isDefault": false
+    },
+    {
+      "versionKey": {
+        "system": "PYPI",
+        "name": "prereleases",
+        "version": "1.0b2"
+      },
+      "publishedAt": "2021-03-01T00:00:00Z",
+      "isDefault": false
+    },
+    {
+      "versionKey": {
+        "system": "PYPI",
+        "name": "prereleases",
+        "version": "1.0rc1"
+      },
+      "publishedAt": "2021-04-01T00:00:00Z",
+      "isDefault": false
+    }
+  ]
+}
