@@ -246,30 +246,35 @@ fn every_registry_says_where_versions_come_from_and_which_way_they_run() {
     );
 }
 
-/// Search is the one fact a registry can be missing. npm and crates.io each
-/// answer a query from an endpoint anyone can build; PyPI has no search API
-/// this server has chosen yet, and #19 is where that choice is made and
-/// recorded. `None` says so, which is better than a URL that 404s and better
-/// than a fourth registry quietly inheriting npm's.
+/// Where a search is asked. npm and crates.io answer a query from an
+/// endpoint anyone can build; PyPI answers none, so what it is asked for is
+/// the index of everything it publishes and the query is applied on this
+/// side. #19 records why that is the source and what the alternatives cost.
+///
+/// The URL is the whole of what a caller is told, which is why PyPI's
+/// carries no query: a source that cannot be asked a question is still a
+/// source, and reading its answer is `read_hits`'s half of the job.
 #[test]
-fn search_comes_from_the_registrys_own_index_where_there_is_one() {
+fn search_comes_from_the_registrys_own_index() {
     assert_eq!(
         Registry::Npm.search("zod", 10),
-        Some(SearchSource {
+        SearchSource {
             url: "https://registry.npmjs.org/-/v1/search?text=zod&size=10".to_owned(),
-        })
+        }
     );
     assert_eq!(
         Registry::Crates.search("json parser", 5),
-        Some(SearchSource {
+        SearchSource {
             url: "https://crates.io/api/v1/crates?q=json%20parser&per_page=5".to_owned(),
-        }),
+        },
         "a query is a parameter value, so a space in it is escaped and not sent"
     );
     assert_eq!(
         Registry::PyPi.search("requests", 10),
-        None,
-        "PyPI's search source is #19's to choose; until it does there is none"
+        SearchSource {
+            url: "https://pypi.org/simple/".to_owned(),
+        },
+        "PyPI has no search endpoint, so the source is the index itself"
     );
 }
 
@@ -307,6 +312,30 @@ fn npms_search_answer_reads_as_hits() {
     );
 }
 
+/// crates.io answers with `crates`, and with three version fields that do not
+/// have to agree. The one a hit carries is `default_version` — what the
+/// registry hands a caller that did not ask for a version, which is the same
+/// thing npm's `version` is. `newest_version` would answer a search for a
+/// crate whose latest release is a pre-release with a version nobody is meant
+/// to install yet.
+#[test]
+fn crates_ios_search_answer_reads_as_hits() {
+    let body = r#"{"crates":[
+        {"id":"serde","name":"serde","default_version":"1.0.229","newest_version":"2.0.0-alpha.1",
+         "max_stable_version":"1.0.229","description":"A generic serialization/deserialization framework"}
+    ],"meta":{"total":1}}"#;
+
+    assert_eq!(
+        Registry::Crates.read_hits(body, "serde", 10),
+        Some(vec![Hit {
+            name: "serde".to_owned(),
+            version: Some("1.0.229".to_owned()),
+            description: Some("A generic serialization/deserialization framework".to_owned()),
+        }]),
+        "a hit carries the version the registry itself would hand a caller"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The outbound allowlist
 // ---------------------------------------------------------------------------
@@ -329,7 +358,7 @@ fn a_registrys_hosts_are_the_hosts_of_the_urls_it_builds() {
                 .to_owned(),
             registry.versions("package").url,
         ];
-        built.extend(registry.search("query", 1).map(|source| source.url));
+        built.push(registry.search("query", 1).url);
 
         for url in built {
             let host = url

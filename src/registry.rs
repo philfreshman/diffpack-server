@@ -191,20 +191,23 @@ impl Registry {
     /// on crates.io — and a caller that had to know which is which would be
     /// the per-registry `match` this module exists to remove.
     ///
-    /// `None` is PyPI: it has no search API this server has chosen, and #19
-    /// is where that choice gets made and written down. A registry with no
-    /// search source says so, rather than being handed a URL that answers
-    /// nothing.
-    pub fn search(self, query: &str, limit: u32) -> Option<SearchSource> {
+    /// PyPI has no search endpoint at all: its XML-RPC search was withdrawn
+    /// in 2021 and its search page is a web page its own `robots.txt` asks
+    /// automated clients not to fetch. So its source is the index itself —
+    /// every name it publishes, PEP 691's JSON form — and neither the query
+    /// nor the limit can be put to it. Both are applied on this side, in
+    /// [`read_hits`](Self::read_hits). #19 records what the alternatives
+    /// cost.
+    pub fn search(self, query: &str, limit: u32) -> SearchSource {
         let escaped = escape(query);
         let url = match self {
             Self::Npm => {
                 format!("https://registry.npmjs.org/-/v1/search?text={escaped}&size={limit}")
             }
             Self::Crates => format!("https://crates.io/api/v1/crates?q={escaped}&per_page={limit}"),
-            Self::PyPi => return None,
+            Self::PyPi => "https://pypi.org/simple/".to_owned(),
         };
-        Some(SearchSource { url })
+        SearchSource { url }
     }
 
     /// The hits a search answer names, or nothing if it is not an answer
@@ -240,7 +243,26 @@ impl Registry {
                     })
                     .collect()
             }
-            Self::Crates | Self::PyPi => return None,
+            Self::Crates => {
+                let answer: CratesSearch = serde_json::from_str(body).ok()?;
+                answer
+                    .crates
+                    .into_iter()
+                    .map(|found| Hit {
+                        name: found.name,
+                        // Three version fields arrive and they do not have to
+                        // agree. This is the one the registry itself would
+                        // hand a caller that named no version, which is what
+                        // npm's `version` is too — `newest_version` would
+                        // answer with a pre-release nobody is meant to
+                        // install yet.
+                        version: found.default_version,
+                        description: found.description,
+                    })
+                    .collect()
+            }
+
+            Self::PyPi => return None,
         };
 
         Some(hits.into_iter().take(limit as usize).collect())
@@ -267,7 +289,7 @@ impl Registry {
         if let Ok(archive) = self.archive(PROBE, "1.0.0") {
             urls.push(archive.url().to_owned());
         }
-        urls.extend(self.search(PROBE, 1).map(|source| source.url));
+        urls.push(self.search(PROBE, 1).url);
 
         let mut hosts: BTreeSet<String> = urls
             .iter()
@@ -481,6 +503,19 @@ struct NpmObject {
 struct NpmPackage {
     name: String,
     version: Option<String>,
+    description: Option<String>,
+}
+
+/// crates.io's search answer, cut to the fields a [`Hit`] carries.
+#[derive(Deserialize)]
+struct CratesSearch {
+    crates: Vec<CratesCrate>,
+}
+
+#[derive(Deserialize)]
+struct CratesCrate {
+    name: String,
+    default_version: Option<String>,
     description: Option<String>,
 }
 
