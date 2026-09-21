@@ -36,6 +36,7 @@ src/lib.rs       Everything with a decision in it.
 src/router.rs    Every route this function serves.
 src/mcp.rs       The MCP handler: identity, capabilities, the tool list.
 src/tools/       One module per tool: its definition and its handler.
+src/registry.rs  What a registry is: npm, crates.io, PyPI, described once.
 src/error.rs     Which channel a failure reaches the client on.
 src/health.rs    The /health body.
 src/cache_key.rs The deterministic diff cache key.

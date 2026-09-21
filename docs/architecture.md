@@ -13,7 +13,7 @@ api/mcp.rs          entry point: wraps the router in VercelLayer
 src/router.rs       routes, panic guard over the transport, origin config
 src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
 src/tools/          one module per tool: definition and handler together
-src/registry.rs     what a registry is: npm, crates, pypi (go later)        #42
+src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap            #10
 src/store/          DiffStore: get(&DiffKey) / put(entry)                   #20 #21 #22
 src/page.rs         pagination and the 4.5 MB response ceiling              #43
@@ -100,12 +100,27 @@ list of tools, and the generic call path where arguments are validated and
 
 ### `src/registry.rs` — what a registry is
 
-npm, crates.io and PyPI, described once: the identifier used in a cache key
-(`npm`, `crates`, `pypi`), the name the registry calls itself in a message to a
-model (`npm`, `crates.io`, `PyPI`), and how to reach it. The
-`diffpack://registries` resource is a projection of this module rather than a
-hand-written copy of it, and Go support (#28) is a value added here rather than
-an edit in five places. See [ADR 0004](adr/0004-one-registry-module.md).
+npm, crates.io and PyPI, described once: the identifier used in a parameter and
+in a cache key (`npm`, `crates`, `pypi`), the name the registry calls itself in
+a message to a model (`npm`, `crates.io`, `PyPI`), where a version's archive is,
+where versions and search come from, the hosts it may be reached at, and the
+name rules an agent would otherwise guess at. Every per-registry fact is a
+`match` over the three variants in this one file, so the compiler enumerates
+what a fourth registry owes.
+
+Two things are *derived* here rather than written down beside it. The `registry`
+enum in every tool's schema is generated from the variant list, so a registry
+cannot reach a model's schema late. And the outbound host allowlist is the hosts
+of the URLs this module builds — #10 may fetch what `registry::allows` permits
+and nothing else — so a source added here is reachable the moment it exists,
+rather than through a second list someone has to remember to widen.
+
+It fetches nothing. This module says *where* and *what shape*; `archive` (#10)
+does the fetching, and that is what lets every registry fact be tested with no
+network at all. The `diffpack://registries` resource (#16) is a projection of
+this module rather than a hand-written copy of it, and Go support (#28) is a
+value added here rather than an edit in five places. See [ADR
+0004](adr/0004-one-registry-module.md).
 
 ### `src/archive/` — a version's files
 
