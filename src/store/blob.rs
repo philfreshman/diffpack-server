@@ -78,9 +78,12 @@ pub(crate) struct Info {
 
 /// One page of a listing, as the API answers it.
 ///
-/// `cursor` is absent on the last page, which is why `has_more` is what the
-/// walk ends on rather than the cursor being `None`: the two agree today,
-/// and only one of them is the store telling us it is finished.
+/// Both fields end the walk, because either one alone can be wrong in a way
+/// the other catches. `has_more` is the store saying it is finished, and
+/// `cursor` is somewhere to resume from — so a page claiming more without
+/// naming where would otherwise be a request for the first page again,
+/// forever, and a page naming a cursor it has already given back is the same
+/// loop by another route.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Page {
@@ -284,10 +287,10 @@ impl Blob {
             let page: Page = self.read(succeeded(response, DOING)?, DOING).await?;
             blobs.extend(page.blobs);
 
-            if !page.has_more {
-                return Ok(blobs);
+            match page.cursor.filter(|_| page.has_more) {
+                Some(next) => cursor = Some(next),
+                None => return Ok(blobs),
             }
-            cursor = page.cursor;
         }
     }
 
@@ -820,6 +823,35 @@ mod tests {
         assert_eq!(
             requests[1].target,
             "/api/blob?prefix=diffs%2Fv1%2F&cursor=the-second-page"
+        );
+    }
+
+    /// The walk ends even when the store contradicts itself. `hasMore` with
+    /// no cursor beside it is a page that says "ask again" and does not say
+    /// where — and the obvious reading of it, trusting `hasMore` alone, asks
+    /// for the first page again and appends it again, without end. A cache
+    /// sweep that never returns is worse than one that under-counts: it
+    /// spends the whole function on a `list`, and the diff behind it is
+    /// never answered at all.
+    #[tokio::test]
+    async fn a_list_the_store_cannot_say_where_to_resume_ends_rather_than_asking_again() {
+        let stub = Stub::answering(vec![Reply::ok(
+            r#"{"blobs":[{"pathname":"diffs/v1/aaa/meta.json","size":10,
+                "uploadedAt":"2026-09-21T10:00:00.000Z"}],"hasMore":true}"#,
+        )])
+        .await;
+        let blob = Blob::at(stub.base(), "a-test-store", "a-token");
+
+        let blobs = blob
+            .list("diffs/v1/")
+            .await
+            .expect("a page with nowhere to resume from is the end of the walk");
+
+        assert_eq!(blobs.len(), 1, "got {blobs:?}");
+        assert_eq!(
+            stub.requests().len(),
+            1,
+            "there was no cursor to follow, so there was nothing to ask twice"
         );
     }
 
