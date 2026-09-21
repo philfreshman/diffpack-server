@@ -26,9 +26,14 @@
 use axum::body::Body;
 use axum::http::Request;
 use diffpack_server::archive::Archive;
+use diffpack_server::error::Failure;
 use diffpack_server::mcp::Diffpack;
+use diffpack_server::page::{self, Excerpt};
+use diffpack_server::registry::Registry;
 use diffpack_server::router;
+use diffpack_server::tools::get_file_content::{Args, GetFileContent};
 use diffpack_server::tools::Ctx;
+use diffpack_server::tools::Tool;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -39,6 +44,136 @@ const TOOL: &str = "get_file_content";
 
 /// The archives this suite is served from, instead of the registries.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/archives");
+
+// ---------------------------------------------------------------------------
+// What a client is told
+// ---------------------------------------------------------------------------
+
+/// The definition carries what an agent needs to call this correctly having
+/// read nothing else, which is #23's question asked of the tool that exists.
+#[tokio::test]
+async fn the_definition_carries_everything_an_agent_needs() {
+    let tool = listed(TOOL).await;
+
+    for field in ["registry", "package", "version", "path", "max_bytes"] {
+        assert!(
+            tool["inputSchema"]["properties"][field].is_object(),
+            "the input schema should describe `{field}`, got {}",
+            tool["inputSchema"]
+        );
+    }
+    for required in ["registry", "package", "version", "path"] {
+        assert!(
+            tool["inputSchema"]["required"]
+                .as_array()
+                .is_some_and(|fields| fields.iter().any(|field| field == required)),
+            "`{required}` is not optional, got {}",
+            tool["inputSchema"]
+        );
+    }
+    assert!(
+        tool["inputSchema"]["required"]
+            .as_array()
+            .is_some_and(|fields| !fields.iter().any(|field| field == "max_bytes")),
+        "a cap the server applies anyway is not something a caller has to \
+         supply, got {}",
+        tool["inputSchema"]
+    );
+
+    assert_eq!(
+        tool["inputSchema"]["properties"]["registry"]["enum"],
+        json!(["npm", "crates", "pypi"]),
+        "the enum comes from the registry module rather than from prose here, got {tool}"
+    );
+
+    assert_eq!(
+        tool["outputSchema"]["type"], "object",
+        "a tool answering with structured content declares its shape, got {tool}"
+    );
+    for field in ["text", "truncated", "bytes", "validUtf8"] {
+        assert!(
+            tool["outputSchema"]["properties"][field].is_object(),
+            "the output schema should describe `{field}`, got {}",
+            tool["outputSchema"]
+        );
+    }
+
+    assert_eq!(
+        tool["annotations"]["readOnlyHint"], true,
+        "reading a file changes nothing, and a client deciding whether to ask \
+         for confirmation reads this, got {}",
+        tool["annotations"]
+    );
+    assert_eq!(
+        tool["annotations"]["idempotentHint"], true,
+        "a published version's contents are immutable, got {}",
+        tool["annotations"]
+    );
+    assert_eq!(
+        tool["annotations"]["openWorldHint"], true,
+        "the arguments name a package on a registry, which is a world this \
+         server does not control, got {}",
+        tool["annotations"]
+    );
+}
+
+/// The three things the engine's behaviour forces into the description,
+/// because an agent that does not know them draws a wrong conclusion from a
+/// correct answer.
+///
+/// A path has no top-level directory, so an agent that writes one back gets
+/// nothing. A directory is refused rather than answered with an empty
+/// string. And a file that is not UTF-8 comes back as replacement characters
+/// rather than as a failure — which reads as a corrupt file to anyone who
+/// was not told.
+#[tokio::test]
+async fn the_description_says_what_an_agent_would_otherwise_get_wrong() {
+    let tool = listed(TOOL).await;
+    let description = tool["description"].as_str().unwrap_or_else(|| {
+        panic!("a tool an agent picks without documentation has one, got {tool}")
+    });
+
+    assert!(
+        description.contains("src/index.js") && description.contains("zod-4.0.0/src/index.js"),
+        "the description should show the shape of a path rather than describe \
+         it, since the agent's mistake is a guessed path: got {description}"
+    );
+    assert!(
+        description.contains("director"),
+        "a directory is refused rather than answered with an empty string, \
+         and an agent that does not know reads the refusal as a bug: got {description}"
+    );
+    assert!(
+        description.contains("U+FFFD") || description.contains("replacement"),
+        "a binary file comes back decoded rather than refused, which reads as \
+         a corrupt file to an agent that was not told: got {description}"
+    );
+}
+
+/// `max_bytes` carries the response module's number, not one this tool wrote
+/// down. A tool spelling out `max_bytes: integer` with a sentence of its own
+/// would be the one copy no test compares against the ceiling — and the
+/// sentence it would lose is the one saying a larger value is narrowed
+/// rather than refused.
+#[tokio::test]
+async fn the_cap_argument_documents_the_number_that_binds() {
+    let tool = listed(TOOL).await;
+    let max_bytes = &tool["inputSchema"]["properties"]["max_bytes"];
+
+    assert_eq!(
+        max_bytes["maximum"],
+        json!(page::PAYLOAD_CEILING),
+        "got {max_bytes}"
+    );
+    assert_eq!(max_bytes["minimum"], json!(1), "got {max_bytes}");
+    assert!(
+        max_bytes["description"]
+            .as_str()
+            .is_some_and(|said| said.contains("narrowed")),
+        "the description is the one the response module writes, and a doc \
+         comment here would silently replace it: got {max_bytes}"
+    );
+}
 
 // ---------------------------------------------------------------------------
 // What it answers
@@ -201,6 +336,69 @@ async fn a_file_that_fits_comes_back_whole_and_says_it_was_not_cut() {
     );
 }
 
+/// A file larger than a whole response comes back cut, with no `max_bytes`
+/// asked for — "the server applies a default regardless", which is the case
+/// a caller cannot reach by asking nicely and the one a naive implementation
+/// gets wrong. Returning the file is correct for `package.json` and a
+/// platform error for anything real: a body over the cap is not a long
+/// answer, it is a `500` with nothing in it a client can read.
+///
+/// 2,000,000 is the fixture's own size, from `wc -c` on the archive `tar`
+/// packed. What is asserted beside it is that the framed response fits in
+/// what the platform will carry — measured against the ceiling rather than
+/// against a number this test chose, because that is the one the platform
+/// enforces.
+///
+/// Where the cut falls is not re-proven here; `tests/page.rs` holds that
+/// against generated text of every escaping cost. What is asserted is that
+/// this tool reaches that module with no prompting.
+#[tokio::test]
+async fn a_file_larger_than_a_response_is_cut_without_being_asked() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "odd-files",
+        "version": "1.0.0",
+        "path": "big.txt",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["truncated"],
+        json!(true),
+        "two megabytes do not fit in a four-and-a-half megabyte response \
+         once the answer is carried twice, got {}",
+        result["structuredContent"]["bytes"]
+    );
+    assert_eq!(
+        result["structuredContent"]["bytes"],
+        json!(2_000_000),
+        "the file's whole size, so an agent knows how much it has not seen"
+    );
+
+    let shown = result["structuredContent"]["text"]
+        .as_str()
+        .expect("the answer carries the text")
+        .len();
+    assert!(
+        shown < 2_000_000,
+        "a cut that returned the file would not be a cut, got {shown} bytes"
+    );
+
+    let framed = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": result,
+    });
+    let bytes = serde_json::to_vec(&framed)
+        .expect("a result serialises")
+        .len();
+    assert!(
+        bytes <= page::RESPONSE_CEILING,
+        "the response framed to {bytes} bytes, over the {} Vercel will carry",
+        page::RESPONSE_CEILING
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Text that was never text
 // ---------------------------------------------------------------------------
@@ -336,8 +534,139 @@ async fn a_path_the_version_does_not_have_is_a_tool_error_naming_it() {
 }
 
 // ---------------------------------------------------------------------------
+// The handler, reached directly
+// ---------------------------------------------------------------------------
+//
+// The second seam, and a narrow one on purpose. Everything above goes over
+// the wire because that is where a definition and a handler can disagree.
+// What is left for these three is the part JSON cannot show: which `Failure`
+// the handler returned, and that the answer is a typed value rather than a
+// shape that happens to serialise to the right JSON.
+
+/// The handler answers in the crate's own types.
+///
+/// The excerpt is the response module's, not three fields this tool spelled
+/// for itself — a `bytes` that serialised as a string, or a `truncated` that
+/// was any value at all, would pass every test above and fail a client that
+/// validated against the schema.
+///
+/// 22 is the fixture's own size: twenty-one characters and a newline, from
+/// the line `scripts/make-archive-fixtures.sh` writes.
+#[tokio::test]
+async fn the_handler_answers_with_a_typed_excerpt() {
+    let content = GetFileContent::call(
+        Args {
+            registry: Registry::Crates,
+            package: "serde".to_owned(),
+            version: "1.0.0".to_owned(),
+            path: "src/lib.rs".to_owned(),
+            max_bytes: None,
+        },
+        &Ctx::with_archive(Archive::fixture(FIXTURES)),
+    )
+    .await
+    .expect("the fixture set has this crate");
+
+    assert_eq!(
+        content.excerpt,
+        Excerpt {
+            text: "pub fn serialize() {}\n".to_owned(),
+            truncated: false,
+            bytes: 22,
+        },
+    );
+    assert!(content.valid_utf8);
+}
+
+/// Which failure a directory is, rather than which words it produced.
+///
+/// The test over the wire asserts the message names the path, which is what
+/// a model reads. This asserts the variant, which is what decides the
+/// channel it goes out on — and a handler that produced the right words on
+/// the wrong variant would send a directory down the protocol channel, where
+/// the model never sees it and cannot ask for a file inside instead.
+#[tokio::test]
+async fn the_handler_returns_the_failure_that_says_the_path_is_a_directory() {
+    let failure = GetFileContent::call(
+        Args {
+            registry: Registry::Crates,
+            package: "serde".to_owned(),
+            version: "1.0.0".to_owned(),
+            path: "src".to_owned(),
+            max_bytes: None,
+        },
+        &Ctx::with_archive(Archive::fixture(FIXTURES)),
+    )
+    .await
+    .expect_err("`src` is a directory of this crate's");
+
+    match failure {
+        Failure::PathIsDirectory { path, .. } => assert_eq!(path, "src"),
+        other => panic!("a directory should say so, got {other:?}"),
+    }
+}
+
+/// And the other way a path is wrong, which is a different variant because
+/// it is a different remedy: not "ask for a file inside this" but "find out
+/// what the paths are". A handler collapsing the two would leave a model
+/// guessing which one it is looking at.
+#[tokio::test]
+async fn the_handler_returns_the_failure_that_names_the_absent_path() {
+    let failure = GetFileContent::call(
+        Args {
+            registry: Registry::Crates,
+            package: "serde".to_owned(),
+            version: "1.0.0".to_owned(),
+            path: "src/nowhere.rs".to_owned(),
+            max_bytes: None,
+        },
+        &Ctx::with_archive(Archive::fixture(FIXTURES)),
+    )
+    .await
+    .expect_err("this crate has no such file");
+
+    match failure {
+        Failure::NoSuchFile {
+            package,
+            version,
+            path,
+        } => {
+            assert_eq!(package, "serde");
+            assert_eq!(version, "1.0.0");
+            assert_eq!(path, "src/nowhere.rs");
+        }
+        other => panic!("an absent path should say so, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Driving the endpoint
 // ---------------------------------------------------------------------------
+
+/// The listed definition of `name`, or a panic naming what was listed.
+async fn listed(name: &str) -> Value {
+    let answer = post(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": { "_meta": meta() },
+    }))
+    .await;
+
+    let tools = answer["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list should answer with an array, got {answer}"))
+        .clone();
+
+    tools
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .unwrap_or_else(|| {
+            let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+            panic!("`{name}` should be listed, got {names:?}")
+        })
+        .clone()
+}
 
 /// Call the tool with `arguments`, returning the `result` — or panicking with
 /// the JSON-RPC error, so a failure says what the server objected to.
