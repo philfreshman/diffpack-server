@@ -352,8 +352,12 @@ thing about this module a call over the wire cannot show: the fixture
 archives answer in under a millisecond, so `tests/log.rs` builds two
 overlapping spans by hand against `Spent::starting_at`.
 
-Two phases today; the download/extract/store split arrives with #20 and with
-opening the archive seam, when those phases start existing separately.
+Two phases today. The finer split #26 asks for — download, extract, diff,
+store — needs each of the four to be something this crate can time, and none
+of them is: download and extract are one interface by ADR 0001, the diff is a
+synchronous call inside `src/engine.rs` which by ADR 0007 has no reach into a
+request, and there is no store until #20. Each is a decision about a seam
+rather than a field to add.
 
 ### `src/engine.rs` — the one importer of `diffpack-engine`
 

@@ -14,8 +14,8 @@
 //!   of serde" belongs here: the recovery is to ask for a version that
 //!   exists, and only the model can do that.
 //!
-//! [`Failure::respond`] is the whole rule, and it is called in exactly one
-//! place: [`crate::tools::call`], once every dispatch has finished. `Err` is
+//! [`Failure::respond`] is the whole rule, and nothing in `src/` calls it but
+//! [`crate::tools::call`], once every dispatch has finished. `Err` is
 //! the protocol; `Ok` with `isError` is the model's. A handler never reaches
 //! it — everything that can go wrong inside one is a [`Failure`] returned
 //! upwards — which is what lets the same value be named in a log line before
@@ -250,9 +250,10 @@ impl Failure {
     /// Put this failure on the channel it belongs to.
     ///
     /// `Ok` is a tool error the model reads and can act on; `Err` is a
-    /// protocol error it never sees. Called once, by
-    /// [`crate::tools::call`], which is the only place that has both the
-    /// failure and the answer it becomes.
+    /// protocol error it never sees. Reached from one place in `src/` —
+    /// [`crate::tools::call`], which is the only one that has both the
+    /// failure and the answer it becomes — and directly from the suite,
+    /// where the channel a failure takes is the thing under test.
     pub fn respond(self) -> Result<CallToolResult, ErrorData> {
         match self {
             // The caller's fault, or nobody's: there is nothing a model can

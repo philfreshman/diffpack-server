@@ -99,10 +99,16 @@ impl Line {
 /// convert before comparing is one they will convert wrongly.
 ///
 /// Two phases today, because two is what this tree can tell apart. The
-/// download-extract-diff-store split #26 asks for needs those phases to exist
-/// separately, and until there is a diff to compute (#13) and a store to
-/// write to (#20) a field for either would hold a number copied from another
-/// one.
+/// download-extract-diff-store split #26 asks for needs each of those to be
+/// something this crate can put a stopwatch on, and none of the four is yet.
+/// Download and extract are one interface by [ADR
+/// 0001](../docs/adr/0001-the-archive-seam-is-a-filemap.md), which exists so
+/// a caller cannot see how many requests a fetch took; the diff is a
+/// synchronous call inside [`crate::engine`], which under [ADR
+/// 0007](../docs/adr/0007-one-importer-of-the-engine.md) has no reach into a
+/// request; and there is no store to write to until #20. Each is a decision
+/// about a seam rather than a field to add, so `total - fetch` is what the
+/// rest of a call costs until one of them is made.
 ///
 /// `fetch` is absent rather than zero when a tool fetched nothing. Zero is a
 /// measurement, and a percentile taken over a column where half the rows are
