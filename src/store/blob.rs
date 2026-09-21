@@ -1252,4 +1252,89 @@ mod tests {
             );
         }
     }
+
+    // -----------------------------------------------------------------
+    // Against the real store
+    // -----------------------------------------------------------------
+    //
+    // Three of the facts this client is built on are not guessable, and a
+    // stub cannot disconfirm any of them: that a write's pathname is a query
+    // parameter rather than a path segment, that the store id is sent without
+    // the `store_` it is provisioned with, and that `access` has no default.
+    // A stub written from the same reading as the client agrees with the
+    // client whether or not the reading was right, so the only thing that can
+    // settle them is the store.
+    //
+    // So this reaches it, and is `#[ignore]`d for the same reason every test
+    // in `tests/networked.rs` is: `cargo test` stays offline and
+    // deterministic, and these are run deliberately.
+    //
+    // ```text
+    // cargo test --lib -- --ignored store::blob
+    // ```
+
+    /// The four operations against the store this project is provisioned
+    /// with, in the order the cache uses them: write an entry's blob, ask
+    /// whether it is there, find it under its prefix, delete it — and delete
+    /// it again, because eviction has to survive two sweeps reaching the same
+    /// blob and only the store can say that it does.
+    ///
+    /// One test rather than five. The operations are not independent: there
+    /// is nothing to `head` that was not first written, and a `delete` on its
+    /// own would be deleting whatever the last run left behind.
+    ///
+    /// What it does not prove is the cursor. Filling more than one page means
+    /// writing a thousand blobs into a store with a 256 MB budget over it,
+    /// which is a worse thing to leave behind than the walk is to assert
+    /// against a stub — so the stub keeps that one and this keeps the shape
+    /// of the request.
+    #[tokio::test]
+    #[ignore = "networked: writes to this project's Vercel Blob store"]
+    async fn the_real_store_answers_the_four_requests_this_client_makes() {
+        let credentials = Credentials::from_env()
+            .expect("VERCEL_OIDC_TOKEN with BLOB_STORE_ID, or BLOB_READ_WRITE_TOKEN");
+        let api = Api::live(credentials);
+
+        // Unique per run: a write refuses to overwrite, and two runs at once
+        // must not delete each other's blob out from under the `head`.
+        let run = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is set after 1970")
+            .as_nanos();
+        let prefix = format!("tests/{run}/");
+        let pathname = format!("{prefix}meta.json");
+        let body = br#"{"cached":true}"#.to_vec();
+
+        api.put(&pathname, body.clone())
+            .await
+            .expect("the store takes a write at a pathname of ours");
+
+        let found = api
+            .head(&pathname)
+            .await
+            .expect("the store answers about a blob it holds")
+            .expect("the blob written a moment ago is there");
+
+        assert_eq!(found.pathname, pathname);
+        assert_eq!(found.size, body.len() as u64);
+        assert!(
+            !found.uploaded_at.is_empty(),
+            "eviction orders by this, so a blob without one is not evictable"
+        );
+
+        let listed = api
+            .list(&prefix)
+            .await
+            .expect("the store lists what is under a prefix");
+        let paths: Vec<&str> = listed.iter().map(|blob| blob.pathname.as_str()).collect();
+        assert_eq!(paths, [pathname.as_str()]);
+
+        api.delete(&[pathname.as_str()])
+            .await
+            .expect("the store deletes what it was given");
+
+        api.delete(&[pathname.as_str()])
+            .await
+            .expect("deleting a blob that is already gone is the outcome asked for");
+    }
 }
