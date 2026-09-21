@@ -700,29 +700,28 @@ pub struct SearchSource {
 
 /// One package a search found.
 ///
-/// The fields a model is shown, and they are optional because the sources
-/// differ in what they carry rather than because a registry sometimes
-/// forgets: npm and crates.io answer with a version and a summary, and
-/// PyPI's index answers with a name and nothing else.
-// Inline in a schema rather than a `$ref` into `$defs`, for the reason
-// `Registry` and `page`'s two wire types are: the reader is a model, and a
-// shape it has to resolve a reference to learn is a shape it will guess at.
-// Three fields are cheaper to repeat than to look up.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[schemars(inline)]
+/// Two of the three are optional because the sources differ in what they
+/// carry rather than because a registry sometimes forgets: npm and crates.io
+/// answer with a version and a summary, and PyPI's index answers with a name
+/// and nothing else. Absent therefore means the source does not say, and
+/// never that the package has published nothing.
+///
+/// Not the shape a model reads. That is `search_packages`'s own `Hit`, for
+/// the reason [`Version`] is not `list_package_versions`'s: a schema a model
+/// reads is written where the tool is, so this module stays the one that
+/// knows what a registry is rather than also being the one that talks to a
+/// model.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
-    /// The package name, spelled as the registry spells it. Pass it back
-    /// verbatim to any tool that takes a package.
+    /// The package name, as the source spells it.
     pub name: String,
 
-    /// The latest version the search source knows of, where it carries one.
-    /// Absent is not "no releases" — it is a source that does not say.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The version the registry would install for a caller that named none,
+    /// where the source carries one.
     pub version: Option<String>,
 
     /// What the package says it is, in the registry's own words, where the
-    /// search source carries it.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// source carries it.
     pub description: Option<String>,
 }
 

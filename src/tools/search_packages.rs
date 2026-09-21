@@ -33,15 +33,44 @@
 //! than in the code — a PyPI hit carries a name and nothing else, because
 //! PyPI's index carries nothing else — so the description says so out loud.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Failure;
 use crate::page::{self, Page};
-use crate::registry::{Hit, Registry};
+use crate::registry::Registry;
 use crate::tools::{Ctx, Tool};
 
 /// The tool.
 pub struct SearchPackages;
+
+/// One package the search found.
+// Unlike the doc comment on `Args`, this one reaches a model: an inlined
+// schema keeps its `description` where a root schema's is stripped. So it is
+// a sentence for that reader, and the note to the next reader of this file is
+// the comment you are reading.
+//
+// Inline rather than a `$ref` into `$defs`, for the reason
+// `Registry` and `page`'s two wire types are: the reader is a model, and a
+// shape it has to resolve a reference to learn is a shape it will guess at.
+// Three fields are cheaper to repeat than to look up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[schemars(inline)]
+pub struct Hit {
+    /// The package name, spelled the way the registry spells it. Pass it
+    /// back verbatim to any tool that takes a package.
+    pub name: String,
+
+    /// The version the registry would install if you named none. Absent
+    /// means this registry does not say here, not that the package has
+    /// published nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+
+    /// What the package says it is, in the registry's own words. Absent on
+    /// registries that do not carry one here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
 
 /// What a caller asks for.
 ///
@@ -119,6 +148,19 @@ impl Tool for SearchPackages {
         let wanted = page::wanted(args.limit);
 
         let hits = ctx.search().hits(args.registry, query, wanted).await?;
+
+        // Mapped into this module's own shape rather than serialised where
+        // it was built, so that every sentence a model reads about a hit is
+        // written in the file the tool is in. `list_package_versions` does
+        // the same with a version.
+        let hits: Vec<Hit> = hits
+            .into_iter()
+            .map(|hit| Hit {
+                name: hit.name,
+                version: hit.version,
+                description: hit.description,
+            })
+            .collect();
 
         // The sequence is already in the order it should be read in — each
         // source ranks its own answer, and PyPI's is ranked where it is
