@@ -641,6 +641,16 @@ fn the_cursor_a_tool_declares_says_to_pass_it_back_unchanged() {
             .is_some_and(|said| said.contains("unchanged")),
         "the rule is that it is passed back as it arrived, got {cursor}"
     );
+
+    // And it has to name the field a client will actually find in the answer.
+    // "Pass back `next_cursor`" sends an agent looking for a key that is not
+    // there, which is a wrong instruction rather than a missing one.
+    assert!(
+        cursor["description"]
+            .as_str()
+            .is_some_and(|said| said.contains("nextCursor") && !said.contains("next_cursor")),
+        "the description names the field as a page spells it, got {cursor}"
+    );
 }
 
 /// The same refusal as `Cursor::decode`, arriving one step earlier: a tool's
@@ -654,8 +664,9 @@ fn a_cursor_that_is_not_ours_is_refused_before_a_handler_runs() {
         .expect_err("a bare offset is not a cursor this module wrote");
 
     assert!(
-        refused.to_string().contains("next_cursor"),
-        "the refusal says what to pass instead; it said: {refused}"
+        refused.to_string().contains("nextCursor"),
+        "the refusal says what to pass instead, by the name a page gives it; \
+         it said: {refused}"
     );
 
     let accepted = serde_json::from_value::<PagingArgs>(serde_json::json!({ "cursor": "p1:4" }))

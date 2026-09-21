@@ -127,6 +127,63 @@ async fn the_paging_arguments_document_the_numbers_that_bind() {
     assert_eq!(limit["default"], json!(page::DEFAULT_LIMIT), "got {limit}");
     assert_eq!(limit["maximum"], json!(page::MAX_LIMIT), "got {limit}");
     assert_eq!(limit["minimum"], json!(1), "got {limit}");
+
+    // The prose too, and this is the half a tool can take away without
+    // noticing: a doc comment on the field overrides the description the type
+    // wrote, and what is lost is the sentence saying an out-of-range `limit`
+    // is clamped rather than refused. The numbers would still be right and
+    // the agent would still be told the wrong thing.
+    assert!(
+        limit["description"]
+            .as_str()
+            .is_some_and(|said| said.contains("clamped")),
+        "the description is the one `page::Limit` writes, got {limit}"
+    );
+
+    let cursor = &tool["inputSchema"]["properties"]["cursor"];
+    assert_eq!(cursor["pattern"], "^p1:[0-9]+$", "got {cursor}");
+    assert!(
+        cursor["description"]
+            .as_str()
+            .is_some_and(|said| said.contains("unchanged")),
+        "the description is the one `page::Cursor` writes, got {cursor}"
+    );
+}
+
+/// Nothing an agent reads names a Rust path.
+///
+/// Every description here reaches a model, and a model told that a field is
+/// "declared as [`crate::page`]'s type" is reading this repository's
+/// reasoning rather than anything it can act on. The reasoning belongs in the
+/// module, next to the code it is about; the schema is for the caller.
+#[tokio::test]
+async fn no_description_an_agent_reads_names_a_rust_path() {
+    let tool = listed(TOOL).await;
+
+    let mut leaked = Vec::new();
+    let mut visit = |value: &Value| {
+        if let Some(text) = value["description"].as_str() {
+            if text.contains("crate::") || text.contains("[`") {
+                leaked.push(text.to_owned());
+            }
+        }
+    };
+
+    visit(&tool);
+    for schema in ["inputSchema", "outputSchema"] {
+        for section in ["properties", "$defs"] {
+            if let Some(fields) = tool[schema][section].as_object() {
+                for field in fields.values() {
+                    visit(field);
+                }
+            }
+        }
+    }
+
+    assert!(
+        leaked.is_empty(),
+        "these reach a model and are written for us: {leaked:#?}"
+    );
 }
 
 // ---------------------------------------------------------------------------

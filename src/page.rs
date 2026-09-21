@@ -282,13 +282,13 @@ impl Cursor {
 
 /// Decode `cursor`, or say what to pass instead.
 ///
-/// The message names `next_cursor` rather than the format, because a client
+/// The message names `nextCursor` rather than the format, because a client
 /// that wrote its own cursor needs to be told to stop rather than told how to
 /// write a better one.
 fn parse(cursor: &str) -> Result<Cursor, String> {
     let refused = || {
         format!(
-            "`{cursor}` is not a cursor. Pass back the `next_cursor` from the previous \
+            "`{cursor}` is not a cursor. Pass back the `nextCursor` from the previous \
              page unchanged, or omit it to start from the beginning."
         )
     };
@@ -350,7 +350,7 @@ impl JsonSchema for Cursor {
             "type": "string",
             "pattern": format!("^{CURSOR_VERSION}:[0-9]+$"),
             "description": "\
-                Where to resume a walk of this sequence: the `next_cursor` from the \
+                Where to resume a walk of this sequence: the `nextCursor` from the \
                 previous page, passed back unchanged. Omit it to start from the \
                 beginning. It is opaque and it is not an index — a cursor written by \
                 hand is refused.",

@@ -10,7 +10,21 @@
 //! `zod-4.0.0/src/index.js`. That is [`crate::archive`]'s doing rather than
 //! this tool's, and it is the property that makes two versions comparable in
 //! the first place. It is also the one thing an agent cannot infer from a
-//! path it is shown, which is why [`Self::DESCRIPTION`] says it out loud.
+//! path it is shown, which is why the description says it out loud.
+//!
+//! # Where the descriptions come from
+//!
+//! Every doc comment on a field of [`Args`], [`Entry`] and [`EntryType`]
+//! becomes a `description` in a schema a model reads, so it is written for
+//! that reader and names nothing in this repository. Why a field is shaped
+//! the way it is belongs here or in an ordinary comment beside the code.
+//!
+//! Two fields have no doc comment at all, deliberately. `cursor` and `limit`
+//! are [`crate::page`]'s types and that module writes their descriptions —
+//! the default, the range, and the rule that an out-of-range `limit` is
+//! clamped rather than refused. A doc comment here would *replace* those
+//! rather than add to them, which is how a tool ends up telling an agent
+//! numbers no test compares against `page::MAX_LIMIT`.
 
 use serde::{Deserialize, Serialize};
 
@@ -28,14 +42,14 @@ pub struct ListPackageFiles;
 /// Nothing is normalised: the package name and the version go to the
 /// registry exactly as they arrive, the rule `docs/cache-key.md` fixes for
 /// the cache key and [`super::resolve_archive_url`] follows for the same
-/// reason.
+/// reason. The doc comments below are read by a model — see the module
+/// header.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
     /// The registry that publishes the package.
-    ///
-    /// The enum comes from [`crate::registry`], so the list an agent is shown
-    /// is the list this server has rather than a description of it.
+    // The enum itself comes from `crate::registry`, so the list an agent is
+    // shown is the list this server has rather than a description of one.
     pub registry: Registry,
 
     /// The package name as the registry spells it, scope included:
@@ -56,19 +70,12 @@ pub struct Args {
     #[serde(default)]
     pub prefix: Option<String>,
 
-    /// Where to resume: the `nextCursor` from the previous page, unchanged.
-    ///
-    /// Declared as [`crate::page`]'s type, so the rule an agent reads — that
-    /// a cursor is opaque and one written by hand is refused — is in the
-    /// schema that module owns rather than in a sentence this tool wrote.
+    // No doc comment on either of these, on purpose: see the module header.
+    // `page` writes their descriptions, and a sentence here would replace
+    // the one that carries the numbers that bind.
     #[serde(default)]
     pub cursor: Option<page::Cursor>,
 
-    /// How many entries this page holds.
-    ///
-    /// The default and the range are [`crate::page`]'s too, for the same
-    /// reason. A page can still come back shorter than the limit: the
-    /// response ceiling is what actually bounds an answer.
     #[serde(default)]
     pub limit: Option<page::Limit>,
 }
@@ -96,13 +103,12 @@ pub struct Entry {
     pub size: usize,
 }
 
-/// What an [`Entry`] is.
-///
-/// Two variants that mirror [`engine::FileType`], written here rather than
-/// re-exported because the engine's type carries no JSON schema and a tool
-/// declares types, not JSON. The [`From`] below is a total `match`, so a
-/// third variant in the engine is a compile error here rather than a value
-/// this server quietly renames.
+/// A file, or a directory holding other entries.
+// Two variants mirroring `engine::FileType`, written here rather than
+// re-exported because the engine's type carries no JSON schema and a tool
+// declares types, not JSON. The `From` below is a total `match`, so a third
+// variant in the engine is a compile error here rather than a value this
+// server quietly renames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum EntryType {
