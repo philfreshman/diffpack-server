@@ -40,8 +40,9 @@ build otherwise. See [ADR 0007](adr/0007-one-importer-of-the-engine.md).
 
 **A tool module goes through the seams, not around them.** A module under
 `src/tools/` may import the standard library, the MCP and serialisation
-crates, and `crate::{archive, cache_key, engine, error, handle, page,
-registry, store}`. It may not name an HTTP client or the blob store: those are
+crates, `futures` for the one case where a tool waits on two fetches at once,
+and `crate::{archive, cache_key, engine, error, handle, page, registry,
+store}`. It may not name an HTTP client or the blob store: those are
 `archive`'s and `store`'s business, and eight tools that each know how to
 fetch is eight places to fix a timeout.
 [`scripts/check-tool-seams.sh`](../scripts/check-tool-seams.sh) fails the build

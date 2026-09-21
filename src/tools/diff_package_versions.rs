@@ -33,6 +33,7 @@
 //! *replace* that rather than add to it, which is how the tool that mints a
 //! handle ends up describing it differently from the three that take one.
 
+use futures::try_join;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{self, DiffFileEntry, DiffStatus, FileType};
@@ -310,7 +311,7 @@ impl Tool for DiffPackageVersions {
         // Concurrently, the way the engine's wasm entry point fetches them:
         // the two downloads do not depend on each other, and a version pair
         // is the one place this server waits on the network twice.
-        let (from_files, to_files) = futures::try_join!(
+        let (from_files, to_files) = try_join!(
             ctx.archive()
                 .fetch(inputs.registry, &inputs.package, &inputs.from_version),
             ctx.archive()
