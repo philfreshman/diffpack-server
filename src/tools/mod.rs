@@ -52,6 +52,7 @@
 
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Instant;
 
 use rmcp::model::{CallToolResult, JsonObject, Tool as Definition, ToolAnnotations};
 use rmcp::ErrorData;
@@ -59,9 +60,10 @@ use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::archive::Archive;
+use crate::archive::{Archive, FileMap};
 use crate::error::Failure;
-use crate::log::{Record, Sink};
+use crate::log::{Record, Sink, Spent};
+use crate::registry::Registry;
 
 /// Declare the tools, and build the collection and the dispatch from one list.
 ///
@@ -150,6 +152,11 @@ tools! {
 pub struct Ctx {
     archive: Arc<Archive>,
     log: Sink,
+
+    /// Where this request's time has gone so far. Behind an [`Arc`] because
+    /// a `Ctx` is cloned into every handler and the phases they spend have
+    /// to add up to one call's.
+    spent: Arc<Spent>,
 }
 
 impl Ctx {
@@ -167,6 +174,7 @@ impl Ctx {
         Self {
             archive: Arc::new(archive),
             log: Sink::default(),
+            spent: Arc::new(Spent::default()),
         }
     }
 
@@ -180,8 +188,46 @@ impl Ctx {
     }
 
     /// A version's files.
-    pub fn archive(&self) -> &Archive {
-        &self.archive
+    ///
+    /// Returns the seam with a stopwatch on it rather than the seam itself,
+    /// so that there is no way to read an archive that is not counted. A
+    /// handler is unchanged by it: `ctx.archive().fetch(..)` is the same
+    /// call it always was.
+    pub fn archive(&self) -> Timed<'_> {
+        Timed {
+            archive: &self.archive,
+            spent: &self.spent,
+        }
+    }
+}
+
+/// The archive seam, with the time a fetch takes recorded.
+///
+/// The same shape as [`crate::mcp::Guarded`]: a wrapper that adds one
+/// property to something a caller already knows how to use, so that the
+/// property is not a thing each caller has to remember.
+#[derive(Debug)]
+pub struct Timed<'a> {
+    archive: &'a Archive,
+    spent: &'a Spent,
+}
+
+impl Timed<'_> {
+    /// The files in `version` of `package`, and the time it took on the
+    /// request's tally.
+    pub async fn fetch(
+        &self,
+        registry: Registry,
+        package: &str,
+        version: &str,
+    ) -> Result<FileMap, Failure> {
+        let started = Instant::now();
+        let files = self.archive.fetch(registry, package, version).await;
+
+        // Recorded whether or not it worked. A registry that times out is
+        // exactly the call worth knowing the fetch time of.
+        self.spent.fetching(started.elapsed());
+        files
     }
 }
 
@@ -249,8 +295,10 @@ pub async fn call(
     // Summarised before the dispatch, because the dispatch consumes them.
     let record = Record::new(name).about(arguments.as_ref());
 
+    let started = Instant::now();
     let answer = dispatch(name, arguments, ctx).await;
-    ctx.log.write(&record.ending(&answer));
+    ctx.log
+        .write(&record.taking(started.elapsed(), &ctx.spent).ending(&answer));
 
     // The one place a `Failure` is put on its channel. Every path into this
     // function returns one, so there is no arm that can answer without

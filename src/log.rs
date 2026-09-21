@@ -15,7 +15,9 @@
 //! to stderr would leave "every tool call emits one line" as something nobody
 //! could check.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use rmcp::model::JsonObject;
 use serde::Serialize;
@@ -34,6 +36,9 @@ pub struct Record {
 
     /// How the call ended.
     pub result: &'static str,
+
+    /// How long it took, by phase.
+    pub ms: Timings,
 }
 
 impl Record {
@@ -43,6 +48,7 @@ impl Record {
             tool: tool.to_owned(),
             args: Summary::default(),
             result: "ok",
+            ms: Timings::default(),
         }
     }
 
@@ -50,6 +56,17 @@ impl Record {
     pub fn about(self, arguments: Option<&JsonObject>) -> Self {
         Self {
             args: Summary::of(arguments),
+            ..self
+        }
+    }
+
+    /// The same line, saying where the call's time went.
+    pub fn taking(self, total: Duration, spent: &Spent) -> Self {
+        Self {
+            ms: Timings {
+                total: millis(total),
+                fetch: spent.fetch().map(millis),
+            },
             ..self
         }
     }
@@ -64,6 +81,81 @@ impl Record {
             ..self
         }
     }
+}
+
+/// Where a call's time went, in milliseconds.
+///
+/// Milliseconds because that is the unit the rest of this deployment is
+/// discussed in — [`UPSTREAM_TIMEOUT`](crate::error::UPSTREAM_TIMEOUT), the
+/// function's own ceiling in `vercel.json` — and a number an operator has to
+/// convert before comparing is one they will convert wrongly.
+///
+/// Two phases today, because two is what this tree can tell apart. The
+/// download-extract-diff-store split #26 asks for needs those phases to exist
+/// separately, and until there is a diff to compute (#13) and a store to
+/// write to (#20) a field for either would hold a number copied from another
+/// one.
+///
+/// `fetch` is absent rather than zero when a tool fetched nothing. Zero is a
+/// measurement, and a percentile taken over a column where half the rows are
+/// a phase that never ran describes neither population.
+#[derive(Debug, Default, Serialize)]
+pub struct Timings {
+    /// Everything: argument validation, the work, and building the answer.
+    pub total: f64,
+
+    /// The part of it spent waiting for archives, where any was.
+    ///
+    /// The one split worth making before the others exist: a slow call is
+    /// either a slow registry or slow work here, and those are somebody
+    /// else's incident and ours.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetch: Option<f64>,
+}
+
+/// Where a request's time goes, while it is still being spent.
+///
+/// Shared across one request and written from wherever the phase actually
+/// happens — the seam, rather than a timer threaded down through a handler
+/// that would then have to pass it back up. Atomics rather than a lock
+/// because nothing here ever reads a value it is about to write, so there is
+/// no invariant a lock would be protecting.
+#[derive(Debug, Default)]
+pub struct Spent {
+    /// Whether any fetch happened at all, which is what tells "no archives
+    /// were read" from "reading them was instant".
+    fetched: AtomicBool,
+
+    /// Microseconds, summed. A diff reads two archives, so this is a total
+    /// and not a duration.
+    fetching: AtomicU64,
+}
+
+impl Spent {
+    /// Record `taken` spent waiting for an archive.
+    pub fn fetching(&self, taken: Duration) {
+        self.fetched.store(true, Ordering::Relaxed);
+        self.fetching.fetch_add(
+            u64::try_from(taken.as_micros()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// How long was spent waiting for archives, or nothing if none were read.
+    fn fetch(&self) -> Option<Duration> {
+        self.fetched
+            .load(Ordering::Relaxed)
+            .then(|| Duration::from_micros(self.fetching.load(Ordering::Relaxed)))
+    }
+}
+
+/// `duration` in milliseconds, to a tenth.
+///
+/// Rounded because the digits below it are noise — the same call on the same
+/// input differs by more than that between invocations — and a line carrying
+/// them invites a comparison that means nothing.
+fn millis(duration: Duration) -> f64 {
+    (duration.as_secs_f64() * 10_000.0).round() / 10.0
 }
 
 /// A call's arguments, as much of them as belongs in a line.

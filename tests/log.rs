@@ -180,6 +180,83 @@ async fn a_long_argument_is_cut_and_says_so() {
 }
 
 // ---------------------------------------------------------------------------
+// How long it took
+// ---------------------------------------------------------------------------
+
+/// p50 and p95 by tool are percentiles of something, and this is the
+/// something. Milliseconds, because that is the unit the rest of this
+/// deployment is discussed in — the upstream budget, the function's own
+/// ceiling — and a line an operator has to convert before comparing is a line
+/// they will convert wrongly at three in the morning.
+#[tokio::test]
+async fn the_line_says_how_long_the_call_took() {
+    let log = Capture::new();
+
+    call(
+        &log,
+        "list_package_files",
+        json!({ "registry": "npm", "package": "@types/node", "version": "20.1.0" }),
+    )
+    .await;
+
+    let line = one(&log);
+    let total = line["ms"]["total"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("a call should be timed, got {line}"));
+
+    assert!(
+        total >= 0.0 && total.is_finite(),
+        "a duration should be a real number of milliseconds, got {total}"
+    );
+}
+
+/// The one phase this tree can tell apart from the rest, and the one worth
+/// telling apart: a slow call is either a slow registry or slow work here,
+/// and those are somebody else's incident and ours.
+///
+/// A tool that fetched nothing says nothing rather than saying zero. Zero is
+/// a measurement, and a percentile over a column where half the entries are a
+/// phase that never ran describes neither population — the same reason #26
+/// asks for a cache hit and a recompute to be counted apart.
+#[tokio::test]
+async fn the_fetch_is_timed_apart_from_the_rest_when_there_was_one() {
+    let fetched = Capture::new();
+    call(
+        &fetched,
+        "list_package_files",
+        json!({ "registry": "npm", "package": "@types/node", "version": "20.1.0" }),
+    )
+    .await;
+
+    let line = one(&fetched);
+    let fetch = line["ms"]["fetch"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("a call that read an archive spent time on it, got {line}"));
+    let total = line["ms"]["total"].as_f64().expect("a call is timed");
+
+    assert!(
+        fetch <= total,
+        "the fetch is part of the call, so it cannot outlast it: {fetch} of {total}"
+    );
+
+    // `resolve_archive_url` answers from `crate::registry` alone: it builds a
+    // URL and fetches nothing.
+    let untouched = Capture::new();
+    call(
+        &untouched,
+        "resolve_archive_url",
+        json!({ "registry": "npm", "package": "@types/node", "version": "20.1.0" }),
+    )
+    .await;
+
+    let line = one(&untouched);
+    assert!(
+        line["ms"]["fetch"].is_null(),
+        "a tool that fetched nothing should report no fetch rather than zero, got {line}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // What never reaches a line
 // ---------------------------------------------------------------------------
 
