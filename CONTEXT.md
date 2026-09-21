@@ -98,10 +98,11 @@ _Avoid_: simple index, package list, catalogue
 
 **Hit**:
 One package a Search found: the name to pass to any other tool, and beside
-it the latest version and the description *where the source carries them*.
-npm and crates.io carry all three; PyPI's Index carries a name and nothing
-else, so a PyPI hit has a name and nothing else. An absent version is a
-source that does not say, never a package that has published nothing.
+it the Version the Registry would install for a caller that named none, and
+the package's own description — *where that registry carries them*. npm and
+crates.io carry all three; PyPI's Index carries a name and nothing else, so
+a PyPI hit has a name and nothing else. An absent version is a registry that
+does not say here, never a package that has published nothing.
 _Avoid_: result, match, search result, package (unqualified)
 
 **Search**:
