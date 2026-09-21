@@ -23,7 +23,11 @@ use super::Body;
 ///
 /// PyPI serves its index with `cache-control: max-age=600`, so ten minutes is
 /// the registry's own answer to the question rather than a number chosen
-/// here. A package published inside that window is missing from a search made
+/// here. It is written down rather than read back off the response: nothing
+/// here parses a header, so a `max-age` PyPI changed is a change to this line
+/// and not one that arrives on its own.
+///
+/// A package published inside that window is missing from a search made
 /// inside it, which is the trade the source costs: the alternative is tens of
 /// megabytes on every call.
 const FRESH_FOR: Duration = Duration::from_secs(600);

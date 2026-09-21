@@ -249,8 +249,10 @@ Where a search is asked, what to ask it for, and how to read the answer are
 `registry`'s. What is this module's is the request, the size cap, and the one
 policy a search needs that a catalogue does not: PyPI's source is the index of
 everything it publishes rather than a reply to a query, so a warm instance
-holds the document it already fetched for as long as PyPI's own
-`cache-control` says it is current. That is a document, not an answer — every
+holds the document it already fetched for the ten minutes PyPI's own
+`cache-control` gives it — a constant in that module rather than a header read
+back off each answer, so a `max-age` PyPI changed is a change made here. That
+is a document, not an answer — every
 query is matched against it afresh — so no search result is cached anywhere
 and nothing here goes near the blob store.
 

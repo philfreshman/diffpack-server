@@ -32,10 +32,12 @@ itself having moved, because nothing in that URL named a package. Their costs
 differ by two orders of magnitude — one document per package against, for
 PyPI, the index of every project there is — and that difference buys the one
 policy `search` has that `catalogue` must not: a warm instance holds the index
-it already fetched for as long as PyPI's own `cache-control` says it is
-current. In one module that policy would sit under a header that says it is
-about one package's releases, and the size cap would be one number doing two
-jobs.
+it already fetched for the ten minutes PyPI's own `cache-control` gives it.
+Ten minutes is a constant in `src/search/` rather than a header read back off
+each answer — nothing here parses one — so a `max-age` PyPI changed is a
+change made here and not one that arrives on its own. In one module that
+policy would sit under a header that says it is about one package's releases,
+and the size cap would be one number doing two jobs.
 
 What they do share is the fixture convention and the client, and both are
 already shared without being one module.
