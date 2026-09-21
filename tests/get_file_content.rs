@@ -76,6 +76,125 @@ async fn a_file_from_an_npm_package_comes_back_with_its_exact_content() {
     );
 }
 
+/// A crate's file, out of a different wrapper and a different extension and
+/// through the same path.
+///
+/// Green the moment the npm one was, because the fetch path is the same code
+/// for all three registries — which is the thing being asserted. A tool that
+/// had learned anything registry-shaped on its way to a file would be the
+/// one to fail here.
+#[tokio::test]
+async fn a_file_from_a_crate_comes_back_with_its_exact_content() {
+    let result = call(json!({
+        "registry": "crates",
+        "package": "serde",
+        "version": "1.0.0",
+        "path": "src/lib.rs",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["text"], "pub fn serialize() {}\n",
+        "got {result}"
+    );
+}
+
+/// PyPI is two requests rather than one — the version's metadata, then the
+/// artefact it names — and this tool makes neither of them. That a file
+/// comes back at all is the assertion: the second hop belongs to the module
+/// that fetches, and a tool that had to know PyPI needs asking would be
+/// carrying that module's job around.
+///
+/// `setup.py` is in the source distribution and not in the wheel, so which
+/// artefact was chosen is visible in the text rather than only in a URL
+/// nobody sees.
+#[tokio::test]
+async fn a_file_from_a_pypi_package_comes_back_through_the_metadata_hop() {
+    let result = call(json!({
+        "registry": "pypi",
+        "package": "requests",
+        "version": "2.31.0",
+        "path": "setup.py",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["text"],
+        "from setuptools import setup\n\nsetup(name=\"requests\", version=\"2.31.0\")\n",
+        "got {result}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// How it fails
+// ---------------------------------------------------------------------------
+
+/// A directory has no content, and saying so is the whole point: the
+/// extractor gives a directory the empty string, so a tool that passed that
+/// through would tell an agent that `src` is a file with nothing in it. The
+/// agent's next move — conclude the package ships an empty module — is wrong
+/// and it has nothing to notice it with.
+///
+/// It is a tool error rather than a protocol one because the model is who
+/// can fix it, by asking for a file inside the directory instead.
+#[tokio::test]
+async fn a_directory_is_a_tool_error_rather_than_an_empty_file() {
+    let result = call(json!({
+        "registry": "crates",
+        "package": "serde",
+        "version": "1.0.0",
+        "path": "src",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(true),
+        "`src` is a directory of this crate's, and an empty string would read \
+         as an empty file: got {result}"
+    );
+
+    let text = result["content"][0]["text"]
+        .as_str()
+        .expect("a tool error carries text for the model");
+    assert!(
+        text.contains("src") && text.contains("directory"),
+        "the message should name the path and say what it is, since the \
+         remedy is to ask for a file inside it: got {text}"
+    );
+}
+
+/// A path the version does not have is something the model can act on — by
+/// listing the version's files and asking for one of those — so it takes the
+/// channel the model reads, and it names what was not found. A model told
+/// only that a request failed has no next call to make.
+#[tokio::test]
+async fn a_path_the_version_does_not_have_is_a_tool_error_naming_it() {
+    let result = call(json!({
+        "registry": "crates",
+        "package": "serde",
+        "version": "1.0.0",
+        "path": "src/nowhere.rs",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(true),
+        "the model is the one who can ask for a path that exists, got {result}"
+    );
+
+    let text = result["content"][0]["text"]
+        .as_str()
+        .expect("a tool error carries text for the model");
+    for named in ["src/nowhere.rs", "serde", "1.0.0"] {
+        assert!(
+            text.contains(named),
+            "the message should name `{named}`, which is what was asked for: got {text}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Driving the endpoint
 // ---------------------------------------------------------------------------

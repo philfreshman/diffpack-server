@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::engine;
 use crate::error::Failure;
 use crate::registry::Registry;
 use crate::tools::{Ctx, Tool};
@@ -66,9 +67,25 @@ impl Tool for GetFileContent {
             .fetch(args.registry, &args.package, &args.version)
             .await?;
 
-        let entry = files.get(&args.path).ok_or(Failure::Internal {
-            doing: "reading a file out of a version",
-        })?;
+        let Some(entry) = files.get(&args.path) else {
+            return Err(Failure::NoSuchFile {
+                package: args.package,
+                version: args.version,
+                path: args.path,
+            });
+        };
+
+        // A directory's content is the empty string the extractor gave it, so
+        // the type is the only thing that tells the two apart. Reading the
+        // type rather than the emptiness is what keeps a genuinely empty file
+        // answering as one.
+        if matches!(entry.file_type, engine::FileType::Directory) {
+            return Err(Failure::PathIsDirectory {
+                package: args.package,
+                version: args.version,
+                path: args.path,
+            });
+        }
 
         Ok(Content {
             text: entry.content.clone(),
