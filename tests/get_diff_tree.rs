@@ -69,7 +69,7 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 async fn the_definition_carries_everything_an_agent_needs() {
     let tool = listed(TOOL).await;
 
-    for field in ["handle", "cursor", "limit"] {
+    for field in ["handle", "path", "cursor", "limit"] {
         assert!(
             tool["inputSchema"]["properties"][field].is_object(),
             "the input schema should describe `{field}`, got {}",
@@ -306,6 +306,99 @@ async fn a_page_reports_the_whole_comparisons_length() {
 }
 
 // ---------------------------------------------------------------------------
+// One subtree
+// ---------------------------------------------------------------------------
+
+/// `path` answers with what is under that directory and nothing else.
+///
+/// The directory itself is not in it, which is the half an agent notices: a
+/// listing of `src` that began with `src` would make a walk of a subtree
+/// disagree with the same nodes read out of a walk of the whole tree.
+#[tokio::test]
+async fn a_path_returns_that_subtree_and_nothing_outside_it() {
+    let nodes = walk(json!({ "handle": diffable(), "path": "src" })).await;
+
+    assert_eq!(
+        paths(&nodes),
+        [
+            "src/added.js",
+            "src/index.js",
+            "src/new-name.js",
+            "src/removed.js",
+        ],
+        "`README.md` is outside `src` and `src` is not inside itself"
+    );
+}
+
+/// A directory several levels down is reachable by naming it.
+///
+/// `many-files` spreads two and a half thousand files over twenty-five
+/// directories, so a subtree of it is a real narrowing rather than the whole
+/// answer with one row missing — and the pair is the package against itself,
+/// which is the only way an archive that exists at one version can be
+/// compared at all.
+#[tokio::test]
+async fn a_subtree_deeper_down_is_reached_by_naming_it() {
+    let nodes = walk(json!({
+        "handle": handle("many-files", "1.0.0", "1.0.0"),
+        "path": "src/07",
+    }))
+    .await;
+
+    assert_eq!(nodes.len(), 100, "one directory's hundred files");
+    let strays: Vec<&str> = paths(&nodes)
+        .into_iter()
+        .filter(|path| !path.starts_with("src/07/"))
+        .collect();
+    assert!(strays.is_empty(), "nothing outside the subtree: {strays:?}");
+}
+
+/// A trailing slash is allowed and changes nothing.
+///
+/// An agent writing a directory as `src/` is writing the same directory, and
+/// a tool that answered differently would be asking it to know which
+/// spelling this server prefers.
+#[tokio::test]
+async fn a_trailing_slash_on_a_path_makes_no_difference() {
+    let bare = walk(json!({ "handle": diffable(), "path": "src" })).await;
+    let slashed = walk(json!({ "handle": diffable(), "path": "src/" })).await;
+
+    assert_eq!(bare, slashed);
+}
+
+/// A directory the comparison does not have is an empty page, not a refusal.
+///
+/// Two reasons rather than consistency with `list_package_files` alone. A
+/// path that is a file names something real with nothing under it, and the
+/// honest answer to "what is inside this" is nothing. And a directory the
+/// engine pruned — because a rename took its last file away — is a directory
+/// an agent can have read about in the first version and cannot see in the
+/// comparison, which is the same answer for a different reason.
+#[tokio::test]
+async fn a_path_with_nothing_under_it_is_an_empty_page() {
+    for path in ["src/index.js", "does-not-exist"] {
+        let result = call(TOOL, json!({ "handle": diffable(), "path": path })).await;
+
+        assert_eq!(
+            result["isError"],
+            json!(false),
+            "asking about an empty corner of a comparison is not a failure, \
+             got {result}"
+        );
+        assert_eq!(
+            result["structuredContent"]["items"],
+            json!([]),
+            "got {result}"
+        );
+        assert_eq!(
+            result["structuredContent"]["total"],
+            json!(0),
+            "and the total says so rather than the page being short: got {result}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -315,15 +408,33 @@ async fn a_page_reports_the_whole_comparisons_length() {
 /// what is being asserted. Everywhere else a handle is just the argument, and
 /// minting it here is one call rather than two.
 fn diffable() -> String {
+    handle("diffable", "1.0.0", "2.0.0")
+}
+
+/// A handle for one npm comparison, at the defaults `diff_package_versions`
+/// would have used.
+fn handle(package: &str, from: &str, to: &str) -> String {
     DiffHandle::mint(Inputs {
         registry: Registry::Npm,
-        package: "diffable".to_owned(),
-        from_version: "1.0.0".to_owned(),
-        to_version: "2.0.0".to_owned(),
+        package: package.to_owned(),
+        from_version: from.to_owned(),
+        to_version: to.to_owned(),
         similarity_threshold: 0.75,
         ignore_whitespace: false,
     })
     .encode()
+}
+
+/// The paths of `nodes`, in the order they came back.
+fn paths(nodes: &[Value]) -> Vec<&str> {
+    nodes
+        .iter()
+        .map(|node| {
+            node["path"]
+                .as_str()
+                .unwrap_or_else(|| panic!("every node has a path, got {node}"))
+        })
+        .collect()
 }
 
 /// Every node `arguments` selects, by following the cursors to the end.

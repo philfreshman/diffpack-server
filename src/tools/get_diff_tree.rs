@@ -71,8 +71,20 @@ pub struct Args {
     // shows in its answer.
     pub handle: DiffHandle,
 
-    // Nor on these two: `page` writes their descriptions, and a sentence
-    // here would replace the one carrying the numbers that bind.
+    /// Only what is inside this directory, one level or many: `src`, or
+    /// `src/util`. A trailing slash is allowed and makes no difference.
+    ///
+    /// It names a directory and is not matched by characters, so `sr` does
+    /// not narrow to `src/`, and the directory itself is not in its own
+    /// subtree. Omit it for the whole comparison. A path with nothing under
+    /// it is an empty page rather than an error — which is what a file is,
+    /// and what a directory the comparison dropped is.
+    #[serde(default)]
+    pub path: Option<String>,
+
+    // No doc comment on these two either: `page` writes their descriptions,
+    // and a sentence here would replace the one carrying the numbers that
+    // bind.
     #[serde(default)]
     pub cursor: Option<page::Cursor>,
 
@@ -198,17 +210,41 @@ fn flatten(parent: &DiffFileEntry, nodes: &mut Vec<Node>) {
     }
 }
 
+/// The node `path` names, or nothing if the comparison has no node there.
+///
+/// A descent rather than a scan: at each level only the child whose path is
+/// `path` or a directory `path` lies inside is followed, so a subtree of a
+/// package with ten thousand files costs one step per directory rather than
+/// a walk of everything above it.
+///
+/// It is a path and not a prefix. Matching against `src/` rather than `src`
+/// is what makes `sr` unable to narrow to `src/lib.rs` and `lib` unable to
+/// swallow `libs/` — the same distinction `list_package_files` draws, where
+/// it is the whole of what makes the argument name a directory.
+fn subtree<'t>(root: &'t DiffFileEntry, path: &str) -> Option<&'t DiffFileEntry> {
+    if root.path == path {
+        return Some(root);
+    }
+
+    root.children
+        .iter()
+        .flatten()
+        .find(|child| path == child.path || path.starts_with(&format!("{}/", child.path)))
+        .and_then(|child| subtree(child, path))
+}
+
 impl Tool for GetDiffTree {
     const NAME: &'static str = "get_diff_tree";
     const TITLE: &'static str = "Get diff tree";
     const DESCRIPTION: &'static str = "\
         List the files and directories of a comparison you have already made, \
-        a page at a time. Takes the handle `diff_package_versions` gave you \
-        and nothing else. Every entry carries its full path, whether it is a \
-        file or a directory, what happened to it, where it came from if it \
-        moved, and how many lines it gained and lost. A directory's line \
-        counts are the sum of everything under it, so counting both files and \
-        directories counts every change more than once.";
+        a page at a time. Takes the handle `diff_package_versions` gave you, \
+        and `path` to look inside one directory instead of the whole thing. \
+        Every entry carries its full path, whether it is a file or a \
+        directory, what happened to it, where it came from if it moved, and \
+        how many lines it gained and lost. A directory's line counts are the \
+        sum of everything under it, so counting both files and directories \
+        counts every change more than once.";
 
     /// It downloads and compares; it changes nothing anywhere.
     const READ_ONLY: bool = true;
@@ -243,8 +279,18 @@ impl Tool for GetDiffTree {
             inputs.ignore_whitespace,
         );
 
+        // The slash a caller may or may not have written, removed exactly
+        // once. An empty one left over is the whole comparison, which is
+        // what `/` means and what omitting the argument means.
+        let listing = match args.path.as_deref().map(|path| path.trim_end_matches('/')) {
+            Some(path) if !path.is_empty() => subtree(&tree, path),
+            _ => Some(&tree),
+        };
+
         let mut nodes = Vec::new();
-        flatten(&tree, &mut nodes);
+        if let Some(listing) = listing {
+            flatten(listing, &mut nodes);
+        }
 
         page::paginate(nodes, args.limit, args.cursor)
     }
