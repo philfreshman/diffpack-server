@@ -269,6 +269,13 @@ on a loopback port, so what they hold is the request this module writes rather
 than a shape it was told to produce — and because the client is private, they
 live in the module rather than in `tests/`.
 
+A stub cannot settle those three, which is why one test is not a stub. It was
+written from the same reading of `@vercel/blob` as the client, so it agrees
+with the client whether or not the reading was right; only the store can
+disagree. So the four operations also run against it once, `#[ignore]`d the
+way everything in `tests/networked.rs` is, and in the module for the same
+reason the rest are.
+
 The client here is the crate's second, and separate from `src/fetch.rs`'s on
 purpose. That one reaches registries: it GETs, it may follow a redirect only
 onto a registry's hosts, and it names its refusals after the seam that asked.
