@@ -6,6 +6,7 @@
 pub mod cache_key;
 pub mod engine;
 pub mod error;
+pub mod handle;
 pub mod health;
 pub mod mcp;
 pub mod page;
