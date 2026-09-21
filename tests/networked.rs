@@ -15,8 +15,9 @@
 //! it. A registry that moved a path would fail here and nowhere else.
 
 use diffpack_server::archive::Archive;
+use diffpack_server::catalogue::Catalogue;
 use diffpack_server::error::Failure;
-use diffpack_server::registry::Registry;
+use diffpack_server::registry::{Registry, Version};
 
 /// npm, end to end: the URL `resolve_archive_url` answers with is a URL npm
 /// serves, and what comes back is a package. The scoped name is the case
@@ -119,4 +120,127 @@ async fn a_version_no_registry_has_is_a_failure_a_model_can_act_on() {
         }
         other => panic!("a missing version should say so, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Where a package's versions come from
+// ---------------------------------------------------------------------------
+//
+// The fixture suite proves what this server does with a version document.
+// These prove that the documents are the ones these three sources actually
+// serve, and that each still carries a date per version — which is the field
+// the whole order rests on, and the one a source is free to stop sending.
+//
+// None of them asserts a version number as the newest. That was checked by
+// hand at implementation time and written into #18; asserting it here would
+// be a test that fails the next time somebody publishes. What is asserted is
+// what stays true: a release this server has seen is still listed, and the
+// newest is recent.
+
+/// npm, end to end. A scoped name is the case worth a real request: it is one
+/// escaped path segment, and getting that wrong is a 404 for every `@types/*`
+/// package there is.
+#[tokio::test]
+#[ignore = "networked: fetches from registry.npmjs.org"]
+async fn npm_lists_the_versions_this_server_asks_it_for() {
+    let versions = Catalogue::live()
+        .versions(Registry::Npm, "@types/node")
+        .await
+        .expect("npm lists this package");
+
+    assert!(
+        versions.iter().any(|v| v.version == "20.1.0"),
+        "a release this server has an archive fixture for is still published"
+    );
+    assert_recent(&versions, "2025");
+}
+
+/// crates.io, end to end, from the API host rather than the static one.
+#[tokio::test]
+#[ignore = "networked: fetches from crates.io"]
+async fn crates_io_lists_the_versions_this_server_asks_it_for() {
+    let versions = Catalogue::live()
+        .versions(Registry::Crates, "serde")
+        .await
+        .expect("crates.io lists this crate");
+
+    assert!(
+        versions.iter().any(|v| v.version == "1.0.0"),
+        "a release this server has an archive fixture for is still published"
+    );
+    assert_recent(&versions, "2025");
+}
+
+/// PyPI through deps.dev, and the one that would have shipped wrong.
+///
+/// #18 specified that this source lists oldest-first and should be reversed.
+/// It does not: it sorts lexically by version string, so `requests` ends at
+/// 2.9.2 and the reversal announces a 2016 release as the newest. The fixture
+/// suite proves the ordering against a document that cannot change; this
+/// proves the same thing against the source itself, which can.
+#[tokio::test]
+#[ignore = "networked: fetches from api.deps.dev"]
+async fn pypi_versions_are_ordered_by_date_rather_than_by_the_sources_order() {
+    let versions = Catalogue::live()
+        .versions(Registry::PyPi, "requests")
+        .await
+        .expect("deps.dev lists this package");
+
+    assert!(
+        versions.iter().any(|v| v.version == "2.31.0"),
+        "a release this server has an archive fixture for is still published"
+    );
+
+    let newest = versions.first().expect("a published package has versions");
+    assert_ne!(
+        newest.version, "2.9.2",
+        "2.9.2 is the last entry in deps.dev's own order, so this is what \
+         reversing the document produces"
+    );
+    assert_recent(&versions, "2024");
+}
+
+/// A package no registry has, asked for by name rather than by version.
+#[tokio::test]
+#[ignore = "networked: fetches from registry.npmjs.org"]
+async fn a_package_no_registry_has_is_a_failure_a_model_can_act_on() {
+    let failure = Catalogue::live()
+        .versions(Registry::Npm, "diffpack-no-such-package-ever-published")
+        .await
+        .expect_err("npm has no such package");
+
+    match failure {
+        Failure::NoSuchPackage { package, .. } => {
+            assert_eq!(package, "diffpack-no-such-package-ever-published");
+        }
+        other => panic!("a missing package should say so, got {other:?}"),
+    }
+}
+
+/// The newest entry was published in or after `year`, and the list is in the
+/// order this server promises.
+///
+/// The year is a floor rather than a value: a package that has had a release
+/// since then is one whose source is still answering with real dates, and it
+/// does not go stale the way a version number would.
+fn assert_recent(versions: &[Version], year: &str) {
+    let newest = versions.first().expect("a published package has versions");
+    let published_at = newest
+        .published_at
+        .as_deref()
+        .expect("the newest release is one the source dated");
+    assert!(
+        published_at >= year,
+        "the newest release should not predate {year}, got {} at {published_at}",
+        newest.version,
+    );
+
+    let dates: Vec<Option<&str>> = versions.iter().map(|v| v.published_at.as_deref()).collect();
+    let mut sorted = dates.clone();
+    sorted.sort_unstable();
+    sorted.reverse();
+    assert_eq!(
+        dates, sorted,
+        "the answer is newest first, with whatever the source left undated last"
+    );
 }

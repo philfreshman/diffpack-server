@@ -78,7 +78,7 @@ readonly ALLOWED_ROOTS=(crate self super std core alloc futures rmcp serde serde
 # every handler ends in one, `handle` because minting one is how a diff-taking
 # tool answers at all, and `cache_key` because a tool may still need the key a
 # handle names.
-readonly ALLOWED_MODULES=(archive cache_key engine error handle page registry store tools)
+readonly ALLOWED_MODULES=(archive cache_key catalogue engine error handle page registry store tools)
 
 # Names that mean a seam was crossed, wherever they appear.
 readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN'

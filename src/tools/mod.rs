@@ -61,6 +61,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::archive::{Archive, FileMap};
+use crate::catalogue::Catalogue;
 use crate::error::Failure;
 use crate::log::{Line, Sink, Spent};
 use crate::registry::Registry;
@@ -128,6 +129,7 @@ tools! {
     diff_package_versions::DiffPackageVersions,
     get_file_content::GetFileContent,
     list_package_files::ListPackageFiles,
+    list_package_versions::ListPackageVersions,
     resolve_archive_url::ResolveArchiveUrl,
 }
 
@@ -137,20 +139,30 @@ tools! {
 /// handed to every handler, so that shared state is cloned in rather than
 /// rebuilt per call or stored somewhere that has to outlive an invocation.
 ///
-/// One seam today — [`Archive`], which arrived with #11, the first tool that
-/// reads a package's files — and `store` (#20) beside it when there is a
-/// cached result to reach for. [`crate::registry`] and [`crate::page`] are
-/// not among them and do not need to be: both are pure, so a tool reaches
-/// them as modules and there is nothing to hand it. A tool reaching for
-/// anything that is neither here nor a pure module has gone around a seam.
+/// Two seams today — [`Archive`], which arrived with #11, the first tool that
+/// reads a package's files, and [`Catalogue`], which arrived with #18, the
+/// first that reads what a package has released — and `store` (#20) beside
+/// them when there is a cached result to reach for. [`crate::registry`] and
+/// [`crate::page`] are not among them and do not need to be: both are pure,
+/// so a tool reaches them as modules and there is nothing to hand it. A tool
+/// reaching for anything that is neither here nor a pure module has gone
+/// around a seam.
 ///
-/// The archive is behind an [`Arc`] because this is cloned into every
-/// handler and an adapter is not free to rebuild: the live one is the
-/// process's HTTP client and the fixture one is a path it reads from.
+/// Beside the seams it carries what the dispatch needs and a handler never
+/// touches: the [`Sink`] the one line per call is written to, and the
+/// [`Spent`] that call's phases add up in. That is the whole of the
+/// difference between what a `Ctx` is for a handler and what it is for a
+/// request — a handler reaches the seams, and a request is also the line it
+/// leaves behind.
+///
+/// Each seam is behind an [`Arc`] because this is cloned into every handler
+/// and an adapter is not free to rebuild: a live one shares the process's
+/// HTTP client and a fixture one is a path it reads from.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Ctx {
     archive: Arc<Archive>,
+    catalogue: Arc<Catalogue>,
     log: Sink,
 
     /// Where this request's time has gone so far. Behind an [`Arc`] because
@@ -160,21 +172,33 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    /// What production hands a handler: archives from the registries.
+    /// What production hands a handler: both seams reaching the registries.
     pub fn new() -> Self {
-        Self::with_archive(Archive::live())
+        Self {
+            archive: Arc::new(Archive::live()),
+            catalogue: Arc::new(Catalogue::live()),
+            log: Sink::default(),
+            spent: Arc::new(Spent::default()),
+        }
     }
 
     /// The same, with the archive source supplied.
     ///
-    /// The seam the suite drives. `router_with` takes the service factory
-    /// that builds this, so a test reaches the fixture adapter through the
-    /// path production takes rather than around it.
+    /// A seam the suite drives. `router_with` takes the service factory that
+    /// builds this, so a test reaches a fixture adapter through the path
+    /// production takes rather than around it.
     pub fn with_archive(archive: Archive) -> Self {
         Self {
             archive: Arc::new(archive),
-            log: Sink::default(),
-            spent: Arc::new(Spent::default()),
+            ..Self::new()
+        }
+    }
+
+    /// The same, with the version source supplied.
+    pub fn with_catalogue(catalogue: Catalogue) -> Self {
+        Self {
+            catalogue: Arc::new(catalogue),
+            ..Self::new()
         }
     }
 
@@ -198,6 +222,11 @@ impl Ctx {
             archive: &self.archive,
             spent: &self.spent,
         }
+    }
+
+    /// What a package has released.
+    pub fn catalogue(&self) -> &Catalogue {
+        &self.catalogue
     }
 }
 

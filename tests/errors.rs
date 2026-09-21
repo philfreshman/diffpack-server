@@ -171,11 +171,18 @@ fn a_missing_package_is_not_a_missing_version() {
     );
 }
 
-/// Six upstream causes, six remedies: wait and retry, slow down, check the
-/// name, report a broken archive, ask for something smaller, and — the one
-/// with no status behind it — a registry this server could not reach at all.
-/// A single "registry error" string would leave a model guessing which one it
-/// is looking at, so every one of them has to read differently.
+/// Eight upstream causes, eight remedies: wait and retry, slow down, check
+/// the name, report a broken archive, ask for something smaller, a registry
+/// this server could not reach at all — the one with no status behind it —
+/// and the two that are about a package's versions rather than about one
+/// version's files: a document that would not read, and one this server would
+/// not hold. A single "registry error" string would leave a model guessing
+/// which one it is looking at, so every one of them has to read differently.
+///
+/// The pairs are what this is really guarding. `MalformedArchive` and
+/// `UnreadableVersions` both end in a reason, and `TooLarge` and
+/// `VersionsTooLarge` both end in a size and a cap; either pair could
+/// collapse into one sentence without the compiler noticing.
 #[test]
 fn every_upstream_cause_reads_differently() {
     let messages = [
@@ -204,6 +211,17 @@ fn every_upstream_cause_reads_differently() {
         }),
         message_of(Failure::Unreachable {
             registry: "npm".to_owned(),
+        }),
+        message_of(Failure::UnreadableVersions {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+            reason: "what the registry served is not text".to_owned(),
+        }),
+        message_of(Failure::VersionsTooLarge {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+            bytes: 40_000_000,
+            limit: 32 * 1024 * 1024,
         }),
     ];
 

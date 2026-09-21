@@ -47,6 +47,34 @@ fact and not a caller's, so a tool asks where a version's archive is and is
 given either.
 _Avoid_: metadata, index, manifest, JSON
 
+**Catalogue**:
+What a registry says a package's versions are: every published version, with
+the date the registry says it was published and whether it is a preview. It is
+about a Package where a FileMap is about one Version of one, it is read rather
+than extracted, and it is never cached — registry metadata goes stale when
+somebody publishes, and the Budget belongs to Diffs.
+_Avoid_: version list, releases, index, metadata
+
+**Newest first**:
+The order a Catalogue is answered in: most recently published first. Not the
+highest version number — npm's `@types/node` publishes a 22.x patch after a
+26.x release most weeks, and both registries' own listings show the patch on
+top. Not a direction to read a source's document in either: deps.dev sorts
+PyPI's versions lexically, and npm's own order does not survive parsing. The
+date is the only thing that produces it, and a version the source gives no
+date for is listed last rather than dropped or guessed at.
+_Avoid_: latest, sorted, descending, semver order
+
+**Preview**:
+A version that is an alpha, a beta, a release candidate or a development
+build, flagged so that an agent asked for "the last two versions" does not
+diff against one without knowing. Which spellings count is the registry's:
+npm and crates.io are semver, so it is what follows the first `-`; PyPI is PEP
+440, where `1.0rc1` is one and there is no separator at all. Build metadata
+and a post-release are neither.
+_Avoid_: prerelease (as a concept — the field is `prerelease`), unstable,
+beta, draft
+
 **FileMap**:
 An Archive after extraction: every file path in that version mapped to its
 entry, with the archive's top-level directory already stripped. It is what a
