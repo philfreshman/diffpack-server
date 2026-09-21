@@ -21,6 +21,7 @@ directory was created (#40).
 | [0008](0008-no-sessions.md) | No sessions, for any client | done, #6 |
 | [0009](0009-origin-validation-on-host-validation-off.md) | `Origin` validation on, `Host` validation off | done, #6 |
 | [0010](0010-newest-first-is-a-date.md) | Newest first is a date, not a direction | done, #18 |
+| [0011](0011-what-a-registry-publishes-is-its-own-seam.md) | What a registry publishes is its own seam | done, #19 |
 
 A new one goes in at the next number. The bar is the usual three: hard to
 reverse, surprising without the context, and the result of a real trade-off. A

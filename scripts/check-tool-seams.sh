@@ -4,10 +4,11 @@
 #
 # Every module under `src/tools/` is one MCP tool: its definition and its
 # handler, together (ADR 0002). What it may reach for is deliberately small —
-# `archive` to get a package's files, `registry` to know what a registry is,
-# `store` to cache a result, `page` to stay inside the response ceiling,
-# `error` to fail on the right channel. Everything else is somebody else's
-# job.
+# `archive` to get a package's files, `catalogue` to ask what a package has
+# released, `search` to ask which packages a registry has, `registry` to know
+# what a registry is, `store` to cache a result, `page` to stay inside the
+# response ceiling, `error` to fail on the right channel. Everything else is
+# somebody else's job.
 #
 # The rule is worth enforcing rather than documenting because there will be
 # eight of these modules and they will be written months apart. The first one
@@ -80,7 +81,16 @@ readonly ALLOWED_ROOTS=(crate self super std core alloc futures rmcp serde serde
 # every handler ends in one, `handle` because minting one is how a diff-taking
 # tool answers at all, and `cache_key` because a tool may still need the key a
 # handle names.
-readonly ALLOWED_MODULES=(archive cache_key catalogue engine error handle page registry store tools)
+#
+# `search` joined the list with #19, deliberately and for the reason this list
+# exists: a search is a fetch, and the alternative to a seam for it was the
+# first tool module that knew how to make an HTTP request. `fetch`, which is
+# where the client itself lives, is not here and must not be — it is the
+# seams' and a tool that reached it would be the thing this script is for.
+#
+# Nothing checks that this list and the paragraph in `docs/architecture.md`
+# agree, so changing one means changing the other by hand.
+readonly ALLOWED_MODULES=(archive cache_key catalogue engine error handle page registry search store tools)
 
 # Names that mean a seam was crossed, wherever they appear.
 readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN|BLOB_STORE_ID|VERCEL_OIDC_TOKEN'
@@ -171,10 +181,11 @@ if [[ ${#offenders[@]} -gt 0 ]]; then
   cat >&2 <<EOF
 
 A module under ${TOOLS}/ is one tool and nothing else. It gets a package's
-files from \`crate::archive\`, asks \`crate::registry\` what a registry is,
-caches through \`crate::store\`, names a diff with \`crate::handle\`, stays
-inside the response ceiling with \`crate::page\`, and fails through
-\`crate::error\`. The HTTP client and the
+files from \`crate::archive\`, asks \`crate::catalogue\` what a package has
+released and \`crate::search\` which packages a registry has, asks
+\`crate::registry\` what a registry is, caches through \`crate::store\`, names
+a diff with \`crate::handle\`, stays inside the response ceiling with
+\`crate::page\`, and fails through \`crate::error\`. The HTTP client and the
 blob store are those modules' business, not a tool's: eight tools that each
 know how to fetch is eight places to fix a timeout, a retry or a user agent.
 

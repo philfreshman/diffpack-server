@@ -304,20 +304,145 @@ impl Registry {
     /// on crates.io — and a caller that had to know which is which would be
     /// the per-registry `match` this module exists to remove.
     ///
-    /// `None` is PyPI: it has no search API this server has chosen, and #19
-    /// is where that choice gets made and written down. A registry with no
-    /// search source says so, rather than being handed a URL that answers
-    /// nothing.
-    pub fn search(self, query: &str, limit: u32) -> Option<SearchSource> {
+    /// PyPI has no search endpoint at all: its XML-RPC search was withdrawn
+    /// in 2021 and its search page is a web page its own `robots.txt` asks
+    /// automated clients not to fetch. So its source is the index itself —
+    /// every name it publishes, PEP 691's JSON form — and neither the query
+    /// nor the limit can be put to it. Both are applied on this side, in
+    /// [`read_hits`](Self::read_hits). #19 records what the alternatives
+    /// cost.
+    pub fn search(self, query: &str, limit: u32) -> SearchSource {
         let escaped = escape(query);
-        let url = match self {
+        let (url, accept, whole_index) = match self {
+            // The most each source answers, in that source's own units.
+            // Narrowed here rather than sent: npm and crates.io both refuse a
+            // larger one outright, so a caller asking for a thousand hits
+            // would get an error instead of the hundred that exist.
             Self::Npm => {
-                format!("https://registry.npmjs.org/-/v1/search?text={escaped}&size={limit}")
+                let size = limit.min(250);
+                (
+                    format!("https://registry.npmjs.org/-/v1/search?text={escaped}&size={size}"),
+                    "application/json",
+                    false,
+                )
             }
-            Self::Crates => format!("https://crates.io/api/v1/crates?q={escaped}&per_page={limit}"),
-            Self::PyPi => return None,
+            Self::Crates => {
+                let per_page = limit.min(100);
+                (
+                    format!("https://crates.io/api/v1/crates?q={escaped}&per_page={per_page}"),
+                    "application/json",
+                    false,
+                )
+            }
+            // Without this the same URL answers with the web page pip does
+            // not read either.
+            Self::PyPi => (
+                "https://pypi.org/simple/".to_owned(),
+                "application/vnd.pypi.simple.v1+json",
+                true,
+            ),
         };
-        Some(SearchSource { url })
+        SearchSource {
+            url,
+            accept,
+            whole_index,
+        }
+    }
+
+    /// The hits a search answer names, or nothing if it is not an answer
+    /// this registry's source gives.
+    ///
+    /// The other half of [`search`](Self::search), and here for the reason
+    /// that one is: the three sources agree about nothing. npm wraps each
+    /// package in an `objects` array, crates.io answers with `crates`, and
+    /// PyPI's index is every name it publishes and no versions at all. A
+    /// caller that had to tell them apart would be carrying this module's
+    /// job.
+    ///
+    /// `query` is here for the source that does not take one. npm and
+    /// crates.io are asked the query and answer it; PyPI's index is the
+    /// whole list, so the matching happens on this side and the query is
+    /// what it matches against.
+    ///
+    /// `None` rather than an error, as [`choose_archive`](Self::choose_archive)
+    /// does: a body that will not read is the source serving something
+    /// broken, and the caller is the one holding the registry and the query
+    /// that belong in that message.
+    pub fn read_hits(self, body: &str, query: &str, limit: u32) -> Option<Vec<Hit>> {
+        let hits: Vec<Hit> = match self {
+            Self::Npm => {
+                let answer: NpmSearch = serde_json::from_str(body).ok()?;
+                answer
+                    .objects
+                    .into_iter()
+                    .map(|object| Hit {
+                        name: object.package.name,
+                        version: object.package.version,
+                        description: object.package.description,
+                    })
+                    .collect()
+            }
+            Self::Crates => {
+                let answer: CratesSearch = serde_json::from_str(body).ok()?;
+                answer
+                    .crates
+                    .into_iter()
+                    .map(|found| Hit {
+                        name: found.name,
+                        // Three version fields arrive and they do not have to
+                        // agree. This is the one the registry itself would
+                        // hand a caller that named no version, which is what
+                        // npm's `version` is too — `newest_version` would
+                        // answer with a pre-release nobody is meant to
+                        // install yet.
+                        version: found.default_version,
+                        description: found.description,
+                    })
+                    .collect()
+            }
+
+            // The index is every name PyPI publishes, so matching and
+            // ordering happen here rather than at the source. `rank` is the
+            // whole of the relevance this server claims, and it is written
+            // where the reader asking "how does PyPI differ here?" is
+            // already looking.
+            Self::PyPi => {
+                let index: PyPiIndex = serde_json::from_str(body).ok()?;
+                let query = query.to_lowercase();
+
+                let mut matched: Vec<(Rank, &str)> = index
+                    .projects
+                    .iter()
+                    .filter_map(|project| {
+                        rank(&project.name, &query).map(|rank| (rank, project.name.as_str()))
+                    })
+                    .collect();
+
+                // Length before spelling: of two names that both start with
+                // the query, the shorter is the one that is mostly the
+                // query. Alphabetical is the tie-break rather than the rule,
+                // so the order does not depend on the order the index
+                // happened to list them in.
+                matched.sort_by(|(left_rank, left), (right_rank, right)| {
+                    left_rank
+                        .cmp(right_rank)
+                        .then_with(|| left.len().cmp(&right.len()))
+                        .then_with(|| left.cmp(right))
+                });
+
+                matched
+                    .into_iter()
+                    .map(|(_, name)| Hit {
+                        name: name.to_owned(),
+                        // The index carries neither, for any project in it.
+                        version: None,
+                        description: None,
+                    })
+                    .collect()
+            }
+        };
+
+        Some(hits.into_iter().take(limit as usize).collect())
     }
 
     /// Every host this registry is allowed to be reached at.
@@ -341,7 +466,7 @@ impl Registry {
         if let Ok(archive) = self.archive(PROBE, "1.0.0") {
             urls.push(archive.url().to_owned());
         }
-        urls.extend(self.search(PROBE, 1).map(|source| source.url));
+        urls.push(self.search(PROBE, 1).url);
 
         let mut hosts: BTreeSet<String> = urls
             .iter()
@@ -549,11 +674,144 @@ pub struct Version {
     pub prerelease: bool,
 }
 
-/// Where a search for a package is answered.
+/// Where a search for a package is answered, and what to ask it for.
+///
+/// The two travel together because one of the three needs both: the same URL
+/// serves PyPI's index as a web page or as PEP 691's JSON depending on what
+/// the request says it accepts. A caller told only where to go would be
+/// handed HTML and read no hits out of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchSource {
-    /// The document to fetch, query and limit included.
+    /// The document to fetch, query and limit included where the source
+    /// takes them.
     pub url: String,
+    /// What the request says it accepts.
+    pub accept: &'static str,
+    /// Whether this source answers every query with the same document.
+    ///
+    /// True for a source that is an index rather than a reply, which is
+    /// PyPI's and nobody else's: its URL carries no query, so one fetch
+    /// serves every search made against it. What that buys is the difference
+    /// between holding one document and caching results — an answer that
+    /// carried the query in its URL would be a per-query cache, with a
+    /// staleness nobody asked for and no bound on what it holds.
+    pub whole_index: bool,
+}
+
+/// One package a search found.
+///
+/// Two of the three are optional because the sources differ in what they
+/// carry rather than because a registry sometimes forgets: npm and crates.io
+/// answer with a version and a summary, and PyPI's index answers with a name
+/// and nothing else. Absent therefore means the source does not say, and
+/// never that the package has published nothing.
+///
+/// Not the shape a model reads. That is `search_packages`'s own `Hit`, for
+/// the reason [`Version`] is not `list_package_versions`'s: a schema a model
+/// reads is written where the tool is, so this module stays the one that
+/// knows what a registry is rather than also being the one that talks to a
+/// model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hit {
+    /// The package name, as the source spells it.
+    pub name: String,
+
+    /// The version the registry would install for a caller that named none,
+    /// where the source carries one.
+    pub version: Option<String>,
+
+    /// What the package says it is, in the registry's own words, where the
+    /// source carries it.
+    pub description: Option<String>,
+}
+
+/// npm's search answer, cut to the fields a [`Hit`] carries.
+///
+/// A type of this module's rather than the engine's: the engine builds
+/// archive URLs and knows nothing about search, and a `serde_json::Value`
+/// walked by hand here would be the same fields with the spelling mistakes
+/// left to run time.
+#[derive(Deserialize)]
+struct NpmSearch {
+    objects: Vec<NpmObject>,
+}
+
+#[derive(Deserialize)]
+struct NpmObject {
+    package: NpmPackage,
+}
+
+#[derive(Deserialize)]
+struct NpmPackage {
+    name: String,
+    version: Option<String>,
+    description: Option<String>,
+}
+
+/// crates.io's search answer, cut to the fields a [`Hit`] carries.
+#[derive(Deserialize)]
+struct CratesSearch {
+    crates: Vec<CratesCrate>,
+}
+
+#[derive(Deserialize)]
+struct CratesCrate {
+    name: String,
+    default_version: Option<String>,
+    description: Option<String>,
+}
+
+/// PyPI's index: every project it publishes, and for each of them a name.
+///
+/// PEP 691's JSON form. The `_last-serial` each project carries is not read
+/// — it says when a project last changed, which is not a question a search
+/// asks.
+#[derive(Deserialize)]
+struct PyPiIndex {
+    projects: Vec<PyPiProject>,
+}
+
+#[derive(Deserialize)]
+struct PyPiProject {
+    name: String,
+}
+
+/// How well a name answers a query, best first.
+///
+/// Three degrees and no score: a number would invite arithmetic on it, and
+/// what this actually knows about a name is which of three things it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Rank {
+    /// The query is the name.
+    Exact,
+    /// The name starts with the query.
+    Prefix,
+    /// The name has the query somewhere inside it.
+    Contains,
+}
+
+/// How well `name` answers `query`, or nothing if it does not.
+///
+/// `query` arrives already lower-cased, because it is the same query for
+/// every one of nine hundred thousand names and lowering it here would be
+/// lowering it nine hundred thousand times. The name is lowered per call and
+/// that is the cost this leaves standing: parsing PyPI's index and scanning
+/// every name in it measured at about 100 ms on a release build, which is
+/// what a PyPI search costs on a warm instance.
+///
+/// Case is ignored because a half-remembered name is what a search is for;
+/// the name is answered with as the index spells it either way.
+fn rank(name: &str, query: &str) -> Option<Rank> {
+    let name = name.to_lowercase();
+    if name == query {
+        Some(Rank::Exact)
+    } else if name.starts_with(query) {
+        Some(Rank::Prefix)
+    } else if name.contains(query) {
+        Some(Rank::Contains)
+    } else {
+        None
+    }
 }
 
 /// Whether a PEP 440 version is a preview rather than a release.

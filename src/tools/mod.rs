@@ -65,7 +65,8 @@ use crate::archive::{Archive, FileMap};
 use crate::catalogue::Catalogue;
 use crate::error::Failure;
 use crate::log::{Line, Sink, Spent};
-use crate::registry::{Registry, Version};
+use crate::registry::{Hit, Registry, Version};
+use crate::search::Search;
 
 /// Declare the tools, and build the collection and the dispatch from one list.
 ///
@@ -132,6 +133,7 @@ tools! {
     list_package_files::ListPackageFiles,
     list_package_versions::ListPackageVersions,
     resolve_archive_url::ResolveArchiveUrl,
+    search_packages::SearchPackages,
 }
 
 /// What a tool is allowed to reach.
@@ -140,10 +142,12 @@ tools! {
 /// handed to every handler, so that shared state is cloned in rather than
 /// rebuilt per call or stored somewhere that has to outlive an invocation.
 ///
-/// Two seams today — [`Archive`], which arrived with #11, the first tool that
-/// reads a package's files, and [`Catalogue`], which arrived with #18, the
-/// first that reads what a package has released — and `store` (#20) beside
-/// them when there is a cached result to reach for. [`crate::registry`] and
+/// Three seams today — [`Archive`], which arrived with #11, the first tool
+/// that reads a package's files, [`Catalogue`], which arrived with #18, the
+/// first that reads what a package has released, and [`Search`], which
+/// arrived with #19, the first that asks a registry which packages it has —
+/// and `store` (#20) beside them when there is a cached result to reach
+/// for. [`crate::registry`] and
 /// [`crate::page`] are not among them and do not need to be: both are pure,
 /// so a tool reaches them as modules and there is nothing to hand it. A tool
 /// reaching for anything that is neither here nor a pure module has gone
@@ -187,6 +191,7 @@ tools! {
 pub struct Ctx {
     archive: Arc<Archive>,
     catalogue: Arc<Catalogue>,
+    search: Arc<Search>,
     log: Sink,
 
     /// Where this request's time has gone so far. Behind an [`Arc`] because
@@ -196,17 +201,18 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    /// What production hands a handler: both seams reaching the registries.
+    /// What production hands a handler: every seam reaching the registries.
     pub fn new() -> Self {
         Self {
             archive: Arc::new(Archive::live()),
             catalogue: Arc::new(Catalogue::live()),
+            search: Arc::new(Search::live()),
             log: Sink::default(),
             spent: Arc::new(Spent::default()),
         }
     }
 
-    /// What the suite hands a handler: both seams reading from `fixtures`.
+    /// What the suite hands a handler: every seam reading from `fixtures`.
     ///
     /// `fixtures` is the root the checked-in sets live under, and each seam
     /// is given its own directory inside it. One argument rather than one per
@@ -226,6 +232,7 @@ impl Ctx {
         Self {
             archive: Arc::new(Archive::fixture(fixtures.join("archives"))),
             catalogue: Arc::new(Catalogue::fixture(fixtures.join("versions"))),
+            search: Arc::new(Search::fixture(fixtures.join("searches"))),
             log: Sink::default(),
             spent: Arc::new(Spent::default()),
         }
@@ -255,11 +262,12 @@ impl Ctx {
         let Self {
             archive: _,
             catalogue: _,
+            search: _,
             log: _,
             spent: _,
         } = self;
 
-        &["archive", "catalogue"]
+        &["archive", "catalogue", "search"]
     }
 
     /// A version's files.
@@ -281,6 +289,17 @@ impl Ctx {
     /// when the phase is absent.
     pub fn catalogue(&self) -> Timed<'_, Catalogue> {
         self.timed(&self.catalogue)
+    }
+
+    /// Which packages a registry has.
+    ///
+    /// Timed like the other two. A search is one request to a registry and
+    /// sometimes none — the source that is a whole index is held between
+    /// invocations — so the phase is what says which of the two this call
+    /// was, and a search left uncounted would read as a call that waited on
+    /// nobody either way.
+    pub fn search(&self) -> Timed<'_, Search> {
+        self.timed(&self.search)
     }
 
     /// `seam`, with this request's tally attached.
@@ -360,6 +379,21 @@ impl Timed<'_, Catalogue> {
     ) -> Result<Vec<Version>, Failure> {
         self.spent
             .while_fetching(self.seam.versions(registry, package))
+            .await
+    }
+}
+
+impl Timed<'_, Search> {
+    /// The packages on `registry` that answer to `query`, at most `limit` of
+    /// them, and the time it took on the request's tally.
+    pub async fn hits(
+        self,
+        registry: Registry,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<Hit>, Failure> {
+        self.spent
+            .while_fetching(self.seam.hits(registry, query, limit))
             .await
     }
 }

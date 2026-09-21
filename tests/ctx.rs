@@ -94,6 +94,16 @@ fn seams() -> Vec<Seam> {
             fixture_says: json!(4),
             doing: "reading the version fixtures",
         },
+        Seam {
+            name: "search",
+            tool: "search_packages",
+            arguments: json!({ "registry": "npm", "query": "zod" }),
+            reads: "/total",
+            // npm answers this query with hundreds; the fixture set answers
+            // it with two.
+            fixture_says: json!(2),
+            doing: "reading the search fixtures",
+        },
     ]
 }
 

@@ -159,6 +159,32 @@ pub enum Failure {
         limit: u64,
     },
 
+    /// The registry's answer to a search arrived and could not be read.
+    ///
+    /// [`Failure::UnreadableVersions`]'s counterpart for a search, and
+    /// separate because there is no package in it to name: nothing in the
+    /// request was about a package, so the only thing a model can act on is
+    /// which registry answered this way.
+    ///
+    /// `reason` is chosen at the call site rather than threaded out from a
+    /// parser, so there is no library's free text in it. It is redacted on
+    /// the way out regardless.
+    UnreadableSearch { registry: String, reason: String },
+
+    /// The registry's answer to a search is larger than this function will
+    /// read.
+    ///
+    /// Distinct from [`Failure::Unavailable`], which is a registry that
+    /// answered and said no: this one answered and kept answering. The
+    /// status it did that under is `200`, which is why the refusal does not
+    /// carry one — a number that said `200` beside "this server cannot use
+    /// it" would read as a contradiction rather than as a fact.
+    SearchTooLarge {
+        registry: String,
+        bytes: u64,
+        limit: u64,
+    },
+
     /// The version has no file at that path.
     ///
     /// The commonest way an agent arrives here is by writing the archive's
@@ -307,6 +333,8 @@ impl Failure {
             Self::TooLarge { .. } => "too_large",
             Self::UnreadableVersions { .. } => "unreadable_versions",
             Self::VersionsTooLarge { .. } => "versions_too_large",
+            Self::UnreadableSearch { .. } => "unreadable_search",
+            Self::SearchTooLarge { .. } => "search_too_large",
             Self::NoSuchFile { .. } => "no_such_file",
             Self::PathIsDirectory { .. } => "path_is_directory",
             Self::ItemTooLarge { .. } => "item_too_large",
@@ -390,6 +418,24 @@ impl Failure {
             } => format!(
                 "The versions {registry} has published for `{package}` come to {} MB, over \
                  this server's {} MB limit for them. There is no shorter answer to ask for.",
+                bytes / 1_000_000,
+                limit / 1_000_000,
+            ),
+
+            Self::UnreadableSearch { registry, reason } => format!(
+                "{registry} answered that search with something this server could not \
+                 read: {}. Try another registry, or ask for a package by the name you \
+                 already have.",
+                redact(reason),
+            ),
+
+            Self::SearchTooLarge {
+                registry,
+                bytes,
+                limit,
+            } => format!(
+                "{registry}'s answer to that search came to {} MB, over this server's \
+                 {} MB limit for one. Try a narrower query, or another registry.",
                 bytes / 1_000_000,
                 limit / 1_000_000,
             ),

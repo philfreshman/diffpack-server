@@ -16,6 +16,7 @@ src/tools/          one module per tool: definition and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
 src/catalogue/      versions(registry, package) -> Vec<Version>, newest first
+src/search/         hits(registry, query, limit) -> Vec<Hit>, best match first
 src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, cap
 src/store/          DiffStore: get(&DiffKey) / put(entry)                   #21 #22
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
@@ -45,9 +46,11 @@ build otherwise. See [ADR 0007](adr/0007-one-importer-of-the-engine.md).
 `src/tools/` may import the standard library, the MCP and serialisation
 crates, `futures` for the one case where a tool waits on two fetches at once,
 and `crate::{archive, cache_key, catalogue, engine, error, handle, page,
-registry, store}`. It may not name an HTTP client or the blob store: those
-are `fetch`'s and `store`'s business, and eight tools that each know how to
-fetch is eight places to fix a timeout.
+registry, search, store}`. It may not name an HTTP client or the blob store:
+those are `fetch`'s and `store`'s business, and eight tools that each know how
+to fetch is eight places to fix a timeout. Nothing checks that this paragraph
+and the script's list agree, so a module added to one is added to the other by
+hand.
 [`scripts/check-tool-seams.sh`](../scripts/check-tool-seams.sh) fails the build
 otherwise, and its allow-list is the list above.
 
@@ -99,9 +102,9 @@ task of their own.
 
 One file per MCP tool, holding its definition and its handler together, so
 that adding a tool is adding a file and reviewing a tool is reading one. What
-a tool module does is: ask `registry` or `archive` or `store` for what it
-needs, shape an answer through `page`, and fail through `error`. What it does
-not do is fetch, cache or paginate by hand.
+a tool module does is: ask `registry`, `archive`, `catalogue`, `search` or
+`store` for what it needs, shape an answer through `page`, and fail through
+`error`. What it does not do is fetch, cache or paginate by hand.
 
 A tool writes down types rather than JSON. The `Tool` trait's associated
 `Args` and `Output` generate the input schema, the output schema and the
@@ -114,13 +117,14 @@ list of tools, and the generic call path where arguments are validated and
 
 `Ctx` is what one request carries, built once by the service factory
 `router::router_with` takes and cloned into every call. For a handler that
-means the seams it may reach: `Archive` and `Catalogue` today and `DiffStore`
-(#21) beside them, while `registry`, `page` and `handle` are named directly
-because a pure module has nothing to hand over. Beside them it carries what
-the dispatch needs and a handler never touches — the log's `Sink`, and the
-`Spent` that the phases of one call add up in. `Ctx::archive()` and
-`Ctx::catalogue()` hand back their seam with that stopwatch already on it, so
-a wait on a registry cannot go uncounted and a handler's call is unchanged.
+means the seams it may reach: `Archive`, `Catalogue` and `Search` today and
+`DiffStore` (#21) beside them, while `registry`, `page` and `handle` are named
+directly because a pure module has nothing to hand over. Beside them it
+carries what the dispatch needs and a handler never touches — the log's
+`Sink`, and the `Spent` that the phases of one call add up in.
+`Ctx::archive()`, `Ctx::catalogue()` and `Ctx::search()` hand back their seam
+with that stopwatch already on it, so a wait on a registry cannot go uncounted
+and a handler's call is unchanged.
 
 That factory is also the seam the suite drives: a test builds a `Ctx` over the
 fixture adapters and a capturing sink, and reaches both through the path
@@ -164,11 +168,13 @@ of the URLs this module builds — `archive` may fetch what `registry::allows`
 permits and nothing else — so a source added here is reachable the moment it exists,
 rather than through a second list someone has to remember to widen.
 
-It fetches nothing. This module says *where* and *what shape*; `archive` does
-the fetching, and that is what lets every registry fact be tested with no
-network at all. The `diffpack://registries` resource (#16) is a projection of
-this module rather than a hand-written copy of it, and Go support (#28) is a
-value added here rather than an edit in five places. See [ADR
+It fetches nothing. This module says *where* and *what shape*; `archive`,
+`catalogue` and `search` do the fetching, and that is what lets every registry
+fact be tested with no network at all — the URL npm is asked for, the media
+type PyPI's index needs and the order a query ranks its names in are all
+asserted without a socket. The `diffpack://registries` resource (#16) is a
+projection of this module rather than a hand-written copy of it, and Go
+support (#28) is a value added here rather than an edit in five places. See [ADR
 0004](adr/0004-one-registry-module.md).
 
 ### `src/archive/` — a version's files
@@ -224,6 +230,32 @@ it is listed last rather than dropped.
 Nothing here is cached. The 256 MB budget is for diff results, and a package's
 version list goes stale the moment somebody publishes.
 
+### `src/search/` — which packages a registry has
+
+`hits(registry, query, limit) -> Vec<Hit>`, best match first. The third seam
+over the network, shaped like the other two: one interface, two adapters, and
+a fixture set under `fixtures/searches/` keyed by the URL `registry` builds —
+so an offline test is a test of where each registry is asked as well as of
+what comes back, and the set's `null` entry is how the suite reaches the path
+a source being down takes.
+
+It is beside `catalogue` rather than inside it because the two answer
+different questions and fail in opposite directions: a `404` on a version
+document is a package that does not exist, and a `404` on a search source is
+the source itself having moved, since nothing in that URL named a package. See
+[ADR 0011](adr/0011-what-a-registry-publishes-is-its-own-seam.md).
+
+Where a search is asked, what to ask it for, and how to read the answer are
+`registry`'s. What is this module's is the request, the size cap, and the one
+policy a search needs that a catalogue does not: PyPI's source is the index of
+everything it publishes rather than a reply to a query, so a warm instance
+holds the document it already fetched for the ten minutes PyPI's own
+`cache-control` gives it — a constant in that module rather than a header read
+back off each answer, so a `max-age` PyPI changed is a change made here. That
+is a document, not an answer — every
+query is matched against it afresh — so no search result is cached anywhere
+and nothing here goes near the blob store.
+
 ### `src/fetch.rs` — the registries' HTTP client
 
 Every request this server makes to a registry. It was `archive`'s until
@@ -240,11 +272,13 @@ lead, what a `404` means to the seam that asked — and none of them is a rule
 about this project's own blob store, which is why `src/store/` has a client of
 its own and this module has no verb but `GET`.
 
-A caller passes the two refusals that differ between seams rather than this
-module guessing them. A `404` is a missing *version* to `archive` and a
-missing *package* to `catalogue`, and a body over the cap is named after
-whichever of the two was being read — an archive has a smaller thing to ask
-for instead and a version list does not.
+A caller passes the refusals that differ between seams rather than this module
+guessing them, and the one header that differs. A `404` is a missing *version*
+to `archive`, a missing *package* to `catalogue` and a broken source to
+`search`, and a body over the cap is named after whichever was being read — an
+archive has a smaller thing to ask for instead and a version list does not.
+The header is `Accept`, which only PyPI's index needs: the same URL serves a
+web page unless the request asks for PEP 691's JSON.
 
 ### `src/store/` — cached diff results
 

@@ -59,17 +59,50 @@ const USER_AGENT: &str = concat!(
 /// What a request is for, in the words its failures need.
 ///
 /// Carried rather than derived because this module cannot tell an archive
-/// from a listing by looking at a URL, and the two fail differently. The two
-/// closures are the caller's answers to the only two questions that differ:
-/// what a registry saying "no such thing" means, and what to call a body this
-/// server will not hold.
+/// from a listing by looking at a URL, and they differ in what they ask for
+/// and in how they fail. Every field below is a question this module has no
+/// way to answer for a caller: what the request will take back, whether it
+/// may be answered compressed, what a registry saying "no such thing" means,
+/// and what to call a body this server will not hold.
 pub struct About<'a> {
     /// The registry being asked, for the messages that name it.
     pub registry: Registry,
 
-    /// What to return when the registry says there is no such thing —
-    /// a `404`, a `403` or a `410`.
-    pub missing: &'a (dyn Fn() -> Failure + Send + Sync),
+    /// What the request says it will take back, where the source serves more
+    /// than one thing at the same URL.
+    ///
+    /// `None` is every source that serves one representation and needs no
+    /// persuading. PyPI's index is the other kind: the same URL answers with
+    /// a web page unless the request asks for PEP 691's JSON, so a caller
+    /// that said nothing would be handed HTML and read nothing out of it.
+    /// Which media type that is belongs to [`crate::registry`], which is the
+    /// module that knows what a registry is.
+    pub accept: Option<&'static str>,
+
+    /// Whether this request may be answered compressed.
+    ///
+    /// Off for everyone but the caller that needs it, and asked for rather
+    /// than assumed because it is a trade rather than a free saving. A body
+    /// decoded on the way in arrives with no `Content-Length` — the client
+    /// strips it along with the `Content-Encoding` — so the cap's cheap half,
+    /// refusing a body before a byte of it is read, stops applying to that
+    /// request. What is left is the running total, which still stops it at
+    /// the limit rather than after it.
+    ///
+    /// For an archive that trade is all cost: it arrives compressed already,
+    /// and it is the body most worth refusing unread. For PyPI's index it is
+    /// the difference between a source that answers and one that does not —
+    /// 44 MB in 25 s against a 30 s timeout, or 9.7 MB in 4.4 s.
+    pub compressed: bool,
+
+    /// What to return when the registry says there is no such thing, given
+    /// the status it said it with — a `404`, a `403` or a `410`.
+    ///
+    /// The status is passed rather than assumed because the seams differ in
+    /// whether they use it: a missing version reads the same whichever of
+    /// the three it was, and a search source answering any of them is the
+    /// source itself being unwell, which is a message that names the number.
+    pub missing: &'a (dyn Fn(u16) -> Failure + Send + Sync),
 
     /// What to return when the body is larger than `limit`, given its weight.
     pub too_large: &'a (dyn Fn(u64) -> Failure + Send + Sync),
@@ -80,11 +113,23 @@ pub async fn bytes(url: &str, limit: u64, about: &About<'_>) -> Result<Vec<u8>, 
     let client = client()?;
     let name = about.registry.name();
 
+    let mut request = client.get(url);
+    if let Some(accept) = about.accept {
+        request = request.header(reqwest::header::ACCEPT, accept);
+    }
+    if !about.compressed {
+        // Said out loud rather than left off. The client negotiates `gzip`
+        // for any request that does not mention an encoding, so silence here
+        // would be every caller opted in — which is the opposite of what the
+        // field above is for.
+        request = request.header(reqwest::header::ACCEPT_ENCODING, "identity");
+    }
+
     // Two budgets, and they are not the same one. The client's timeout
     // covers a request that stalls; `within_budget` covers the whole
     // exchange, so that a body arriving one slow byte at a time still
     // ends inside the time the function has to answer in.
-    let response = error::within_budget(name, client.get(url).send())
+    let response = error::within_budget(name, request.send())
         .await?
         .map_err(|cause| failed(cause, name))?;
 
@@ -107,7 +152,9 @@ fn success(response: Response, about: &About<'_>) -> Result<Response, Failure> {
     Err(match status {
         // What a registry answers for something that is not there. Which
         // "something" is the caller's to say — see the module header.
-        StatusCode::NOT_FOUND | StatusCode::FORBIDDEN | StatusCode::GONE => (about.missing)(),
+        StatusCode::NOT_FOUND | StatusCode::FORBIDDEN | StatusCode::GONE => {
+            (about.missing)(status.as_u16())
+        }
 
         StatusCode::TOO_MANY_REQUESTS => Failure::RateLimited {
             registry: about.registry.name().to_owned(),
@@ -143,10 +190,11 @@ fn retry_after(response: &Response) -> Option<std::time::Duration> {
 ///
 /// The declared length is checked before a byte of the body is read, and the
 /// running total is checked as each chunk arrives — a body with no
-/// `Content-Length`, or one whose header lies, is stopped at the limit rather
-/// than after it. The difference matters: the refusal exists so that a
-/// package name in a tool argument cannot fill this function's memory, and a
-/// cap applied after buffering would have already spent it.
+/// `Content-Length`, one whose header lies, or one that was decoded on the
+/// way in, is stopped at the limit rather than after it. The difference
+/// matters: the refusal exists so that a package name in a tool argument
+/// cannot fill this function's memory, and a cap applied after buffering
+/// would have already spent it.
 async fn read_within(
     mut response: Response,
     limit: u64,

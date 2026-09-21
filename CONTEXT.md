@@ -86,6 +86,35 @@ rendering of a binary file and not the file. Nothing downstream can undo
 that, which is why a tool returning content says whether it happened.
 _Avoid_: tree, file list, contents, extracted archive
 
+**Index**:
+The document a registry publishes naming every package it has — PyPI's,
+today, and nobody else's. It is fetched and *searched*: a query is matched
+against it here rather than sent, because PyPI has no search endpoint to send
+one to. Distinct from a Listing, which is about one version of one package;
+from a Catalogue, which is one package's versions and is what "index" is a
+banned synonym for there; and from the DiffStore's Entries, which are this
+server's own.
+_Avoid_: simple index, package list, catalogue
+
+**Hit**:
+One package a Search found: the name to pass to any other tool, and beside
+it the Version the Registry would install for a caller that named none, and
+the package's own description — *where that registry carries them*. npm and
+crates.io carry all three; PyPI's Index carries a name and nothing else, so
+a PyPI hit has a name and nothing else. An absent version is a registry that
+does not say here, never a package that has published nothing.
+_Avoid_: result, match, search result, package (unqualified)
+
+**Search**:
+Which packages a Registry has that answer to a query, and the interface the
+rest of the crate has to that question: a query and a Limit in, Hits out. It
+is the Catalogue's sibling and not the Catalogue — that one is asked about a
+package a caller can already name, and this is what a caller uses when it
+cannot — and neither downloads anything. A tool asks it a question rather
+than learning that one registry answers with a ranked reply and another with
+its whole Index.
+_Avoid_: lookup, find, query (that is the argument), catalogue, index
+
 **Name rule**:
 What one registry's spelling of a package name costs a caller, in a sentence
 that can be shown to it: npm's scopes, crates.io's `-` against `_`, PyPI's
@@ -201,13 +230,13 @@ _Avoid_: command, endpoint, action, handler (alone)
 
 **Ctx**:
 What a Tool's handler is allowed to reach: the seams that carry state a
-handler should not build — `archive`, `catalogue`, the DiffStore — built once
-per request and handed to every call. A pure module is not in it and does not
-need to be: a handler names `registry`, `page` and `handle` directly. Anything
-a handler needs that is neither in Ctx nor a pure module is a seam it has gone
-around. It is built whole or not at all: every seam live, or every seam
-reading from the fixture sets. There is no half of one, because the half that
-was not asked for would have to be live.
+handler should not build — `archive`, `catalogue`, `search`, the DiffStore —
+built once per request and handed to every call. A pure module is not in it
+and does not need to be: a handler names `registry`, `page` and `handle`
+directly. Anything a handler needs that is neither in Ctx nor a pure module
+is a seam it has gone around. It is built whole or not at all: every seam
+live, or every seam reading from the fixture sets. There is no half of one,
+because the half that was not asked for would have to be live.
 _Avoid_: state, globals, services, dependencies
 
 **Hints**:
@@ -315,11 +344,11 @@ _Avoid_: log, log entry, event, trace, record
 **Phase**:
 One part of a call that is timed by itself. Two of them today: the whole
 call, and the part of it spent waiting for a Registry. Every seam that leaves
-this process counts towards the second — an Archive and a Catalogue alike —
-because the question is the wait and not which document was waited for. A
-Phase that did not happen is absent from a Line rather than zero, because
-zero is a measurement and a percentile taken over one describes neither
-population.
+this process counts towards the second — an Archive, a Catalogue and a Search
+alike — because the question is the wait and not which document was waited
+for. A Phase that did not happen is absent from a Line rather than zero,
+because zero is a measurement and a percentile taken over one describes
+neither population.
 
 Where two fetches overlap — a Diff asks for both versions at once — the
 Phase is the window they span and not the sum of their durations. It answers

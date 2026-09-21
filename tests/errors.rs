@@ -228,6 +228,15 @@ fn every_upstream_cause_reads_differently() {
             bytes: 40_000_000,
             limit: 32 * 1024 * 1024,
         }),
+        message_of(Failure::UnreadableSearch {
+            registry: "npm".to_owned(),
+            reason: "what the registry served is not text".to_owned(),
+        }),
+        message_of(Failure::SearchTooLarge {
+            registry: "PyPI".to_owned(),
+            bytes: 70_000_000,
+            limit: 64 * 1024 * 1024,
+        }),
     ];
 
     let mut seen: Vec<&str> = messages.iter().map(String::as_str).collect();
@@ -312,6 +321,17 @@ fn every_cause_a_line_can_carry_names_one_failure() {
             package: "zod".to_owned(),
             bytes: 300_000_000,
             limit: 8 * 1024 * 1024,
+        }
+        .kind(),
+        Failure::UnreadableSearch {
+            registry: "npm".to_owned(),
+            reason: "what the registry served is not text".to_owned(),
+        }
+        .kind(),
+        Failure::SearchTooLarge {
+            registry: "PyPI".to_owned(),
+            bytes: 300_000_000,
+            limit: 64 * 1024 * 1024,
         }
         .kind(),
         Failure::NoSuchFile {

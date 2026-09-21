@@ -54,10 +54,29 @@ futures = { version = "0.3.34", default-features = false, features = ["std"] }
 #
 # Default features off, because what this server does is ask a few known hosts
 # for bytes — no cookies, no JSON (the store's two response shapes go through
-# `serde_json` like everything else here), no multipart, no proxy discovery, no
-# compression negotiation (an archive is already compressed, and a body decoded
-# on the way in would be a body whose size cap was applied to the wrong
-# number).
+# `serde_json` like everything else here), no multipart, no proxy discovery.
+#
+# `gzip` is the one exception and it arrived with #19. This note used to say
+# no compression negotiation at all, on the grounds that an archive is
+# compressed already — true, and it stopped being the whole story when the
+# search source chosen for PyPI turned out to be the index it publishes:
+# 44 MB raw and 25 s against a 30 s upstream timeout, against 9.7 MB and 4.4 s
+# compressed.
+#
+# Switching the feature on would have negotiated it for every request the
+# client makes, because that is what the feature does to a request that names
+# no encoding. So `src/fetch.rs` names one — `identity` — for every caller but
+# the one that asked: an archive request is the request it was apart from that
+# header, which is a header it did not send before. The reason to spell it out
+# rather than leave it off is the size cap: the running total is counted on
+# decoded chunks either way, but the cheap half, refusing a body on its
+# declared length before reading one, does not survive a body the client
+# decodes, and an archive is the body most worth refusing unread.
+#
+# `src/store/` builds a client of its own and says nothing, so its requests to
+# the blob store negotiate `gzip` too. Nothing there reads a declared length,
+# so there is no cap to lose — but those requests changed as well, and this is
+# the note that says which ones did.
 #
 # `rustls-no-provider` rather than `rustls`: the default provider is
 # `aws-lc-rs`, which wants a C toolchain at build time and carries the OpenSSL
@@ -65,7 +84,7 @@ futures = { version = "0.3.34", default-features = false, features = ["std"] }
 # process-wide and only the first caller wins, so `src/store/` makes the same
 # call and neither has to know which ran first — which is why `rustls` is
 # named below as a dependency of ours rather than only of reqwest's.
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["gzip", "rustls-no-provider"] }
 # The official MCP SDK, and the reason this crate does not hand-roll a
 # protocol. It implements revision `2026-07-28` while still answering clients
 # on `2025-11-25` and earlier, which is what makes one endpoint serve every

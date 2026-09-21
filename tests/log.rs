@@ -289,6 +289,36 @@ async fn a_call_that_only_read_a_catalogue_is_timed_as_a_wait_too() {
     );
 }
 
+/// A search is a wait on a registry like any other.
+///
+/// The seam it goes through is the third, and the one whose reading is least
+/// obvious: a search of PyPI is answered from a document a warm instance
+/// already holds, so it is the seam most likely to be wired without a
+/// stopwatch on the grounds that it sometimes does not fetch. Sometimes is
+/// the point — a phase that is absent says the call never left the process,
+/// and here it did.
+#[tokio::test]
+async fn a_call_that_searched_a_registry_is_timed_as_a_wait_too() {
+    let searched = Capture::new();
+    call(
+        &searched,
+        "search_packages",
+        json!({ "registry": "npm", "query": "zod" }),
+    )
+    .await;
+
+    let line = one(&searched);
+    let fetch = line["ms"]["fetch"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("a call that searched a registry waited on it, got {line}"));
+    let total = line["ms"]["total"].as_f64().expect("a call is timed");
+
+    assert!(
+        fetch <= total,
+        "the wait is part of the call, so it cannot outlast it: {fetch} of {total}"
+    );
+}
+
 /// The tool that reads two archives still leaves one line, not two.
 ///
 /// A guard rather than a cycle of its own: `diff_package_versions` is the
