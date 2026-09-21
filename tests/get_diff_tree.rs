@@ -38,8 +38,11 @@ use std::collections::HashMap;
 
 use axum::body::Body;
 use axum::http::Request;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use diffpack_server::handle::{DiffHandle, Inputs};
 use diffpack_server::mcp::Diffpack;
+use diffpack_server::page;
 use diffpack_server::registry::Registry;
 use diffpack_server::router;
 use diffpack_server::tools::Ctx;
@@ -695,8 +698,235 @@ async fn a_directory_a_rename_emptied_is_not_in_the_tree_at_all() {
 }
 
 // ---------------------------------------------------------------------------
+// The ceiling
+// ---------------------------------------------------------------------------
+
+/// No answer to the largest pair here is one the platform would refuse.
+///
+/// Vercel drops a response over 4.5 MB rather than shortening it, so the
+/// measurement is on the body a client received and not on the structure
+/// inside it. `many-files` against itself is the biggest comparison this set
+/// can produce — two and a half thousand files, every one of them a node —
+/// and it is asked for at the largest page a caller can name.
+///
+/// What this does not prove is that the cut itself is correct: the fixture
+/// is nowhere near the ceiling, because an archive that was would have to be
+/// checked in. `tests/page.rs` holds the cut against a generated sequence,
+/// and what is asserted here is that this tool's answers go through it.
+#[tokio::test]
+async fn no_page_of_the_largest_pair_here_is_over_the_response_ceiling() {
+    let pages = pages(json!({
+        "handle": handle("many-files", "1.0.0", "1.0.0"),
+        "limit": 1_000,
+    }))
+    .await;
+
+    assert!(
+        pages.len() > 1,
+        "the largest pair here should take more than one page at the largest \
+         limit, or this proves nothing about a walk"
+    );
+
+    for (body, result) in &pages {
+        assert!(
+            body.len() < page::RESPONSE_CEILING,
+            "a page of {} nodes came back as {} bytes, and the platform \
+             refuses anything over {}",
+            result["structuredContent"]["items"]
+                .as_array()
+                .map_or(0, Vec::len),
+            body.len(),
+            page::RESPONSE_CEILING,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The handle, and the comparison behind it
+// ---------------------------------------------------------------------------
+
+/// A handle nothing has computed is answered, not refused.
+///
+/// This is the eviction case, and it is the only case there is today: each
+/// request here is served by a server built for it, with no cache behind it
+/// and nothing kept between calls, so the handle below names a comparison
+/// this process has never made. ADR 0006 is the reason it can be answered at
+/// all — the inputs travel with the `diff_id`, so a miss costs a
+/// recomputation instead of an apology.
+#[tokio::test]
+async fn a_handle_nothing_has_computed_before_is_answered_anyway() {
+    let result = call(TOOL, json!({ "handle": diffable() })).await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "a comparison nobody has made yet is one this server can make: got {result}"
+    );
+    assert_eq!(
+        result["structuredContent"]["total"],
+        json!(6),
+        "got {result}"
+    );
+}
+
+/// And the recomputed answer is the bytes the first one was.
+///
+/// The property that makes eviction invisible. If a walk after a miss
+/// differed from a walk before it — in an order, in a count, in a cursor —
+/// then an agent that asked twice would see a comparison change under it,
+/// and the cache would be part of the answer rather than an optimisation.
+///
+/// The whole walk, and the bytes rather than the parsed structure: two
+/// answers that differ only in the order of their fields are two answers.
+#[tokio::test]
+async fn the_same_handle_answers_with_the_same_bytes_twice() {
+    let arguments = json!({ "handle": diffable(), "limit": 2 });
+
+    let first: Vec<String> = pages(arguments.clone())
+        .await
+        .into_iter()
+        .map(|(body, _)| body)
+        .collect();
+    let again: Vec<String> = pages(arguments)
+        .await
+        .into_iter()
+        .map(|(body, _)| body)
+        .collect();
+
+    assert_eq!(
+        first, again,
+        "the same handle, recomputed, should answer byte for byte as it did \
+         before"
+    );
+}
+
+/// A string that is not a handle never reaches the handler.
+///
+/// `-32602`, the protocol channel: a handle is minted and passed back, so
+/// one that does not decode is something a client built and a model cannot
+/// act on. The handler has no check of its own — the argument is read before
+/// it runs — which is exactly what this asserts.
+#[tokio::test]
+async fn a_handle_that_is_not_one_is_a_protocol_error() {
+    let answer = post(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": TOOL,
+            "arguments": { "handle": "not-a-handle" },
+            "_meta": meta(),
+        },
+    }))
+    .await;
+
+    assert_eq!(answer["error"]["code"], -32602, "got {answer}");
+    assert!(
+        answer["result"]["isError"].is_null(),
+        "a call that never ran is not a tool that failed, got {answer}"
+    );
+}
+
+/// Nor does one whose two halves disagree.
+///
+/// The edited handle below names one comparison and describes another, which
+/// is what an agent does when it changes the package and keeps the
+/// identifier because the identifier looks like the opaque part. Answering it
+/// would mean answering confidently about a comparison nobody asked for.
+#[tokio::test]
+async fn a_handle_whose_halves_disagree_is_a_protocol_error() {
+    let answer = post(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": TOOL,
+            "arguments": { "handle": edited(&diffable(), "package", json!("elsewhere")) },
+            "_meta": meta(),
+        },
+    }))
+    .await;
+
+    assert_eq!(answer["error"]["code"], -32602, "got {answer}");
+}
+
+/// A version the registry does not have is an error the model sees.
+///
+/// A result carrying `isError` rather than a JSON-RPC error: the handle
+/// decoded and the tool ran, and what failed is a fetch the model can correct
+/// by comparing versions that exist. It names the package and the version,
+/// because "not found" with nothing in it sends an agent to guess which half
+/// of the comparison was wrong.
+#[tokio::test]
+async fn a_version_the_registry_does_not_have_names_what_was_not_found() {
+    let result = call(
+        TOOL,
+        json!({ "handle": handle("diffable", "1.0.0", "9.9.9") }),
+    )
+    .await;
+
+    assert_eq!(result["isError"], json!(true), "got {result}");
+
+    let said = result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a tool error carries text a model reads, got {result}"));
+    assert!(
+        said.contains("9.9.9") && said.contains("diffable"),
+        "the refusal names what was not found: got {said}"
+    );
+}
+
+/// The same for a package that is not there at all.
+#[tokio::test]
+async fn a_package_the_registry_does_not_have_names_what_was_not_found() {
+    let handle = DiffHandle::mint(Inputs {
+        registry: Registry::Crates,
+        package: "not-a-real-crate".to_owned(),
+        from_version: "1.0.0".to_owned(),
+        to_version: "1.0.0".to_owned(),
+        similarity_threshold: 0.75,
+        ignore_whitespace: false,
+    })
+    .encode();
+
+    let result = call(TOOL, json!({ "handle": handle })).await;
+
+    assert_eq!(result["isError"], json!(true), "got {result}");
+
+    let said = result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a tool error carries text a model reads, got {result}"));
+    assert!(
+        said.contains("not-a-real-crate"),
+        "the refusal names the package rather than only saying no: got {said}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// `handle` with one field of its payload replaced.
+///
+/// What an agent does to a handle it can read part of: change the thing it is
+/// asking about and leave the identifier, which looks like an internal
+/// detail. The result is a handle whose `diff_id` no longer names the inputs
+/// beside it — and the encoding is spelled out here rather than taken from
+/// the crate, so this is a forgery a client could send rather than one this
+/// server helped build.
+fn edited(handle: &str, field: &str, value: Value) -> String {
+    let encoded = handle
+        .strip_prefix("d1:")
+        .expect("a handle this server minted");
+    let payload = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .expect("a handle's payload is base64url");
+    let mut payload: Value = serde_json::from_slice(&payload).expect("a handle's payload is JSON");
+
+    payload[field] = value;
+
+    format!("d1:{}", URL_SAFE_NO_PAD.encode(payload.to_string()))
+}
 
 /// A handle for `diffable` 1.0.0 → 2.0.0, minted rather than fetched.
 ///
@@ -757,7 +987,27 @@ fn paths(nodes: &[Value]) -> Vec<&str> {
 /// what came back, so a walk that stopped early fails here rather than in
 /// whichever assertion happened to read the last node.
 async fn walk(arguments: Value) -> Vec<Value> {
-    let mut collected = Vec::new();
+    pages(arguments)
+        .await
+        .iter()
+        .flat_map(|(_, result)| {
+            result["structuredContent"]["items"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// The same walk, page by page, with the bytes each one arrived as.
+///
+/// The body beside the parsed result rather than instead of it, because two
+/// tests ask about the bytes themselves: what the response ceiling bounds is
+/// the frame this server wrote, and "the same answer twice" is a claim about
+/// that frame rather than about a structure two parses happen to agree on.
+async fn pages(arguments: Value) -> Vec<(String, Value)> {
+    let mut collected: Vec<(String, Value)> = Vec::new();
+    let mut seen = 0;
     let mut cursor: Option<String> = None;
 
     loop {
@@ -766,22 +1016,35 @@ async fn walk(arguments: Value) -> Vec<Value> {
             asked["cursor"] = json!(cursor);
         }
 
-        let result = call(TOOL, asked).await;
-        let page = &result["structuredContent"];
+        let (body, answer) = respond(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": TOOL, "arguments": asked, "_meta": meta() },
+        }))
+        .await;
 
-        let items = page["items"]
+        if let Some(error) = answer.get("error") {
+            panic!("expected a result, got JSON-RPC error {error}");
+        }
+
+        let result = answer["result"].clone();
+        let page = result["structuredContent"].clone();
+
+        seen += page["items"]
             .as_array()
-            .unwrap_or_else(|| panic!("a page carries items, got {result}"));
-        collected.extend(items.iter().cloned());
+            .unwrap_or_else(|| panic!("a page carries items, got {result}"))
+            .len();
+        collected.push((body, result));
 
         match page["nextCursor"].as_str() {
             Some(next) => cursor = Some(next.to_owned()),
             None => {
                 assert_eq!(
                     page["total"],
-                    json!(collected.len()),
+                    json!(seen),
                     "a walk that followed every cursor should have every node \
-                     the last page said there were: got {result}"
+                     the last page said there were: got {page}"
                 );
                 return collected;
             }
@@ -851,12 +1114,13 @@ async fn post(body: Value) -> Value {
     answer
 }
 
-/// The same request, with the bytes the client received beside the answer.
+/// The same request, with the body the client received beside the answer.
 ///
-/// The length is what the response ceiling is about, and it is not visible
-/// from a parsed body: what Vercel refuses is the frame this server wrote,
-/// not the structure inside it.
-async fn respond(body: Value) -> (usize, Value) {
+/// The bytes rather than the structure, because that is what the response
+/// ceiling bounds and what "the same answer twice" is a claim about: what
+/// Vercel refuses is the frame this server wrote, and two frames that parse
+/// alike can still differ.
+async fn respond(body: Value) -> (String, Value) {
     let method = body["method"].as_str().expect("a call names a method");
 
     let mut request = Request::builder()
@@ -901,5 +1165,5 @@ async fn respond(body: Value) -> (usize, Value) {
         )
     });
 
-    (bytes.len(), answer)
+    (String::from_utf8_lossy(&bytes).into_owned(), answer)
 }
