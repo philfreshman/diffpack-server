@@ -83,6 +83,7 @@ two are `./scripts/checks.sh seams`; the third is `cargo test`.
 ```bash
 cargo test                              # the suite
 cargo test --test networked -- --ignored # the same, against the real registries
+cargo test --lib -- --ignored store::blob # the same, against the real blob store
 cargo fmt --all --check                 # formatting, no compile needed
 cargo clippy --all-targets -- -D warnings
 cargo build --release                   # produces the `mcp` binary
@@ -95,14 +96,18 @@ container cannot drift apart silently. CI runs all of them on every pull
 request into `development` and into `main`.
 
 `tests/networked.rs` is the exception and is `#[ignore]`d for it: it fetches
-real archives from npm, crates.io and PyPI. The suite is otherwise offline —
-`Ctx::fixture` gives every seam an adapter that reads the checked-in sets
-under `fixtures/`, and there is no way to build a context that has one of
-them and not the others — so a registry having a bad afternoon cannot fail a
-pull request. What the networked tests are *for* is the half that cannot be
+real archives from npm, crates.io and PyPI. So is the one test in
+`src/store/blob.rs` that writes to the blob store, which is in the module
+rather than beside the others because the client it drives is private to
+`src/store/`. The suite is otherwise offline — `Ctx::fixture` gives every
+seam an adapter that reads the checked-in sets under `fixtures/`, and there is
+no way to build a context that has one of them and not the others — so a
+registry having a bad afternoon cannot fail a pull request. What the networked
+tests are *for* is the half that cannot be
 checked any other way: that the URLs this server builds are the URLs those
-three registries actually serve. Worth running when `src/registry.rs`,
-`src/archive/` or `src/catalogue/` changes.
+three registries actually serve, and that the requests `src/store/` writes are
+the ones Vercel Blob answers. Worth running when `src/registry.rs`,
+`src/archive/`, `src/catalogue/` or `src/store/` changes.
 
 ## The checks that block a commit
 

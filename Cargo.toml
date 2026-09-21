@@ -45,18 +45,26 @@ diffpack-engine = { git = "https://github.com/philfreshman/diffpack-engine.git",
 # That second use is why `scripts/check-tool-seams.sh` names this crate on
 # the list a tool may import.
 futures = { version = "0.3.34", default-features = false, features = ["std"] }
-# The HTTP client behind `src/archive/`, and the only one in this crate: a
-# tool never names it, and `scripts/check-tool-seams.sh` fails the build if one
-# does. Default features off, because what this server does is GET three known
-# hosts and read the bodies as bytes — no cookies, no JSON, no multipart, no
-# proxy discovery, no compression negotiation (an archive is already
-# compressed, and a body decoded on the way in would be a body whose size cap
-# was applied to the wrong number).
+# The HTTP client behind `src/fetch.rs` and `src/store/`, and named by nothing
+# else: a tool never names it, and `scripts/check-tool-seams.sh` fails the
+# build if one does. Those two build a client each rather than sharing one,
+# because `fetch`'s policy is a set of rules about a registry's servers — which
+# hosts, which redirects, what a `404` means — and none of them is a rule about
+# a blob store this project owns.
+#
+# Default features off, because what this server does is ask a few known hosts
+# for bytes — no cookies, no JSON (the store's two response shapes go through
+# `serde_json` like everything else here), no multipart, no proxy discovery, no
+# compression negotiation (an archive is already compressed, and a body decoded
+# on the way in would be a body whose size cap was applied to the wrong
+# number).
 #
 # `rustls-no-provider` rather than `rustls`: the default provider is
 # `aws-lc-rs`, which wants a C toolchain at build time and carries the OpenSSL
-# license. `src/archive/live.rs` installs `ring` instead, which is why `rustls`
-# is named below as a dependency of ours rather than only of reqwest's.
+# license. `src/fetch.rs` installs `ring` instead — the install is
+# process-wide and only the first caller wins, so `src/store/` makes the same
+# call and neither has to know which ran first — which is why `rustls` is
+# named below as a dependency of ours rather than only of reqwest's.
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
 # The official MCP SDK, and the reason this crate does not hand-roll a
 # protocol. It implements revision `2026-07-28` while still answering clients
@@ -67,13 +75,14 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no
 # tower `Service`, so it composes with axum directly. No client features: this
 # crate is a server.
 rmcp = { version = "3.4.0", features = ["server", "transport-streamable-http-server"] }
-# Named here for one line of code: the provider install in
-# `src/archive/live.rs`. Which cryptography rustls uses has no default and is
-# the depending crate's choice, so it has to be made somewhere, and making it
-# here keeps `ring` in the manifest where a reader looking for what this
-# server links against will find it. The version is rustls's own, kept in step
-# with the one reqwest resolves so that the `CryptoProvider` installed is the
-# type reqwest asks for.
+# Named here for one line of code, written once per client: the provider
+# install in `src/fetch.rs` and the same call in `src/store/`, of which only
+# the first to run does anything. Which cryptography rustls uses has no
+# default and is the depending crate's choice, so it has to be made somewhere,
+# and making it here keeps `ring` in the manifest where a reader looking for
+# what this server links against will find it. The version is rustls's own,
+# kept in step with the one reqwest resolves so that the `CryptoProvider`
+# installed is the type reqwest asks for.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 # Input and output schemas, derived from the types a tool handler actually
 # reads and returns rather than written out beside them — see `src/tools`. It

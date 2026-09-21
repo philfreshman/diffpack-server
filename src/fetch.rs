@@ -1,14 +1,22 @@
-//! The HTTP client this crate has, and the only one.
+//! The client every request to a registry goes through, and the only one.
 //!
 //! It was [`crate::archive`]'s until there was a second thing to fetch. What
-//! belongs here is what every outbound request shares whatever it is asking
-//! for: one client built once, a user agent, a timeout, redirects that cannot
-//! leave the host allowlist, and a body read no further than a caller's limit.
-//! [ADR 0001](../docs/adr/0001-the-archive-seam-is-a-filemap.md)'s reasoning
-//! is the reason this is one module rather than one per seam — eight callers
-//! that each know how to fetch is eight places to fix a timeout — and the
-//! reason the seams sit *above* it: what leaves this module is bytes or a
+//! belongs here is what every request to a registry shares whatever it is
+//! asking for: one client built once, a user agent, a timeout, redirects that
+//! cannot leave the host allowlist, and a body read no further than a
+//! caller's limit. [ADR
+//! 0001](../docs/adr/0001-the-archive-seam-is-a-filemap.md)'s reasoning is the
+//! reason this is one module rather than one per seam — eight callers that
+//! each know how to fetch is eight places to fix a timeout — and the reason
+//! the seams sit *above* it: what leaves this module is bytes or a
 //! [`Failure`], never a status code and never a `reqwest` type.
+//!
+//! A registry is the whole of what this reaches, and [`crate::store`] has a
+//! client of its own for that reason rather than out of haste: every rule
+//! below is about somebody else's server — which hosts may be asked, where a
+//! redirect may lead, what a `404` means to the seam that asked — and none of
+//! them is a rule about a store this project owns and writes to with a
+//! credential.
 //!
 //! # What a request here is allowed to do
 //!

@@ -16,8 +16,8 @@ src/tools/          one module per tool: definition and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
 src/catalogue/      versions(registry, package) -> Vec<Version>, newest first
-src/fetch.rs        the one HTTP client: user agent, timeout, redirects, cap
-src/store/          DiffStore: get(&DiffKey) / put(entry)                   #20 #21 #22
+src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, cap
+src/store/          DiffStore: get(&DiffKey) / put(entry)                   #21 #22
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
@@ -115,7 +115,7 @@ list of tools, and the generic call path where arguments are validated and
 `Ctx` is what one request carries, built once by the service factory
 `router::router_with` takes and cloned into every call. For a handler that
 means the seams it may reach: `Archive` and `Catalogue` today and `DiffStore`
-(#20) beside them, while `registry`, `page` and `handle` are named directly
+(#21) beside them, while `registry`, `page` and `handle` are named directly
 because a pure module has nothing to hand over. Beside them it carries what
 the dispatch needs and a handler never touches — the log's `Sink`, and the
 `Spent` that the phases of one call add up in. `Ctx::archive()` and
@@ -224,14 +224,21 @@ it is listed last rather than dropped.
 Nothing here is cached. The 256 MB budget is for diff results, and a package's
 version list goes stale the moment somebody publishes.
 
-### `src/fetch.rs` — the one HTTP client
+### `src/fetch.rs` — the registries' HTTP client
 
-Every outbound request this server makes. It was `archive`'s until `catalogue`
-needed one too, and two copies would be two places to fix a timeout, a user
-agent or a redirect policy — which is the thing ADR 0001 argued against in the
-first place. What leaves this module is bytes or a `Failure`, never a status
-code and never a `reqwest` type, so the seams above it stay the only things a
-tool sees.
+Every request this server makes to a registry. It was `archive`'s until
+`catalogue` needed one too, and two copies would be two places to fix a
+timeout, a user agent or a redirect policy — which is the thing ADR 0001
+argued against in the first place. What leaves this module is bytes or a
+`Failure`, never a status code and never a `reqwest` type, so the seams above
+it stay the only things a tool sees.
+
+A registry is the whole of what it fetches from, and that is the line rather
+than an accident of what was written first. Its policy is a set of rules about
+somebody else's servers — which hosts may be reached, where a redirect may
+lead, what a `404` means to the seam that asked — and none of them is a rule
+about this project's own blob store, which is why `src/store/` has a client of
+its own and this module has no verb but `GET`.
 
 A caller passes the two refusals that differ between seams rather than this
 module guessing them. A `404` is a missing *version* to `archive` and a
@@ -246,6 +253,37 @@ Vercel Blob client is the implementation behind it and is private to this
 module, along with the 256 MB budget and the eviction that keeps it (#22). A
 tool asks for a result and gets one or does not; how many HTTP calls that took
 is not a tool's business. See [ADR 0003](adr/0003-the-cache-seam-is-a-store.md).
+
+The client is here today and `DiffStore` arrives with #21, so nothing in this
+module is public yet. Four operations — write a blob, ask whether one is
+there, list what is under a prefix, delete several at once — and no more,
+because a general client for the service is the shape ADR 0003 rejected.
+
+There is no published specification for that API and no usable Rust client for
+it, so the wire is taken from what `@vercel/blob` sends, read out of its
+source. Three of those facts are not guessable and fail only against the real
+store: a write's pathname is a query parameter rather than a path segment, the
+store id is provisioned with a `store_` prefix the header does not want, and
+`access` has no default. The tests drive the client through a stub HTTP server
+on a loopback port, so what they hold is the request this module writes rather
+than a shape it was told to produce — and because the client is private, they
+live in the module rather than in `tests/`.
+
+A stub cannot settle those three, which is why one test is not a stub. It was
+written from the same reading of `@vercel/blob` as the client, so it agrees
+with the client whether or not the reading was right; only the store can
+disagree. So the four operations also run against it once, `#[ignore]`d the
+way everything in `tests/networked.rs` is, and in the module for the same
+reason the rest are.
+
+The client here is the crate's second, and separate from `src/fetch.rs`'s on
+purpose. That one reaches registries: it GETs, it may follow a redirect only
+onto a registry's hosts, and it names its refusals after the seam that asked.
+This one writes to a store this project owns, with a credential on every
+request and no redirect to follow. One client serving both would be one policy
+serving two sets of reasons — but it is one *bar*, so what `fetch` settled for
+a registry is settled the same way here: a timeout on every request, and no
+retry on an answer that repeating the question cannot change.
 
 ### `src/page.rs` — the response ceiling
 
@@ -381,8 +419,8 @@ Two phases today. The finer split #26 asks for — download, extract, diff,
 store — needs each of the four to be something this crate can time, and none
 of them is: download and extract are one interface by ADR 0001, the diff is a
 synchronous call inside `src/engine.rs` which by ADR 0007 has no reach into a
-request, and there is no store until #20. Each is a decision about a seam
-rather than a field to add.
+request, and the store is a client with no seam over it until #21. Each is a
+decision about a seam rather than a field to add.
 
 ### `src/engine.rs` — the one importer of `diffpack-engine`
 

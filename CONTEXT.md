@@ -171,6 +171,15 @@ written together and evicted together. Half an Entry is not a cache hit, and
 a FileMap's entry is a file rather than one of these.
 _Avoid_: record, object, blob, cached diff
 
+**Blob**:
+One file in the blob store: a pathname, a size in bytes, and the moment it
+was uploaded. Two Blobs make an Entry, and nothing outside `src/store/` names
+one — a tool asks for a cached result, not for a file under a path. The three
+fields are all the cache is built on: the size is what the Budget is counted
+in, and the upload moment is the order eviction runs in, so there is no
+separate index to keep in step with the store.
+_Avoid_: object, file (unqualified — a FileMap's entries are files too), key
+
 **DiffStore**:
 The interface the rest of the crate has to cached results: get an Entry for a
 DiffKey, put one. Which store is behind it, how many requests it makes and how
