@@ -51,6 +51,7 @@
 //! [`docs/architecture.md`](../../docs/architecture.md) and ADR 0002.
 
 use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
 
 use rmcp::model::{CallToolResult, JsonObject, Tool as Definition, ToolAnnotations};
@@ -145,6 +146,18 @@ tools! {
 /// Each is behind an [`Arc`] because this is cloned into every handler and an
 /// adapter is not free to rebuild: a live one shares the process's HTTP
 /// client and a fixture one is a path it reads from.
+///
+/// # Two constructors, and why there is no third
+///
+/// [`Ctx::new`] is every seam live and [`Ctx::fixture`] is every seam reading
+/// from disk. Both name every field, so adding a seam is a compile error in
+/// each of them and its author answers for both worlds at once.
+///
+/// What they replace is a builder per seam — `with_archive(archive)` filling
+/// the rest from `Self::new()`. Naming one seam there left the others live,
+/// so a test that reached a seam it had not named went to a registry. That is
+/// a passing test until the day it is a flake, and the flake names the
+/// registry rather than the context that let it be asked.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Ctx {
@@ -161,23 +174,22 @@ impl Ctx {
         }
     }
 
-    /// The same, with the archive source supplied.
+    /// What the suite hands a handler: both seams reading from `fixtures`.
     ///
-    /// A seam the suite drives. `router_with` takes the service factory that
-    /// builds this, so a test reaches a fixture adapter through the path
-    /// production takes rather than around it.
-    pub fn with_archive(archive: Archive) -> Self {
+    /// `fixtures` is the root the checked-in sets live under, and each seam
+    /// is given its own directory inside it. One argument rather than one per
+    /// seam because the suite has no use for mixing sets — what it needs is
+    /// that nothing it builds can reach a registry, which a constructor that
+    /// mentions no live adapter is.
+    ///
+    /// `router_with` takes the service factory that builds this, so a test
+    /// reaches the fixture adapters through the path production takes rather
+    /// than around it.
+    pub fn fixture(fixtures: impl AsRef<Path>) -> Self {
+        let fixtures = fixtures.as_ref();
         Self {
-            archive: Arc::new(archive),
-            ..Self::new()
-        }
-    }
-
-    /// The same, with the version source supplied.
-    pub fn with_catalogue(catalogue: Catalogue) -> Self {
-        Self {
-            catalogue: Arc::new(catalogue),
-            ..Self::new()
+            archive: Arc::new(Archive::fixture(fixtures.join("archives"))),
+            catalogue: Arc::new(Catalogue::fixture(fixtures.join("versions"))),
         }
     }
 

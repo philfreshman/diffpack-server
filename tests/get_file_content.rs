@@ -25,7 +25,6 @@
 
 use axum::body::Body;
 use axum::http::Request;
-use diffpack_server::archive::Archive;
 use diffpack_server::error::Failure;
 use diffpack_server::mcp::Diffpack;
 use diffpack_server::page::{self, Excerpt};
@@ -42,8 +41,12 @@ const CURRENT: &str = "2026-07-28";
 
 const TOOL: &str = "get_file_content";
 
-/// The archives this suite is served from, instead of the registries.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/archives");
+/// The fixture sets this suite is served from, instead of the registries.
+///
+/// The root rather than one seam's directory inside it: `Ctx::fixture` gives
+/// every seam a fixture adapter, so nothing this suite builds can reach a
+/// registry — including a seam this tool does not use today.
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 // ---------------------------------------------------------------------------
 // What a client is told
@@ -562,7 +565,7 @@ async fn the_handler_answers_with_a_typed_excerpt() {
             path: "src/lib.rs".to_owned(),
             max_bytes: None,
         },
-        &Ctx::with_archive(Archive::fixture(FIXTURES)),
+        &Ctx::fixture(FIXTURES),
     )
     .await
     .expect("the fixture set has this crate");
@@ -595,7 +598,7 @@ async fn the_handler_returns_the_failure_that_says_the_path_is_a_directory() {
             path: "src".to_owned(),
             max_bytes: None,
         },
-        &Ctx::with_archive(Archive::fixture(FIXTURES)),
+        &Ctx::fixture(FIXTURES),
     )
     .await
     .expect_err("`src` is a directory of this crate's");
@@ -620,7 +623,7 @@ async fn the_handler_returns_the_failure_that_names_the_absent_path() {
             path: "src/nowhere.rs".to_owned(),
             max_bytes: None,
         },
-        &Ctx::with_archive(Archive::fixture(FIXTURES)),
+        &Ctx::fixture(FIXTURES),
     )
     .await
     .expect_err("this crate has no such file");
@@ -721,11 +724,7 @@ async fn post(body: Value) -> Value {
         .expect("the request should build");
 
     let router = router::router_with(
-        || {
-            Ok(Diffpack::with_ctx(Ctx::with_archive(Archive::fixture(
-                FIXTURES,
-            ))))
-        },
+        || Ok(Diffpack::with_ctx(Ctx::fixture(FIXTURES))),
         Vec::new(),
     );
 

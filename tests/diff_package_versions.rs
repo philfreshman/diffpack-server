@@ -32,7 +32,6 @@
 
 use axum::body::Body;
 use axum::http::Request;
-use diffpack_server::archive::Archive;
 use diffpack_server::handle::{DiffHandle, Inputs};
 use diffpack_server::mcp::Diffpack;
 use diffpack_server::registry::Registry;
@@ -46,8 +45,12 @@ const CURRENT: &str = "2026-07-28";
 
 const TOOL: &str = "diff_package_versions";
 
-/// The archives this suite is served from, instead of the registries.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/archives");
+/// The fixture sets this suite is served from, instead of the registries.
+///
+/// The root rather than one seam's directory inside it: `Ctx::fixture` gives
+/// every seam a fixture adapter, so nothing this suite builds can reach a
+/// registry — including a seam this tool does not use today.
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 // ---------------------------------------------------------------------------
 // What a client is told
@@ -830,11 +833,7 @@ async fn post(body: Value) -> Value {
         .expect("the request should build");
 
     let router = router::router_with(
-        || {
-            Ok(Diffpack::with_ctx(Ctx::with_archive(Archive::fixture(
-                FIXTURES,
-            ))))
-        },
+        || Ok(Diffpack::with_ctx(Ctx::fixture(FIXTURES))),
         Vec::new(),
     );
 

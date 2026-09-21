@@ -25,7 +25,6 @@
 
 use axum::body::Body;
 use axum::http::Request;
-use diffpack_server::archive::Archive;
 use diffpack_server::error::Failure;
 use diffpack_server::mcp::Diffpack;
 use diffpack_server::page;
@@ -42,8 +41,12 @@ const CURRENT: &str = "2026-07-28";
 
 const TOOL: &str = "list_package_files";
 
-/// The archives this suite is served from, instead of the registries.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/archives");
+/// The fixture sets this suite is served from, instead of the registries.
+///
+/// The root rather than one seam's directory inside it: `Ctx::fixture` gives
+/// every seam a fixture adapter, so nothing this suite builds can reach a
+/// registry — including a seam this tool does not use today.
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 // ---------------------------------------------------------------------------
 // What a client is told
@@ -606,7 +609,7 @@ async fn the_handler_answers_with_typed_entries() {
             cursor: None,
             limit: None,
         },
-        &Ctx::with_archive(Archive::fixture(FIXTURES)),
+        &Ctx::fixture(FIXTURES),
     )
     .await
     .expect("the fixture set has this crate");
@@ -641,7 +644,7 @@ async fn the_handler_returns_the_failure_that_names_what_was_not_found() {
             cursor: None,
             limit: None,
         },
-        &Ctx::with_archive(Archive::fixture(FIXTURES)),
+        &Ctx::fixture(FIXTURES),
     )
     .await
     .expect_err("the fixture set says this URL serves nothing");
@@ -753,11 +756,7 @@ async fn post(body: Value) -> Value {
         .expect("the request should build");
 
     let router = router::router_with(
-        || {
-            Ok(Diffpack::with_ctx(Ctx::with_archive(Archive::fixture(
-                FIXTURES,
-            ))))
-        },
+        || Ok(Diffpack::with_ctx(Ctx::fixture(FIXTURES))),
         Vec::new(),
     );
 
