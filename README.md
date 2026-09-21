@@ -8,15 +8,16 @@ extract its archives, and diff one version against another.
 **Status: transport, the tools that read a package, and the one that diffs
 two.** The crate builds, tests and deploys, and `/mcp` speaks Streamable
 HTTP: a client connects, negotiates a protocol revision, lists tools and
-calls one. There are five. `resolve_archive_url` answers from its arguments
-and fetches nothing; `list_package_files` downloads a published version and
-lists what is inside it, a page at a time; `get_file_content` returns one of
-those files, cut short if it is longer than a response can carry;
-`search_packages` finds a package from a name half-remembered, which is where
-an agent with no exact name to start from starts; and
+calls one. There are six. `search_packages` finds a package from a name half
+remembered, which is where an agent with no exact name to start from starts;
+`resolve_archive_url` answers from its arguments and fetches nothing;
+`list_package_versions` says what a package has released, most recently
+published first; `list_package_files` downloads a published version and lists
+what is inside it, a page at a time; `get_file_content` returns one of those
+files, cut short if it is longer than a response can carry; and
 `diff_package_versions` compares two versions and answers with totals, a
-sample of the files that moved most, and a handle. The tools that read a
-diff back arrive with
+sample of the files that moved most, and a handle. The tools that read a diff
+back arrive with
 [#14](https://github.com/philfreshman/diffpack-server/issues/14) onward.
 `/health` is the other route and is what a monitor watches.
 
@@ -84,6 +85,7 @@ two are `./scripts/checks.sh seams`; the third is `cargo test`.
 ```bash
 cargo test                              # the suite
 cargo test --test networked -- --ignored # the same, against the real registries
+cargo test --lib -- --ignored store::blob # the same, against the real blob store
 cargo fmt --all --check                 # formatting, no compile needed
 cargo clippy --all-targets -- -D warnings
 cargo build --release                   # produces the `mcp` binary
@@ -96,12 +98,18 @@ container cannot drift apart silently. CI runs all of them on every pull
 request into `development` and into `main`.
 
 `tests/networked.rs` is the exception and is `#[ignore]`d for it: it fetches
-real archives from npm, crates.io and PyPI. The suite is otherwise offline —
-`src/archive/` reads `fixtures/archives/` instead — so a registry having a bad
-afternoon cannot fail a pull request. What the networked tests are *for* is the
-half that cannot be checked any other way: that the URLs this server builds
-are the URLs those three registries actually serve. Worth running when
-`src/registry.rs` or `src/archive/` changes.
+real archives from npm, crates.io and PyPI. So is the one test in
+`src/store/blob.rs` that writes to the blob store, which is in the module
+rather than beside the others because the client it drives is private to
+`src/store/`. The suite is otherwise offline — `Ctx::fixture` gives every
+seam an adapter that reads the checked-in sets under `fixtures/`, and there is
+no way to build a context that has one of them and not the others — so a
+registry having a bad afternoon cannot fail a pull request. What the networked
+tests are *for* is the half that cannot be
+checked any other way: that the URLs this server builds are the URLs those
+three registries actually serve, and that the requests `src/store/` writes are
+the ones Vercel Blob answers. Worth running when `src/registry.rs`,
+`src/archive/`, `src/catalogue/` or `src/store/` changes.
 
 ## The checks that block a commit
 
@@ -281,18 +289,21 @@ which suits a serverless function that has no warm process to hold one in —
 and it answers clients back to `2025-11-25` as well. `POST` only: `GET` and
 `DELETE` are `405`, and no answer ever carries an `Mcp-Session-Id`.
 
-A client can connect, list tools and call any of the five there are:
-`resolve_archive_url`, which returns the URL a package version's archive is
-served from without fetching anything; `list_package_files`, which fetches
-that archive and lists the paths inside it with the top-level directory
-stripped; `get_file_content`, which returns one of those files, saying when
-it had to cut one short and when the bytes were not valid UTF-8;
+A client can connect, list tools and call any of the six there are:
 `search_packages`, which answers a query with the packages a registry has
 that match it — npm and crates.io hits carry a version and a description, and
 PyPI hits carry a name alone, because the index PyPI publishes has nothing
-else in it; and `diff_package_versions`, which compares two versions and
-answers with how much changed, the files that changed most, and a handle the
-tools that read the diff back will take. Those reading tools arrive with
+else in it; `resolve_archive_url`, which returns the URL a package version's
+archive is served from without fetching anything; `list_package_versions`,
+which lists what a package has published with the date of each and whether it
+is a preview, most recently published first rather than by version number;
+`list_package_files`, which fetches that archive and lists the paths inside
+it with the top-level directory stripped; `get_file_content`, which returns
+one of those files, saying when it had to cut one short and when the bytes
+were not valid UTF-8; and `diff_package_versions`, which compares two
+versions and answers with how much changed, the files that changed most, and
+a handle the tools that read the diff back will take. Those reading tools
+arrive with
 [#14](https://github.com/philfreshman/diffpack-server/issues/14) onward.
 
 Claude Code:

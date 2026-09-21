@@ -19,7 +19,6 @@
 
 use axum::body::Body;
 use axum::http::Request;
-use diffpack_server::catalogue::Catalogue;
 use diffpack_server::error::Failure;
 use diffpack_server::mcp::Diffpack;
 use diffpack_server::registry::Registry;
@@ -34,8 +33,12 @@ const CURRENT: &str = "2026-07-28";
 
 const TOOL: &str = "search_packages";
 
-/// The search answers this suite is served, instead of the registries'.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/searches");
+/// The fixture sets this suite is served, instead of the registries.
+///
+/// The root rather than one seam's directory inside it: `Ctx::fixture` gives
+/// each seam its own, so a suite naming the root cannot wire one of them to
+/// another's set.
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 // ---------------------------------------------------------------------------
 // At the handler
@@ -53,7 +56,7 @@ async fn the_handler_returns_the_failure_that_says_the_source_is_unwell() {
             query: "outage".to_owned(),
             limit: None,
         },
-        &Ctx::with_catalogue(Catalogue::fixture(FIXTURES)),
+        &Ctx::fixture(FIXTURES),
     )
     .await
     .expect_err("this source is not answering");
@@ -438,11 +441,7 @@ async fn post(body: Value) -> Value {
         .expect("the request should build");
 
     let router = router::router_with(
-        || {
-            Ok(Diffpack::with_ctx(Ctx::with_catalogue(Catalogue::fixture(
-                FIXTURES,
-            ))))
-        },
+        || Ok(Diffpack::with_ctx(Ctx::fixture(FIXTURES))),
         Vec::new(),
     );
 

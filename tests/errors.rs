@@ -19,12 +19,17 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use diffpack_server::error::{self, Failure};
+use diffpack_server::mcp::Diffpack;
 use diffpack_server::router;
+use diffpack_server::tools::Ctx;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const CURRENT: &str = "2026-07-28";
+
+/// The fixture sets this suite's server is built over.
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 // ---------------------------------------------------------------------------
 // The protocol channel
@@ -171,11 +176,18 @@ fn a_missing_package_is_not_a_missing_version() {
     );
 }
 
-/// Six upstream causes, six remedies: wait and retry, slow down, check the
-/// name, report a broken archive, ask for something smaller, and — the one
-/// with no status behind it — a registry this server could not reach at all.
-/// A single "registry error" string would leave a model guessing which one it
-/// is looking at, so every one of them has to read differently.
+/// Eight upstream causes, eight remedies: wait and retry, slow down, check
+/// the name, report a broken archive, ask for something smaller, a registry
+/// this server could not reach at all — the one with no status behind it —
+/// and the two that are about a package's versions rather than about one
+/// version's files: a document that would not read, and one this server would
+/// not hold. A single "registry error" string would leave a model guessing
+/// which one it is looking at, so every one of them has to read differently.
+///
+/// The pairs are what this is really guarding. `MalformedArchive` and
+/// `UnreadableVersions` both end in a reason, and `TooLarge` and
+/// `VersionsTooLarge` both end in a size and a cap; either pair could
+/// collapse into one sentence without the compiler noticing.
 #[test]
 fn every_upstream_cause_reads_differently() {
     let messages = [
@@ -205,6 +217,26 @@ fn every_upstream_cause_reads_differently() {
         message_of(Failure::Unreachable {
             registry: "npm".to_owned(),
         }),
+        message_of(Failure::UnreadableVersions {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+            reason: "what the registry served is not text".to_owned(),
+        }),
+        message_of(Failure::VersionsTooLarge {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+            bytes: 40_000_000,
+            limit: 32 * 1024 * 1024,
+        }),
+        message_of(Failure::UnreadableSearch {
+            registry: "npm".to_owned(),
+            reason: "what the registry served is not text".to_owned(),
+        }),
+        message_of(Failure::SearchTooLarge {
+            registry: "PyPI".to_owned(),
+            bytes: 70_000_000,
+            limit: 64 * 1024 * 1024,
+        }),
     ];
 
     let mut seen: Vec<&str> = messages.iter().map(String::as_str).collect();
@@ -216,6 +248,143 @@ fn every_upstream_cause_reads_differently() {
         seen.len(),
         before,
         "two upstream causes share a message: {messages:#?}"
+    );
+}
+
+/// Every Failure names itself differently in a line, so that a count by cause
+/// is a count of causes.
+///
+/// `Failure::kind` is exhaustive, which stops a new variant reaching a line
+/// without a name of its own. It does not stop one reaching a line under a
+/// name that is already taken — a word copied from the arm above compiles,
+/// and the two failures it now covers are one bucket in every rate built on
+/// these lines. Nothing about them would look wrong; there would simply be a
+/// cause nobody could count.
+///
+/// Enumerated by hand for the reason the sibling test above gives: a list
+/// derived from the enum would be derived from the thing under test.
+#[test]
+fn every_cause_a_line_can_carry_names_one_failure() {
+    let causes = [
+        Failure::NoSuchPackage {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+        }
+        .kind(),
+        Failure::NoSuchVersion {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+            version: "99.9.9".to_owned(),
+            known: Vec::new(),
+        }
+        .kind(),
+        Failure::RateLimited {
+            registry: "npm".to_owned(),
+            retry_after: None,
+        }
+        .kind(),
+        Failure::TimedOut {
+            registry: "npm".to_owned(),
+            waited: error::UPSTREAM_TIMEOUT,
+        }
+        .kind(),
+        Failure::Unreachable {
+            registry: "npm".to_owned(),
+        }
+        .kind(),
+        Failure::Unavailable {
+            registry: "npm".to_owned(),
+            status: 503,
+        }
+        .kind(),
+        Failure::MalformedArchive {
+            package: "zod".to_owned(),
+            version: "4.0.0".to_owned(),
+            reason: "unexpected end of archive".to_owned(),
+        }
+        .kind(),
+        Failure::TooLarge {
+            package: "zod".to_owned(),
+            version: "4.0.0".to_owned(),
+            bytes: 300_000_000,
+            limit: 128 * 1024 * 1024,
+        }
+        .kind(),
+        Failure::UnreadableVersions {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+            reason: "what the registry served is not text".to_owned(),
+        }
+        .kind(),
+        Failure::VersionsTooLarge {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+            bytes: 300_000_000,
+            limit: 8 * 1024 * 1024,
+        }
+        .kind(),
+        Failure::UnreadableSearch {
+            registry: "npm".to_owned(),
+            reason: "what the registry served is not text".to_owned(),
+        }
+        .kind(),
+        Failure::SearchTooLarge {
+            registry: "PyPI".to_owned(),
+            bytes: 300_000_000,
+            limit: 64 * 1024 * 1024,
+        }
+        .kind(),
+        Failure::NoSuchFile {
+            package: "zod".to_owned(),
+            version: "4.0.0".to_owned(),
+            path: "src/gone.ts".to_owned(),
+        }
+        .kind(),
+        Failure::PathIsDirectory {
+            package: "zod".to_owned(),
+            version: "4.0.0".to_owned(),
+            path: "src".to_owned(),
+        }
+        .kind(),
+        Failure::ItemTooLarge {
+            position: 3,
+            bytes: 9_000_000,
+            ceiling: 4_500_000,
+            resume: "the cursor".to_owned(),
+        }
+        .kind(),
+        Failure::UnresolvableArchiveUrl {
+            registry: "pypi".to_owned(),
+            resolvable: Vec::new(),
+        }
+        .kind(),
+        Failure::InvalidParams {
+            message: "`from` is required".to_owned(),
+        }
+        .kind(),
+        Failure::NoSuchTool {
+            name: "diff_everything".to_owned(),
+        }
+        .kind(),
+        Failure::NoSuchResource {
+            uri: "diffpack://nothing".to_owned(),
+        }
+        .kind(),
+        Failure::Internal {
+            doing: "answering a tool call",
+        }
+        .kind(),
+    ];
+
+    let mut seen = causes.to_vec();
+    seen.sort_unstable();
+    let before = seen.len();
+    seen.dedup();
+
+    assert_eq!(
+        seen.len(),
+        before,
+        "two failures share a cause, so neither can be counted: {causes:#?}"
     );
 }
 
@@ -581,7 +750,7 @@ async fn post(body: Value) -> (StatusCode, Value) {
         .body(Body::from(body.to_string()))
         .expect("the request should build");
 
-    send(router::router(), request).await
+    send(server(), request).await
 }
 
 async fn send(router: axum::Router, request: Request<Body>) -> (StatusCode, Value) {
@@ -623,4 +792,18 @@ fn text_of(result: &rmcp::model::CallToolResult) -> String {
         .filter_map(|block| block.as_text().map(|text| text.text.clone()))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A server whose context reads the fixture sets.
+///
+/// `router::router()` would build a live one. Nothing this suite calls
+/// reaches a seam today, which is exactly how the bug #64 fixed stayed
+/// invisible: a context is safe by what it happens not to be asked for until
+/// somebody adds the call that asks. A fixture root costs nothing here and
+/// means the next test added cannot leave this process.
+fn server() -> axum::Router {
+    router::router_with(
+        || Ok(Diffpack::with_ctx(Ctx::fixture(FIXTURES))),
+        Vec::new(),
+    )
 }

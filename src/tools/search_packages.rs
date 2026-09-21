@@ -15,7 +15,7 @@
 //! # Where the three answers come from
 //!
 //! [`crate::registry`], which holds the source and the reading of it for each
-//! registry, and [`crate::catalogue`], which makes the request. This module
+//! registry, and [`crate::search`], which makes the request. This module
 //! matches on no registry of its own: what a registry is has one home (ADR
 //! 0004), and a search that knew PyPI needed treating differently would be a
 //! second copy of that.
@@ -93,10 +93,7 @@ impl Tool for SearchPackages {
         // that travels.
         let wanted = page::wanted(args.limit);
 
-        let hits = ctx
-            .catalogue()
-            .search(args.registry, &args.query, wanted)
-            .await?;
+        let hits = ctx.search().hits(args.registry, &args.query, wanted).await?;
 
         // The sequence is already in the order it should be read in — each
         // source ranks its own answer, and PyPI's is ranked where it is

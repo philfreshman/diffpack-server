@@ -14,10 +14,12 @@
 //!   of serde" belongs here: the recovery is to ask for a version that
 //!   exists, and only the model can do that.
 //!
-//! [`Failure::respond`] is the whole rule. Its return type is exactly a tool
-//! handler's — `Result<CallToolResult, ErrorData>` — so a handler that ends
-//! in `failure.respond()` cannot put a failure on the wrong channel by
-//! accident. `Err` is the protocol; `Ok` with `isError` is the model's.
+//! [`Failure::respond`] is the whole rule, and nothing in `src/` calls it but
+//! [`crate::tools::call`], once every dispatch has finished. `Err` is
+//! the protocol; `Ok` with `isError` is the model's. A handler never reaches
+//! it — everything that can go wrong inside one is a [`Failure`] returned
+//! upwards — which is what lets the same value be named in a log line before
+//! it becomes an answer.
 //!
 //! # What does not appear in a message
 //!
@@ -126,6 +128,63 @@ pub enum Failure {
         limit: u64,
     },
 
+    /// The registry's list of a package's versions arrived and could not be
+    /// read.
+    ///
+    /// [`Failure::MalformedArchive`]'s counterpart for a document rather than
+    /// an archive, and separate because the remedies are not the same: an
+    /// archive that will not extract is one version, and a version list that
+    /// will not read takes the whole package with it.
+    ///
+    /// `reason` is chosen at the call site rather than threaded out from a
+    /// parser, so there is no library's free text in it. It is redacted on
+    /// the way out regardless.
+    UnreadableVersions {
+        registry: String,
+        package: String,
+        reason: String,
+    },
+
+    /// The registry's list of a package's versions is larger than this
+    /// function will read.
+    ///
+    /// Distinct from [`Failure::TooLarge`], which is an archive a caller can
+    /// do something about by asking for one file instead of a whole tree.
+    /// There is no smaller version of a package's release history to ask
+    /// for, so the message does not pretend there is.
+    VersionsTooLarge {
+        registry: String,
+        package: String,
+        bytes: u64,
+        limit: u64,
+    },
+
+    /// The registry's answer to a search arrived and could not be read.
+    ///
+    /// [`Failure::UnreadableVersions`]'s counterpart for a search, and
+    /// separate because there is no package in it to name: nothing in the
+    /// request was about a package, so the only thing a model can act on is
+    /// which registry answered this way.
+    ///
+    /// `reason` is chosen at the call site rather than threaded out from a
+    /// parser, so there is no library's free text in it. It is redacted on
+    /// the way out regardless.
+    UnreadableSearch { registry: String, reason: String },
+
+    /// The registry's answer to a search is larger than this function will
+    /// read.
+    ///
+    /// Distinct from [`Failure::Unavailable`], which is a registry that
+    /// answered and said no: this one answered and kept answering. The
+    /// status it did that under is `200`, which is why the refusal does not
+    /// carry one — a number that said `200` beside "this server cannot use
+    /// it" would read as a contradiction rather than as a fact.
+    SearchTooLarge {
+        registry: String,
+        bytes: u64,
+        limit: u64,
+    },
+
     /// The version has no file at that path.
     ///
     /// The commonest way an agent arrives here is by writing the archive's
@@ -217,8 +276,10 @@ impl Failure {
     /// Put this failure on the channel it belongs to.
     ///
     /// `Ok` is a tool error the model reads and can act on; `Err` is a
-    /// protocol error it never sees. The return type is a tool handler's, so
-    /// `failure.respond()` is the whole of a handler's error path.
+    /// protocol error it never sees. Reached from one place in `src/` —
+    /// [`crate::tools::call`], which is the only one that has both the
+    /// failure and the answer it becomes — and directly from the suite,
+    /// where the channel a failure takes is the thing under test.
     pub fn respond(self) -> Result<CallToolResult, ErrorData> {
         match self {
             // The caller's fault, or nobody's: there is nothing a model can
@@ -246,6 +307,42 @@ impl Failure {
             other => Ok(CallToolResult::error(vec![ContentBlock::text(
                 other.message(),
             )])),
+        }
+    }
+
+    /// Which failure this is, in one word, for the line [`crate::log`]
+    /// writes.
+    ///
+    /// Not [`Self::message`] and not `Debug`: a message is a sentence written
+    /// for a model and carries the package name a caller sent, so counting by
+    /// it would give one bucket per call. This is the cause alone, which is
+    /// what "error rate by cause" is a rate of.
+    ///
+    /// The match is exhaustive on purpose. A variant added without a name
+    /// here does not compile, which is the only way a new cause cannot arrive
+    /// silently as somebody else's.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NoSuchPackage { .. } => "no_such_package",
+            Self::NoSuchVersion { .. } => "no_such_version",
+            Self::RateLimited { .. } => "rate_limited",
+            Self::TimedOut { .. } => "timed_out",
+            Self::Unreachable { .. } => "unreachable",
+            Self::Unavailable { .. } => "unavailable",
+            Self::MalformedArchive { .. } => "malformed_archive",
+            Self::TooLarge { .. } => "too_large",
+            Self::UnreadableVersions { .. } => "unreadable_versions",
+            Self::VersionsTooLarge { .. } => "versions_too_large",
+            Self::UnreadableSearch { .. } => "unreadable_search",
+            Self::SearchTooLarge { .. } => "search_too_large",
+            Self::NoSuchFile { .. } => "no_such_file",
+            Self::PathIsDirectory { .. } => "path_is_directory",
+            Self::ItemTooLarge { .. } => "item_too_large",
+            Self::UnresolvableArchiveUrl { .. } => "unresolvable_archive_url",
+            Self::InvalidParams { .. } => "invalid_params",
+            Self::NoSuchTool { .. } => "no_such_tool",
+            Self::NoSuchResource { .. } => "no_such_resource",
+            Self::Internal { .. } => "internal",
         }
     }
 
@@ -300,6 +397,47 @@ impl Failure {
             Self::Unavailable { registry, status } => format!(
                 "{registry} answered with HTTP {status}, which this server cannot use. \
                  Try again shortly."
+            ),
+
+            Self::UnreadableVersions {
+                registry,
+                package,
+                reason,
+            } => format!(
+                "The versions of `{package}` on {registry} could not be read: {}. \
+                 There is nothing to retry — ask for a version you already know, \
+                 or try another registry.",
+                redact(reason),
+            ),
+
+            Self::VersionsTooLarge {
+                registry,
+                package,
+                bytes,
+                limit,
+            } => format!(
+                "The versions {registry} has published for `{package}` come to {} MB, over \
+                 this server's {} MB limit for them. There is no shorter answer to ask for.",
+                bytes / 1_000_000,
+                limit / 1_000_000,
+            ),
+
+            Self::UnreadableSearch { registry, reason } => format!(
+                "{registry} answered that search with something this server could not \
+                 read: {}. Try another registry, or ask for a package by the name you \
+                 already have.",
+                redact(reason),
+            ),
+
+            Self::SearchTooLarge {
+                registry,
+                bytes,
+                limit,
+            } => format!(
+                "{registry}'s answer to that search came to {} MB, over this server's \
+                 {} MB limit for one. Try a narrower query, or another registry.",
+                bytes / 1_000_000,
+                limit / 1_000_000,
             ),
 
             Self::MalformedArchive {

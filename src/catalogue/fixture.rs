@@ -1,32 +1,23 @@
-//! What a registry publishes, read from a directory.
+//! Version lists from a directory rather than from a registry.
 //!
-//! `index.json` maps a URL to the file that stands in for what it serves, so
-//! this adapter answers the same question the live one does — *what is at
-//! this URL* — and differs only in where it looks. A URL the index does not
-//! carry is a gap in the fixture set rather than something a model can act
-//! on, which is why it takes the internal channel.
+//! `index.json` in that directory maps a URL to the file that stands in for
+//! what it serves, so this adapter answers the same question the live one
+//! does — *what is at this URL* — and differs only in where it looks. A URL
+//! the index does not carry is a gap in the fixture set rather than something
+//! a model can act on, which is why it takes the internal channel.
 //!
-//! # A source that is not answering
-//!
-//! `null` in the index is a third answer and a real one: the source is down.
-//! It is distinct from a URL the index never mentions — that is a hole in the
-//! fixture set and nobody's to act on — and it is what lets the offline suite
-//! drive the path a `503` takes without a `503`.
+//! `null` in the index is a third answer and a real one: the registry has no
+//! such package. It is what lets the offline suite drive the path a `404`
+//! takes without a `404`, and the refusal it produces is built by
+//! [`super::no_such_package`], which is the live adapter's too.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use crate::error::Failure;
 use crate::registry::Registry;
 
-/// What a source that is not answering answers with, where it answers at all.
-///
-/// The number a fixture stands in with, so that the refusal the suite drives
-/// is the one a real outage produces rather than one shaped like it.
-const SOURCE_DOWN: u16 = 503;
-
-/// The answers under one directory.
+/// The version documents under one directory.
 #[derive(Debug)]
 pub struct Fixture {
     dir: PathBuf,
@@ -37,30 +28,30 @@ impl Fixture {
         Self { dir }
     }
 
-    /// The body the fixture set serves for `url`.
-    ///
-    /// `registry` is here for the refusal rather than for the lookup, as it
-    /// is in the archive fixtures: a failure a model can act on says which
-    /// source went quiet, and this is the only place that knows both the URL
-    /// and who it belongs to.
-    pub fn body(&self, url: &str, registry: Registry) -> Result<Arc<str>, Failure> {
-        let missing = || Failure::Internal {
-            doing: "reading the search fixtures",
+    /// The bytes the fixture set serves for `url`.
+    pub fn bytes(&self, url: &str, registry: Registry, package: &str) -> Result<Vec<u8>, Failure> {
+        let missing = Failure::Internal {
+            doing: "reading the version fixtures",
         };
 
-        let index = std::fs::read(self.dir.join("index.json")).map_err(|_| missing())?;
+        let index = std::fs::read(self.dir.join("index.json")).map_err(|_| Failure::Internal {
+            doing: "reading the version fixtures",
+        })?;
         let index: HashMap<String, Option<String>> =
-            serde_json::from_slice(&index).map_err(|_| missing())?;
+            serde_json::from_slice(&index).map_err(|_| Failure::Internal {
+                doing: "reading the version fixtures",
+            })?;
 
         let file = match index.get(url) {
             Some(Some(file)) => file,
-            // The index says this source is not answering, which is what a
-            // registry having a bad day looks like from here.
-            Some(None) => return Err(super::unavailable(registry, SOURCE_DOWN)),
-            None => return Err(missing()),
+            // The index says this URL serves nothing, which is what a
+            // registry answers for a package it does not have.
+            Some(None) => return Err(super::no_such_package(registry, package)),
+            None => return Err(missing),
         };
-        std::fs::read_to_string(self.dir.join(file))
-            .map(Arc::from)
-            .map_err(|_| missing())
+
+        std::fs::read(self.dir.join(file)).map_err(|_| Failure::Internal {
+            doing: "reading the version fixtures",
+        })
     }
 }

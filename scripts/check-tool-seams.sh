@@ -21,17 +21,37 @@
 #   1. An allow-list over `use`. A tool may import the standard library, the
 #      MCP and serialisation crates, and the seam modules. Anything else
 #      fails, including a crate nobody has added to this repository yet —
-#      which is the point, since the client this is meant to keep out (#20's
-#      Blob client) does not exist yet and will not be called what this script
-#      guesses.
+#      which is the point: the client this is meant to keep out is hand-rolled
+#      over `reqwest` inside `src/store/`, so there is no dependency name for
+#      this script to have guessed at.
+#
+#      `src/tools/mod.rs` is exempt from this one, because it is the only file
+#      here that is not a tool: it is the collection, the `Ctx` every handler
+#      is given, and the dispatch that runs one. Those need things a tool must
+#      not have
+#      — `crate::log`, for one, because the single line per call is written by
+#      the dispatch and a tool that wrote its own would make "one line per
+#      call" false. Exempting the file is the honest version of that: the
+#      alternative is adding `log` to the list below, which would permit in
+#      nineteen tools the thing this paragraph exists to forbid.
+#
+#      That one path and no other. A tool is free to be a directory when it
+#      grows one, and `src/tools/thing/mod.rs` is then a tool like any other —
+#      so the exemption is written as the path it is about rather than as a
+#      file name, which would hand every such tool the collection's licence.
 #   2. A deny-list over the whole file, for the names that mean a seam was
 #      crossed even when there is no `use` to catch: `reqwest::get(..)` spelled
-#      out in full, a blob token read from the environment.
+#      out in full, a blob token read from the environment. This one covers
+#      `mod.rs` too — the collection has no more business holding an HTTP
+#      client than a tool does, so the exemption above is from the import
+#      list and not from the rules.
 #
-# The deny-list is a backstop, not the defence. The defence is privacy: #20's
-# Blob client is a private module inside `src/store/`, so a tool cannot name
-# it and the compiler says so. This script is what notices when someone makes
-# it `pub` to get at it in a hurry.
+# The deny-list is a backstop, not the defence. The defence is privacy: the
+# Blob client (#20) is a private module inside `src/store/`, so a tool cannot
+# name it and the compiler says so. This script is what notices when someone
+# makes it `pub` to get at it in a hurry. The environment variables are on the
+# list for the same reason the token is: a tool that read one would be building
+# a client of its own out of sight of the seam.
 #
 # Mentions in a comment count, because a grep cannot tell a comment from code
 # and a name written in a comment is a name someone can move into one. Write
@@ -61,16 +81,18 @@ readonly ALLOWED_ROOTS=(crate self super std core alloc futures rmcp serde serde
 # tool answers at all, and `cache_key` because a tool may still need the key a
 # handle names.
 #
-# `catalogue` joined the list with #19, deliberately and for the reason this
-# list exists: a search is a fetch, and the alternative to a seam for it was
-# the first tool module that knew how to make an HTTP request. `http`, which
-# is where the client itself now lives, is *not* here and must not be — it is
-# `archive`'s and `catalogue`'s, and a tool that reached it would be the thing
-# this script is for.
-readonly ALLOWED_MODULES=(archive cache_key catalogue engine error handle page registry store tools)
+# `search` joined the list with #19, deliberately and for the reason this list
+# exists: a search is a fetch, and the alternative to a seam for it was the
+# first tool module that knew how to make an HTTP request. `fetch`, which is
+# where the client itself lives, is not here and must not be — it is the
+# seams' and a tool that reached it would be the thing this script is for.
+#
+# Nothing checks that this list and the paragraph in `docs/architecture.md`
+# agree, so changing one means changing the other by hand.
+readonly ALLOWED_MODULES=(archive cache_key catalogue engine error handle page registry search store tools)
 
 # Names that mean a seam was crossed, wherever they appear.
-readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN'
+readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN|BLOB_STORE_ID|VERCEL_OIDC_TOKEN'
 
 if [[ ! -d "$TOOLS" ]]; then
   echo "ok: no tool modules yet (${TOOLS}/ does not exist)"
@@ -96,6 +118,10 @@ while IFS= read -r hit; do
   rest=${hit#*:}
   line=${rest#*:}
   where="${where}:${rest%%:*}"
+
+  # The collection is not a tool. See the header: this is the one path, and a
+  # tool that becomes a directory does not inherit it.
+  [[ "${where%%:*}" == "${TOOLS}/mod.rs" ]] && continue
 
   path=${line#*use }
   path=${path%%;*}

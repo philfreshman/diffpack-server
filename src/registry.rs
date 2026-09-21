@@ -151,13 +151,7 @@ impl Registry {
         }
     }
 
-    /// Where `package`'s versions are listed, and which way that source
-    /// lists them.
-    ///
-    /// The two travel together because #18 promises one order — newest
-    /// first, every registry — and only crates.io answers that way already.
-    /// A caller told where to ask and left to remember which way the answer
-    /// runs is a caller that lists npm backwards.
+    /// Where `package`'s versions are listed.
     ///
     /// The package name is escaped rather than interpolated: a scoped npm
     /// name is one package name, and `@types/node` written into a path
@@ -167,11 +161,9 @@ impl Registry {
         match self {
             Self::Npm => VersionSource {
                 url: format!("https://registry.npmjs.org/{escaped}"),
-                order: Order::OldestFirst,
             },
             Self::Crates => VersionSource {
                 url: format!("https://crates.io/api/v1/crates/{escaped}"),
-                order: Order::NewestFirst,
             },
             // PyPI's own JSON names a package's releases but without the
             // dates that order them, and its simple index is HTML. deps.dev
@@ -179,9 +171,130 @@ impl Registry {
             // two agree about what versions a package has.
             Self::PyPi => VersionSource {
                 url: format!("https://api.deps.dev/v3/systems/pypi/packages/{escaped}"),
-                order: Order::OldestFirst,
             },
         }
+    }
+
+    /// The versions a [`VersionSource`] body names, newest first, or nothing
+    /// if this server cannot read it.
+    ///
+    /// # Why the order is computed here rather than declared
+    ///
+    /// This used to be a field beside the URL saying which way each source
+    /// runs. It was wrong, and wrong in a way no amount of reversing fixes:
+    /// deps.dev sorts PyPI's versions *lexically by version string*, so
+    /// `requests` ends at `2.9.2` and reversing it reports that as the
+    /// newest release rather than `2.34.2`. npm's is worse — its versions
+    /// are a JSON object, and `serde_json`'s map is a `BTreeMap` here, so
+    /// the document's own order is gone before this crate ever sees it.
+    ///
+    /// All three documents carry a publish date per version, so that is what
+    /// newest first means: most recently published first. It is not the
+    /// highest version number — npm's `@types/node` publishes a 22.x patch
+    /// after a 26.x release most weeks, and both registries' own listings
+    /// show the patch on top.
+    ///
+    /// The dates are compared as the strings the registry wrote. Each source
+    /// spells them one way, so ordering within one answer is exact, and no
+    /// calendar has to be parsed to sort releases.
+    ///
+    /// `None` rather than an error, for the same reason
+    /// [`choose_archive`](Self::choose_archive) is: a document this server
+    /// cannot read is something the caller has to explain to a model, and
+    /// the caller is the one holding the package name that belongs in that
+    /// message.
+    pub fn read_versions(self, document: &str) -> Option<Vec<Version>> {
+        let mut versions = match self {
+            Self::Npm => {
+                // Only the keys are wanted from `versions`; the dates are in
+                // `time`, which also carries `created` and `modified`. The
+                // intersection is the point: `time` alone would invent two
+                // versions, and `versions` alone has no order.
+                #[derive(Deserialize)]
+                struct Document {
+                    versions: std::collections::BTreeMap<String, de::IgnoredAny>,
+                    time: std::collections::BTreeMap<String, String>,
+                }
+
+                let document: Document = serde_json::from_str(document).ok()?;
+                document
+                    .versions
+                    .into_keys()
+                    .map(|version| Version {
+                        prerelease: self.is_prerelease(&version),
+                        published_at: document.time.get(&version).cloned(),
+                        version,
+                    })
+                    .collect::<Vec<_>>()
+            }
+
+            Self::Crates => {
+                #[derive(Deserialize)]
+                struct Document {
+                    versions: Vec<Release>,
+                }
+                #[derive(Deserialize)]
+                struct Release {
+                    num: String,
+                    created_at: Option<String>,
+                }
+
+                let document: Document = serde_json::from_str(document).ok()?;
+                document
+                    .versions
+                    .into_iter()
+                    .map(|release| Version {
+                        prerelease: self.is_prerelease(&release.num),
+                        version: release.num,
+                        published_at: release.created_at,
+                    })
+                    .collect::<Vec<_>>()
+            }
+
+            // deps.dev sorts these lexically by version string, which is
+            // neither end of the list: `requests` runs to 2.9.2 because
+            // "2.9.2" sorts after "2.34.2". The dates are the only thing in
+            // this document that puts releases in order.
+            Self::PyPi => {
+                #[derive(Deserialize)]
+                struct Document {
+                    versions: Vec<Release>,
+                }
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Release {
+                    version_key: VersionKey,
+                    #[serde(default)]
+                    published_at: Option<String>,
+                }
+                #[derive(Deserialize)]
+                struct VersionKey {
+                    version: String,
+                }
+
+                let document: Document = serde_json::from_str(document).ok()?;
+                document
+                    .versions
+                    .into_iter()
+                    .map(|release| Version {
+                        prerelease: self.is_prerelease(&release.version_key.version),
+                        version: release.version_key.version,
+                        published_at: release.published_at,
+                    })
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        // Newest first, and by the date rather than by the name. A version
+        // the source gave no date for sorts last, which is what reversing
+        // `Option`'s own order does — `None` is less than every `Some` — and
+        // is the only honest place for it: the promise is newest first, and a
+        // release this server cannot date is not one it can call the newest.
+        //
+        // Ties keep whatever order they arrived in, which for two releases
+        // published in the same instant is not a question anyone is asking.
+        versions.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+        Some(versions)
     }
 
     /// Where a search for `query` is answered, and for at most `limit` hits.
@@ -377,6 +490,30 @@ impl Registry {
         }
     }
 
+    /// Whether `version` is a preview rather than a release.
+    ///
+    /// A per-registry fact because the two spellings are genuinely different
+    /// standards rather than dialects: npm and crates.io use semver, where a
+    /// prerelease is what follows the first `-`, and PyPI uses PEP 440, where
+    /// it is an `a`, `b`, `rc` or `dev` segment glued to the release with no
+    /// separator required at all. `1.0rc1` is a release candidate on PyPI and
+    /// is not a version on either of the other two.
+    ///
+    /// Worth telling an agent because "the last two versions" is the question
+    /// this tool exists for, and the answer to it should not quietly be a
+    /// release candidate.
+    pub fn is_prerelease(self, version: &str) -> bool {
+        // Build metadata is not a prerelease under either standard — semver's
+        // `+build.5` and PEP 440's `+local` are labels on a release — and it
+        // can contain anything, so it goes before either rule looks.
+        let version = version.split('+').next().unwrap_or_default();
+
+        match self {
+            Self::Npm | Self::Crates => version.contains('-'),
+            Self::PyPi => pep440_prerelease(version),
+        }
+    }
+
     /// The archive a [`ArchiveSource::Listing`] body names, if it names one
     /// this server can read.
     ///
@@ -513,8 +650,28 @@ pub const VERSION_RULE: &str = "A version is one published version, spelled the 
 pub struct VersionSource {
     /// The document to fetch.
     pub url: String,
-    /// The order that document lists versions in.
-    pub order: Order,
+}
+
+/// One published version of a package, and when it was published.
+///
+/// The date is here because it is what the order is computed from — see
+/// [`Registry::read_versions`] — rather than because a caller asked for it.
+/// It is the string the registry wrote, not a parsed instant: this crate has
+/// no calendar in it and does not need one to put releases in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Version {
+    /// The version as the registry spells it.
+    pub version: String,
+    /// When the registry says it was published, where it says.
+    ///
+    /// `None` is a real answer and not a gap in this crate: deps.dev leaves
+    /// the date off some versions — one of `requests`' 161 and thirty-seven
+    /// of `numpy`'s 171 — and those are published releases. Dropping them
+    /// would answer "what versions are there" with a list missing a fifth of
+    /// them, so they are kept and sorted last.
+    pub published_at: Option<String>,
+    /// Whether it is a preview rather than a release.
+    pub prerelease: bool,
 }
 
 /// Where a search for a package is answered, and what to ask it for.
@@ -654,17 +811,47 @@ fn rank(name: &str, query: &str) -> Option<Rank> {
     }
 }
 
-/// Which end of a version list the newest release is at.
+/// Whether a PEP 440 version is a preview rather than a release.
 ///
-/// Not a detail of parsing: #18 answers newest-first whatever was asked, so
-/// this is what a caller reverses by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Order {
-    /// The source lists the newest release first, which is the order a caller
-    /// answers in.
-    NewestFirst,
-    /// The source lists the oldest release first, so a caller reverses it.
-    OldestFirst,
+/// Read rather than parsed: what is wanted is one bit, and a parser for the
+/// whole grammar — epochs, post-releases, local versions, the four spellings
+/// of every separator — is a dependency and a surface for a question this
+/// small. So the release segment is skipped and what follows it is looked at.
+///
+/// The markers are PEP 440's, `alpha`, `beta`, `c`, `pre` and `preview`
+/// included because the specification normalises those to `a`, `b` and `rc`
+/// rather than rejecting them. A digit has to follow, so `1.0build3` is not
+/// read as a beta.
+///
+/// A post-release is deliberately not one of them: `1.0.post1` is a
+/// re-release of `1.0`, not a preview of something later, and an agent told
+/// to avoid it would be avoiding the newest thing there is.
+fn pep440_prerelease(version: &str) -> bool {
+    /// What PEP 440 spells a prerelease with, before normalisation.
+    const MARKERS: [&str; 8] = ["a", "b", "c", "rc", "alpha", "beta", "pre", "preview"];
+
+    let version = version.to_ascii_lowercase();
+
+    // An epoch is `N!` in front of everything, and says nothing about this.
+    let version = version.rsplit('!').next().unwrap_or_default();
+
+    // The release segment — `1.0.2` — and then whichever of the four
+    // separators the publisher used, or none, which is also allowed.
+    let tail = version.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.');
+    let tail = tail.trim_start_matches(['.', '-', '_']);
+
+    // A development release sorts before every other form of the same
+    // version, including its own alphas, so it is a preview wherever it sits:
+    // `1.0.post1.dev2` is a preview of that post-release.
+    if tail.contains("dev") {
+        return true;
+    }
+
+    MARKERS.iter().any(|marker| {
+        tail.strip_prefix(marker).is_some_and(|after| {
+            after.is_empty() || after.starts_with(|c: char| c.is_ascii_digit())
+        })
+    })
 }
 
 /// A package name or a query as one path segment or one parameter value.

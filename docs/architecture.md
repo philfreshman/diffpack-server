@@ -15,13 +15,15 @@ src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
 src/tools/          one module per tool: definition and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
-src/catalogue/      search(registry, query, limit) -> Vec<Hit>
-src/http.rs         the one HTTP client, private to this crate
-src/store/          DiffStore: get(&DiffKey) / put(entry)                   #20 #21 #22
+src/catalogue/      versions(registry, package) -> Vec<Version>, newest first
+src/search/         hits(registry, query, limit) -> Vec<Hit>, best match first
+src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, cap
+src/store/          DiffStore: get(&DiffKey) / put(entry)                   #21 #22
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
 src/error.rs        Failure, the two channels, redaction
+src/log.rs          one line per tool call: what, how long, how it ended
 src/engine.rs       the only importer of diffpack_engine
 src/health.rs       the /health body
 ```
@@ -44,13 +46,22 @@ build otherwise. See [ADR 0007](adr/0007-one-importer-of-the-engine.md).
 `src/tools/` may import the standard library, the MCP and serialisation
 crates, `futures` for the one case where a tool waits on two fetches at once,
 and `crate::{archive, cache_key, catalogue, engine, error, handle, page,
-registry, store}`. It may not name an HTTP client or the blob store: those are
-`archive`'s, `catalogue`'s and `store`'s business, and eight tools that each
-know how to fetch is eight places to fix a timeout. `crate::http` is
-deliberately *not* on that list — it is where the client lives, and a tool
-that could name it would be a tool that can fetch.
+registry, search, store}`. It may not name an HTTP client or the blob store:
+those are `fetch`'s and `store`'s business, and eight tools that each know how
+to fetch is eight places to fix a timeout. Nothing checks that this paragraph
+and the script's list agree, so a module added to one is added to the other by
+hand.
 [`scripts/check-tool-seams.sh`](../scripts/check-tool-seams.sh) fails the build
 otherwise, and its allow-list is the list above.
+
+`src/tools/mod.rs` is exempt from the import half of that rule, because it is
+the one file there that is not a tool: it is the collection, the `Ctx`, and
+the dispatch, and those need what a tool must not have — `crate::log`, so that
+the one line per call is written once by the dispatch rather than nineteen
+times by the tools that remembered. That exact path and no other: a tool is
+free to grow into a directory, and `src/tools/thing/mod.rs` is then a tool
+like any other. The name deny-list still covers the collection, so the
+exemption is from the list and not from the rule.
 
 **`docs/cache-key.md` is normative, not descriptive.** The cache key is a
 contract with a TypeScript implementation (#27) that will never share a line of
@@ -91,9 +102,9 @@ task of their own.
 
 One file per MCP tool, holding its definition and its handler together, so
 that adding a tool is adding a file and reviewing a tool is reading one. What
-a tool module does is: ask `registry`, `archive`, `catalogue` or `store` for
-what it needs, shape an answer through `page`, and fail through `error`. What it does
-not do is fetch, cache or paginate by hand.
+a tool module does is: ask `registry`, `archive`, `catalogue`, `search` or
+`store` for what it needs, shape an answer through `page`, and fail through
+`error`. What it does not do is fetch, cache or paginate by hand.
 
 A tool writes down types rather than JSON. The `Tool` trait's associated
 `Args` and `Output` generate the input schema, the output schema and the
@@ -104,13 +115,41 @@ list of tools, and the generic call path where arguments are validated and
 `Failure` is put on its channel — which is why a handler returns
 `Result<Output, Failure>` and never names a result type of MCP's.
 
-`Ctx` is what a handler may reach, built once per request by the service
-factory `router::router_with` takes and cloned into every call. It carries
-`Archive` and `Catalogue` today, with `DiffStore` (#20) beside them;
-`registry`, `page` and `handle` are not in it and do not need to be, because a
-pure module is named directly. That factory is also the seam the suite drives:
-a test builds a `Ctx` over a fixture adapter and reaches it through the path
-production takes, rather than around it.
+`Ctx` is what one request carries, built once by the service factory
+`router::router_with` takes and cloned into every call. For a handler that
+means the seams it may reach: `Archive`, `Catalogue` and `Search` today and
+`DiffStore` (#21) beside them, while `registry`, `page` and `handle` are named
+directly because a pure module has nothing to hand over. Beside them it
+carries what the dispatch needs and a handler never touches — the log's
+`Sink`, and the `Spent` that the phases of one call add up in.
+`Ctx::archive()`, `Ctx::catalogue()` and `Ctx::search()` hand back their seam
+with that stopwatch already on it, so a wait on a registry cannot go uncounted
+and a handler's call is unchanged.
+
+That factory is also the seam the suite drives: a test builds a `Ctx` over the
+fixture adapters and a capturing sink, and reaches both through the path
+production takes rather than around it.
+
+It is built two ways and only two: `Ctx::new` is every seam live and
+`Ctx::fixture` is every seam reading from the checked-in sets under
+`fixtures/`. Both name every field, so a seam added later is a compile error
+in each of them and its author answers for production and for the suite at
+once. There is deliberately no builder that supplies one seam and fills the
+rest, because filling them meant filling them live: a test naming the archive
+carried a live catalogue beside it, and the first tool to read a catalogue
+through such a context would have asked npm from CI.
+
+What the compiler checks there is that every field was answered for, not that
+the answer was a fixture one, so the second half is `Ctx::seams`. It names the
+seams by taking the struct apart, which is a compile error the moment a field
+is added, and `tests/ctx.rs` drives what it returns rather than a list of its
+own. Adding a seam is therefore three edits the compiler and the suite ask for
+in turn: both constructors, the name, and the shortest call that reaches it.
+
+`Ctx::logging_to` is not a third way and shows what a fourth would have to
+look like: it takes `self` and spreads `..self`, so it changes a context that
+has already chosen its world rather than filling in the half it was not
+given. A spread of `..Self::new()` is the shape that reopens this.
 
 ### `src/registry.rs` — what a registry is
 
@@ -129,22 +168,21 @@ of the URLs this module builds — `archive` may fetch what `registry::allows`
 permits and nothing else — so a source added here is reachable the moment it exists,
 rather than through a second list someone has to remember to widen.
 
-It fetches nothing. This module says *where* and *what shape*; `archive` and
-`catalogue` do the fetching, and that is what lets every registry fact be
-tested with no network at all — the URL npm is asked for, the media type
-PyPI's index needs, and the order a query ranks its names in are all asserted
-without a socket. The `diffpack://registries` resource (#16) is a projection of
-this module rather than a hand-written copy of it, and Go support (#28) is a
-value added here rather than an edit in five places. See [ADR
+It fetches nothing. This module says *where* and *what shape*; `archive`,
+`catalogue` and `search` do the fetching, and that is what lets every registry
+fact be tested with no network at all — the URL npm is asked for, the media
+type PyPI's index needs and the order a query ranks its names in are all
+asserted without a socket. The `diffpack://registries` resource (#16) is a
+projection of this module rather than a hand-written copy of it, and Go
+support (#28) is a value added here rather than an edit in five places. See [ADR
 0004](adr/0004-one-registry-module.md).
 
 ### `src/archive/` — a version's files
 
 `fetch(registry, package, version) -> FileMap`. Everything on the other side of
-that signature — resolving the download URL, PyPI's second hop, what a status
-means, the size cap, decompressing, untarring, stripping the top-level
-directory — is this module's and nobody else's. The client it makes the
-request with is `http`'s, shared with `catalogue`. Two adapters sit
+that signature — resolving the download URL, PyPI's second hop, the HTTP
+client, the timeout, the size cap, decompressing, untarring, stripping the
+top-level directory — is this module's and nobody else's. Two adapters sit
 behind the same interface: the live one over `reqwest`, and a fixture one
 reading `fixtures/archives/`, which is what lets the suite assert what a
 version's files are with no network and what lets the conformance suite (#24)
@@ -168,39 +206,77 @@ Redirects are followed only while they stay on allowed hosts. A `302` is a
 request to wherever it points, so the alternative is an allowlist whose holes
 the registry chooses.
 
-### `src/catalogue/` — what a registry says it publishes
+### `src/catalogue/` — what a package has released
 
-`search(registry, query, limit) -> Vec<Hit>`. The archive seam's sibling, and
-deliberately not the archive seam: the question is *what does this registry
-have* rather than *what is in this version*, there is no version to name, and
-no `FileMap` comes out of it. Two adapters behind the one interface, as
-`archive` has: the live one, and a fixture one reading `fixtures/searches/`
-keyed by URL — so an offline test is a test of where each registry is asked as
-well as of what comes back, and its `null` entry is how the suite reaches the
-path a source being down takes. See [ADR
-0010](adr/0010-what-a-registry-publishes-is-its-own-seam.md).
+`versions(registry, package) -> Vec<Version>`, newest first. The second seam
+over the network, beside `archive` and shaped the same way: one interface, two
+adapters, and a fixture set keyed by the URL `registry` builds.
+
+It is not part of `archive` because that seam *is* a `FileMap` ([ADR
+0001](adr/0001-the-archive-seam-is-a-filemap.md)) and this is none of it: a
+document that is read rather than extracted, about a package rather than one
+version of one, and never cached.
+
+**Newest first means most recently published first**, and the date it is
+computed from is the only thing in these documents that can produce the
+order. Not a direction to read the document in: deps.dev sorts PyPI's versions
+lexically by version string, so `requests` ends at 2.9.2 and reversing it
+announces a 2016 release as the newest; and npm's own order is gone before
+this crate sees it, because its versions are a JSON object and `serde_json`'s
+map here is a `BTreeMap`. A version the source gives no date for — one of
+`requests`' 161, thirty-seven of `numpy`'s — is still a published version, so
+it is listed last rather than dropped.
+
+Nothing here is cached. The 256 MB budget is for diff results, and a package's
+version list goes stale the moment somebody publishes.
+
+### `src/search/` — which packages a registry has
+
+`hits(registry, query, limit) -> Vec<Hit>`, best match first. The third seam
+over the network, shaped like the other two: one interface, two adapters, and
+a fixture set under `fixtures/searches/` keyed by the URL `registry` builds —
+so an offline test is a test of where each registry is asked as well as of
+what comes back, and the set's `null` entry is how the suite reaches the path
+a source being down takes.
+
+It is beside `catalogue` rather than inside it because the two answer
+different questions and fail in opposite directions: a `404` on a version
+document is a package that does not exist, and a `404` on a search source is
+the source itself having moved, since nothing in that URL named a package. See
+[ADR 0011](adr/0011-what-a-registry-publishes-is-its-own-seam.md).
 
 Where a search is asked, what to ask it for, and how to read the answer are
-`registry`'s, not this module's. What is this module's is the request, the
-size cap, and the one policy a catalogue needs that an archive does not:
-PyPI's source is the index of everything it publishes rather than a reply to a
-query, so a warm instance holds the document it already fetched for as long as
-PyPI's own `cache-control` says it is current. That is a document, not an
-answer — every query is matched against it afresh — so no search result is
-cached anywhere, and nothing here goes near the blob store.
+`registry`'s. What is this module's is the request, the size cap, and the one
+policy a search needs that a catalogue does not: PyPI's source is the index of
+everything it publishes rather than a reply to a query, so a warm instance
+holds the document it already fetched for as long as PyPI's own
+`cache-control` says it is current. That is a document, not an answer — every
+query is matched against it afresh — so no search result is cached anywhere
+and nothing here goes near the blob store.
 
-`list_package_versions` (#18) is the second caller this seam is shaped for.
+### `src/fetch.rs` — the registries' HTTP client
 
-### `src/http.rs` — the one HTTP client
+Every request this server makes to a registry. It was `archive`'s until
+`catalogue` needed one too, and two copies would be two places to fix a
+timeout, a user agent or a redirect policy — which is the thing ADR 0001
+argued against in the first place. What leaves this module is bytes or a
+`Failure`, never a status code and never a `reqwest` type, so the seams above
+it stay the only things a tool sees.
 
-A timeout, a user agent, and redirects that cannot leave the allowlist, in one
-place because there are now two adapters that fetch. What leaves it is a
-response, bytes, or a `Failure` — never a status code, because what a status
-*means* differs between the two: a `404` from an archive URL is a version that
-does not exist, and a `404` from a search source is the source itself being
-broken.
+A registry is the whole of what it fetches from, and that is the line rather
+than an accident of what was written first. Its policy is a set of rules about
+somebody else's servers — which hosts may be reached, where a redirect may
+lead, what a `404` means to the seam that asked — and none of them is a rule
+about this project's own blob store, which is why `src/store/` has a client of
+its own and this module has no verb but `GET`.
 
-Private to the crate, and absent from the tool allow-list on purpose.
+A caller passes the refusals that differ between seams rather than this module
+guessing them, and the one header that differs. A `404` is a missing *version*
+to `archive`, a missing *package* to `catalogue` and a broken source to
+`search`, and a body over the cap is named after whichever was being read — an
+archive has a smaller thing to ask for instead and a version list does not.
+The header is `Accept`, which only PyPI's index needs: the same URL serves a
+web page unless the request asks for PEP 691's JSON.
 
 ### `src/store/` — cached diff results
 
@@ -209,6 +285,37 @@ Vercel Blob client is the implementation behind it and is private to this
 module, along with the 256 MB budget and the eviction that keeps it (#22). A
 tool asks for a result and gets one or does not; how many HTTP calls that took
 is not a tool's business. See [ADR 0003](adr/0003-the-cache-seam-is-a-store.md).
+
+The client is here today and `DiffStore` arrives with #21, so nothing in this
+module is public yet. Four operations — write a blob, ask whether one is
+there, list what is under a prefix, delete several at once — and no more,
+because a general client for the service is the shape ADR 0003 rejected.
+
+There is no published specification for that API and no usable Rust client for
+it, so the wire is taken from what `@vercel/blob` sends, read out of its
+source. Three of those facts are not guessable and fail only against the real
+store: a write's pathname is a query parameter rather than a path segment, the
+store id is provisioned with a `store_` prefix the header does not want, and
+`access` has no default. The tests drive the client through a stub HTTP server
+on a loopback port, so what they hold is the request this module writes rather
+than a shape it was told to produce — and because the client is private, they
+live in the module rather than in `tests/`.
+
+A stub cannot settle those three, which is why one test is not a stub. It was
+written from the same reading of `@vercel/blob` as the client, so it agrees
+with the client whether or not the reading was right; only the store can
+disagree. So the four operations also run against it once, `#[ignore]`d the
+way everything in `tests/networked.rs` is, and in the module for the same
+reason the rest are.
+
+The client here is the crate's second, and separate from `src/fetch.rs`'s on
+purpose. That one reaches registries: it GETs, it may follow a redirect only
+onto a registry's hosts, and it names its refusals after the seam that asked.
+This one writes to a store this project owns, with a credential on every
+request and no redirect to follow. One client serving both would be one policy
+serving two sets of reasons — but it is one *bar*, so what `fetch` settled for
+a registry is settled the same way here: a timeout on every request, and no
+retry on an answer that repeating the question cannot change.
 
 ### `src/page.rs` — the response ceiling
 
@@ -297,6 +404,55 @@ model never sees, and a tool error that is a *successful* response carrying
 returns exactly a tool handler's type, so a handler that ends in
 `failure.respond()` cannot put a failure on the wrong channel by accident.
 Redaction over anything that leaves the process lives here too.
+
+### `src/log.rs` — one line per tool call
+
+What an incident is read from. The questions asked when this server has
+misbehaved are always the same — which tool ran, what was it asked for, where
+did its time go, how did it end — so the answer is one structured line per
+call rather than prose in whichever handler wanted it.
+
+The line is written by `tools::call`, not by a tool. A tool that emitted its
+own would not fail to compile, and the gap would be invisible until the call
+nobody logged was the one being looked for. That is also why `crate::log` is
+not on `check-tool-seams.sh`'s list: `src/tools/mod.rs` is exempt from the
+import rule because it is the collection rather than a tool, and a tool still
+cannot reach the module.
+
+A `Line` is built before it is written, which is what makes the line
+testable: `Sink` has a variant that keeps lines in memory, a `Ctx` carries
+one, and `tests/log.rs` reads back the line a real `tools/call` produced
+rather than one a test built.
+
+Redaction is `error::redact`'s, so what must not reach an operator and what
+must not reach a model are one definition. Argument values are redacted and
+*then* cut, in that order: a signed URL cut at a hundred characters loses its
+`?` and stops looking like one.
+
+Where a call's time goes is accumulated in `Spent`, which a `Ctx` holds for
+the length of one request and the seams write into. `Ctx::archive()` and
+`Ctx::catalogue()` both hand back their seam with the stopwatch already on
+it, so a handler is unchanged and there is no way to wait on a registry
+uncounted. One wrapper over both, because the phase answers how long the call
+waited rather than which document it waited for — and a tool that only reads
+a catalogue reporting no wait at all is the reading an operator would take
+for "this one never left the process".
+
+`Spent` keeps the *window* fetching spanned rather than the sum of each
+fetch's duration, because `diff_package_versions` asks for two versions
+through one `try_join!` and a sum reports a thousand milliseconds where the
+call waited five hundred — in the field directly beside `total`, which a
+reader compares it against and which it could then exceed. It is also the one
+thing about this module a call over the wire cannot show: the fixture
+archives answer in under a millisecond, so `tests/log.rs` builds two
+overlapping spans by hand against `Spent::starting_at`.
+
+Two phases today. The finer split #26 asks for — download, extract, diff,
+store — needs each of the four to be something this crate can time, and none
+of them is: download and extract are one interface by ADR 0001, the diff is a
+synchronous call inside `src/engine.rs` which by ADR 0007 has no reach into a
+request, and the store is a client with no seam over it until #21. Each is a
+decision about a seam rather than a field to add.
 
 ### `src/engine.rs` — the one importer of `diffpack-engine`
 
