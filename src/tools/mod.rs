@@ -60,6 +60,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::archive::Archive;
+use crate::catalogue::Catalogue;
 use crate::error::Failure;
 
 /// Declare the tools, and build the collection and the dispatch from one list.
@@ -121,6 +122,7 @@ macro_rules! tools {
 tools! {
     get_file_content::GetFileContent,
     list_package_files::ListPackageFiles,
+    list_package_versions::ListPackageVersions,
     resolve_archive_url::ResolveArchiveUrl,
 }
 
@@ -130,42 +132,62 @@ tools! {
 /// handed to every handler, so that shared state is cloned in rather than
 /// rebuilt per call or stored somewhere that has to outlive an invocation.
 ///
-/// One seam today — [`Archive`], which arrived with #11, the first tool that
-/// reads a package's files — and `store` (#20) beside it when there is a
-/// cached result to reach for. [`crate::registry`] and [`crate::page`] are
-/// not among them and do not need to be: both are pure, so a tool reaches
-/// them as modules and there is nothing to hand it. A tool reaching for
-/// anything that is neither here nor a pure module has gone around a seam.
+/// Two seams today — [`Archive`], which arrived with #11, the first tool that
+/// reads a package's files, and [`Catalogue`], which arrived with #18, the
+/// first that reads what a package has released — and `store` (#20) beside
+/// them when there is a cached result to reach for. [`crate::registry`] and
+/// [`crate::page`] are not among them and do not need to be: both are pure,
+/// so a tool reaches them as modules and there is nothing to hand it. A tool
+/// reaching for anything that is neither here nor a pure module has gone
+/// around a seam.
 ///
-/// The archive is behind an [`Arc`] because this is cloned into every
-/// handler and an adapter is not free to rebuild: the live one is the
-/// process's HTTP client and the fixture one is a path it reads from.
+/// Each is behind an [`Arc`] because this is cloned into every handler and an
+/// adapter is not free to rebuild: a live one shares the process's HTTP
+/// client and a fixture one is a path it reads from.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Ctx {
     archive: Arc<Archive>,
+    catalogue: Arc<Catalogue>,
 }
 
 impl Ctx {
-    /// What production hands a handler: archives from the registries.
+    /// What production hands a handler: both seams reaching the registries.
     pub fn new() -> Self {
-        Self::with_archive(Archive::live())
+        Self {
+            archive: Arc::new(Archive::live()),
+            catalogue: Arc::new(Catalogue::live()),
+        }
     }
 
     /// The same, with the archive source supplied.
     ///
-    /// The seam the suite drives. `router_with` takes the service factory
-    /// that builds this, so a test reaches the fixture adapter through the
-    /// path production takes rather than around it.
+    /// A seam the suite drives. `router_with` takes the service factory that
+    /// builds this, so a test reaches a fixture adapter through the path
+    /// production takes rather than around it.
     pub fn with_archive(archive: Archive) -> Self {
         Self {
             archive: Arc::new(archive),
+            ..Self::new()
+        }
+    }
+
+    /// The same, with the version source supplied.
+    pub fn with_catalogue(catalogue: Catalogue) -> Self {
+        Self {
+            catalogue: Arc::new(catalogue),
+            ..Self::new()
         }
     }
 
     /// A version's files.
     pub fn archive(&self) -> &Archive {
         &self.archive
+    }
+
+    /// What a package has released.
+    pub fn catalogue(&self) -> &Catalogue {
+        &self.catalogue
     }
 }
 
