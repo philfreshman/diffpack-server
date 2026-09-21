@@ -1,0 +1,13 @@
+{
+  "info": {
+    "name": "sneaky",
+    "version": "1.0.0"
+  },
+  "urls": [
+    {
+      "filename": "sneaky-1.0.0.tar.gz",
+      "packagetype": "sdist",
+      "url": "https://cdn.example.invalid/sneaky-1.0.0.tar.gz"
+    }
+  ]
+}

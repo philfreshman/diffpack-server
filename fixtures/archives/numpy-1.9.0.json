@@ -1,0 +1,13 @@
+{
+  "info": {
+    "name": "numpy",
+    "version": "1.9.0"
+  },
+  "urls": [
+    {
+      "filename": "numpy-1.9.0.zip",
+      "packagetype": "sdist",
+      "url": "https://files.pythonhosted.org/packages/9a/54/numpy-1.9.0.zip"
+    }
+  ]
+}

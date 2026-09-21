@@ -1,0 +1,13 @@
+{
+  "info": {
+    "name": "tensorflow",
+    "version": "2.16.1"
+  },
+  "urls": [
+    {
+      "filename": "tensorflow-2.16.1-py3-none-any.whl",
+      "packagetype": "bdist_wheel",
+      "url": "https://files.pythonhosted.org/packages/2c/9d/tensorflow-2.16.1-py3-none-any.whl"
+    }
+  ]
+}
