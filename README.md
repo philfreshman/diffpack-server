@@ -30,23 +30,18 @@ file under `api/`, and `vercel.json` rewrites all traffic to it. So this repo
 is one binary in front of a library:
 
 ```
-api/mcp.rs       The deployed function. Thin: it wraps the router in
-                 vercel_runtime's layer and hands it to the runtime.
-src/lib.rs       Everything with a decision in it, where a test can reach it
-                 without a runtime.
-src/router.rs    Every route this function serves, and the panic guard over
-                 the transport. vercel.json rewrites all traffic here, so
-                 routing is this crate's job rather than the platform's.
-src/mcp.rs       The MCP handler: identity, capabilities, the tool list, and
-                 the wrapper that turns a panic in a handler into an answer.
-src/error.rs     Which channel a failure reaches the client on, and the
-                 redaction rule over anything that leaves the process.
+api/mcp.rs       The deployed function: wraps the router, and nothing else.
+src/lib.rs       Everything with a decision in it.
+src/router.rs    Every route this function serves.
+src/mcp.rs       The MCP handler: identity, capabilities, the tool list.
+src/error.rs     Which channel a failure reaches the client on.
 src/health.rs    The /health body.
 src/cache_key.rs The deterministic diff cache key.
 src/engine.rs    The one module allowed to import diffpack-engine.
 tests/           The suite, driven at the seams: real requests through the
                  real router, and the vectors read from fixtures/.
-docs/            Normative specifications. docs/cache-key.md is one.
+docs/            The architecture, the decisions, and the specifications that
+                 are normative rather than descriptive.
 fixtures/        Golden vectors two languages are tested against.
 scripts/         The checks CI runs, and the hook installer that makes a
                  commit run them too.
@@ -56,16 +51,18 @@ vercel.json      The deployment shape: the catch-all rewrite, the function
 .githooks/       The pre-commit hook. Not active until install-hooks.sh.
 ```
 
-Two boundaries are enforced rather than documented:
+That is the file list. What each module is *for*, which modules phases 3 and 4
+add, and what any of them may import is in
+[`docs/architecture.md`](docs/architecture.md); the nouns they trade in are in
+[`CONTEXT.md`](CONTEXT.md), and the decisions behind both are in
+[`docs/adr/`](docs/adr/). Two copies of a module list is how the two start
+disagreeing, so this one names the files and stops.
 
-- **`src/engine.rs` is the only importer of `diffpack_engine`.** One seam means
-  one file to change when the engine moves. `scripts/check-engine-seam.sh`
-  fails the build otherwise.
-- **`docs/cache-key.md` is normative, not descriptive.** The cache key is a
-  contract with a TypeScript implementation that will never share a line of
-  code with this one, so the document and
-  `fixtures/cache-key-vectors.json` are the source of truth and both
-  implementations are held to them.
+Three boundaries there are enforced rather than trusted: `src/engine.rs` is the
+only importer of `diffpack_engine`, a module under `src/tools/` reaches the
+network and the cache only through the seams, and `docs/cache-key.md` is the
+source of truth for the cache key rather than a description of it. The first
+two are `./scripts/checks.sh seams`; the third is `cargo test`.
 
 ## Commands
 
@@ -74,8 +71,8 @@ cargo test                              # the suite
 cargo fmt --all --check                 # formatting, no compile needed
 cargo clippy --all-targets -- -D warnings
 cargo build --release                   # produces the `mcp` binary
-./scripts/check-engine-seam.sh          # the engine import boundary
-./scripts/checks.sh                     # fmt, clippy, deny, audit, test
+./scripts/checks.sh seams               # the module boundaries
+./scripts/checks.sh                     # fmt, seams, clippy, deny, audit, test
 ```
 
 The toolchain is pinned in `rust-toolchain.toml` so CI and Vercel's build
@@ -94,6 +91,7 @@ Run once per clone. It points `core.hooksPath` at `.githooks/` and installs
 
 | Check | Runs when the commit touches | What it is for |
 | --- | --- | --- |
+| `./scripts/checks.sh seams` | `*.rs`, `scripts/check-*seam*.sh` | The boundaries the compiler cannot see: who may import the engine, and what a tool module may reach. Two greps, no toolchain. |
 | `cargo fmt --all --check` | `*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | Formatting. It compiles nothing, so it costs a second and removes the one way a commit that passed here can still go red on the pull request. |
 | `cargo clippy --all-targets -- -D warnings` | `*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | Lints, as errors. |
 | `cargo deny --all-features check` | `Cargo.toml`, `Cargo.lock`, `deny.toml` | Advisories, licenses, banned crates, and where the code came from. See `deny.toml`. |
@@ -112,7 +110,7 @@ to lose work — so a partial commit is checked by CI, not here. And `deny` and
 
 `git commit --no-verify` skips the hook, which is a reasonable thing to do for
 a work-in-progress commit on a branch. CI is the gate that cannot be skipped.
-`DIFFPACK_HOOK_ALL=1 git commit` forces all five regardless of what is staged.
+`DIFFPACK_HOOK_ALL=1 git commit` forces all six regardless of what is staged.
 
 ## Deployment
 

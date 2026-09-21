@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Blocks a commit that would not survive CI: fmt, clippy, deny, audit, test.
+# Blocks a commit that would not survive CI: fmt, seams, clippy, deny, audit,
+# test.
 #
 # Installed by `./scripts/install-hooks.sh`, which points `core.hooksPath` at
 # this directory. That is what makes the hook reviewable: it is a tracked file
@@ -37,12 +38,20 @@ matches() { grep -qE "$1" <<<"$staged"; }
 
 checks=()
 if [[ "${DIFFPACK_HOOK_ALL:-0}" == "1" ]]; then
-  checks=(fmt clippy deny audit test)
+  checks=(fmt seams clippy deny audit test)
 else
+  # The seam rules are greps over `src/` and `api/`, so any Rust file is a
+  # reason to run them - and so is a change to the rules themselves, which is
+  # the other way a seam check goes wrong. First because it is the cheapest
+  # check there is: two greps, no toolchain.
+  if matches '(\.rs$|^scripts/check-.*seams?\.sh$)'; then
+    checks+=(seams)
+  fi
+
   # Rust source, the manifest, the lockfile or the pinned toolchain: anything
   # that can change what the compiler sees.
   if matches '(\.rs$|^Cargo\.(toml|lock)$|^rust-toolchain\.toml$)'; then
-    # `fmt` first, and unconditionally alongside clippy: it compiles nothing,
+    # `fmt` here, and unconditionally alongside clippy: it compiles nothing,
     # so it costs a second and removes the one way a commit that passed here
     # can still go red on the pull request.
     checks+=(fmt clippy)
