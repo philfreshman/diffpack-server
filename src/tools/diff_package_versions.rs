@@ -24,6 +24,14 @@
 //! `description` in a schema a model reads, so it is written for that reader
 //! and names nothing in this repository. Why a field is shaped the way it is
 //! belongs here or in an ordinary comment beside the code.
+//!
+//! `handle` has no doc comment at all, deliberately, and for the reason
+//! `max_bytes` has none in [`super::get_file_content`]: it is
+//! [`crate::handle`]'s type and that module writes its description — where a
+//! handle comes from, that it carries its inputs as well as its `diff_id`,
+//! and that a handle whose halves disagree is refused. A sentence here would
+//! *replace* that rather than add to it, which is how the tool that mints a
+//! handle ends up describing it differently from the three that take one.
 
 use serde::{Deserialize, Serialize};
 
@@ -88,9 +96,11 @@ pub struct Args {
 /// What changed, and how to ask for more of it.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct Output {
-    /// Pass this back to any tool that reads part of this diff. Treat it as
-    /// opaque: it is issued here and passed on unchanged.
-    pub handle: String,
+    // No doc comment, on purpose: see the module header. The handle writes
+    // its own description, and this tool's answer is the same type the tools
+    // that read a diff back take as an argument — so neither of them says how
+    // a handle is spelled, and neither can say it differently.
+    pub handle: DiffHandle,
 
     /// The identifier of this comparison, as 64 lowercase hexadecimal
     /// characters. Every argument you passed names it, not the package and
@@ -325,11 +335,15 @@ impl Tool for DiffPackageVersions {
         changed.sort_by(|a, b| churn(b).cmp(&churn(a)).then_with(|| a.path.cmp(&b.path)));
         changed.truncate(MOST_CHANGED);
 
+        let diff_id = handle.diff_id();
+        let from_version = inputs.from_version.clone();
+        let to_version = inputs.to_version.clone();
+
         Ok(Output {
-            handle: handle.encode(),
-            diff_id: handle.diff_id(),
-            from_version: inputs.from_version.clone(),
-            to_version: inputs.to_version.clone(),
+            handle,
+            diff_id,
+            from_version,
+            to_version,
             totals,
             most_changed: changed,
         })

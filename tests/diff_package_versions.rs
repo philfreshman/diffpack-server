@@ -132,6 +132,38 @@ async fn the_definition_carries_everything_an_agent_needs() {
     );
 }
 
+/// The handle in the answer is described by the module that mints it.
+///
+/// This is the half a tool can take away without noticing: a doc comment on
+/// the field overrides the description the type wrote, and what is lost is
+/// the sentence saying a handle is passed back unchanged rather than built by
+/// hand. The tools that take one declare the same type, so a description
+/// written here would be this one answer disagreeing with all three of them —
+/// and this is where an agent meets a handle first.
+#[tokio::test]
+async fn the_handle_in_the_answer_is_described_by_the_module_that_mints_it() {
+    let tool = listed(TOOL).await;
+    let handle = &tool["outputSchema"]["properties"]["handle"];
+
+    assert_eq!(
+        handle["type"], "string",
+        "a handle is one string on the wire, got {handle}"
+    );
+    assert_eq!(handle["pattern"], "^d1:[A-Za-z0-9_-]+$", "got {handle}");
+
+    let said = handle["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a described field, got {handle}"));
+    assert!(
+        said.contains("minted by"),
+        "the description should say where a handle comes from: {said}"
+    );
+    assert!(
+        said.contains("not written by hand"),
+        "and that it is not one a client builds: {said}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // What it answers
 // ---------------------------------------------------------------------------
