@@ -22,6 +22,7 @@
 #![allow(dead_code)]
 
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use reqwest::{Client, Method, RequestBuilder, Response, Url};
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,27 @@ use crate::error::Failure;
 /// It decides the shape of what comes back, so it is not a number to bump
 /// idly: the parsing below is written for this version and for no other.
 const API_VERSION: &str = "12";
+
+/// Where the API lives. No trailing slash: the operations below append one
+/// where the API wants one and not where it does not.
+const API_BASE: &str = "https://vercel.com/api/blob";
+
+/// How many times one request is sent before this client gives up.
+///
+/// Three, not the ten `@vercel/blob` defaults to. That client serves a
+/// user's upload, where a retry is the difference between working and not;
+/// this one serves a cache, where giving up costs a recomputed diff and
+/// nothing else. Ten attempts against a store that is genuinely down would
+/// spend the function's time budget on a result it was going to compute
+/// anyway.
+const ATTEMPTS: u32 = 3;
+
+/// How long the second attempt waits, doubling for each one after it.
+///
+/// Small, for the same reason there are three of them: the whole retry
+/// budget here is under a second, because a caller is a diff that already
+/// has an answer and is only trying to remember it.
+const BACKOFF: Duration = Duration::from_millis(200);
 
 /// One blob, as the store describes it.
 ///
@@ -76,6 +98,64 @@ struct Deletion<'a> {
     urls: &'a [&'a str],
 }
 
+/// What a request to the store is authorised with.
+///
+/// Two fields rather than one, because the credential this deployment has
+/// does not carry the store it is for. An OIDC token is minted by the
+/// platform for the whole project, so the store id arrives beside it as its
+/// own variable — which is also why it is sent as its own header.
+pub(crate) struct Credentials {
+    store_id: String,
+    token: String,
+}
+
+impl Credentials {
+    /// The credentials in `read`, or a failure naming what is not there.
+    ///
+    /// A lookup rather than the process environment, so that what this
+    /// resolves is a question with an argument instead of a global read.
+    pub(crate) fn resolve(read: impl Fn(&str) -> Option<String>) -> Result<Self, Failure> {
+        if let Some(token) = read("VERCEL_OIDC_TOKEN") {
+            let store_id = read("BLOB_STORE_ID").ok_or(Failure::Internal {
+                doing: "reading the blob store's credentials: \
+                        an OIDC token is set but BLOB_STORE_ID is not",
+            })?;
+            return Ok(Self { store_id, token });
+        }
+
+        if let Some(token) = read("BLOB_READ_WRITE_TOKEN") {
+            // `vercel_blob_rw_{store id}_{secret}`. The store id is a field
+            // of the token rather than a variable beside it, which is why
+            // this deployment's OIDC path needs one and this one does not.
+            let store_id =
+                token
+                    .split('_')
+                    .nth(3)
+                    .filter(|id| !id.is_empty())
+                    .ok_or(Failure::Internal {
+                        doing: "reading the blob store's credentials: \
+                            BLOB_READ_WRITE_TOKEN is not in the shape a store id can be read from",
+                    })?;
+            let store_id = store_id.to_owned();
+            return Ok(Self { store_id, token });
+        }
+
+        Err(Failure::Internal {
+            doing: "reading the blob store's credentials: \
+                    neither VERCEL_OIDC_TOKEN nor BLOB_READ_WRITE_TOKEN is set",
+        })
+    }
+
+    /// The credentials this process was deployed with.
+    ///
+    /// The one line that reads the environment, so that everything deciding
+    /// what those variables mean is [`Credentials::resolve`] and can be
+    /// asked without a process to set them in.
+    pub(crate) fn from_env() -> Result<Self, Failure> {
+        Self::resolve(|name| std::env::var(name).ok())
+    }
+}
+
 /// The Vercel Blob API, as this server talks to it.
 pub(crate) struct Blob {
     /// The API's base URL, without a trailing slash.
@@ -84,6 +164,11 @@ pub(crate) struct Blob {
     store_id: String,
     /// The bearer token. Never logged, never put in a [`Failure`].
     token: String,
+    /// The wait before a second attempt. A field rather than the constant
+    /// read where it is used, so that retrying can be exercised at a
+    /// millisecond instead of making the suite wait out a real backoff —
+    /// the same reason `Archive` carries its size limit.
+    backoff: Duration,
 }
 
 impl Blob {
@@ -101,7 +186,23 @@ impl Blob {
                 .unwrap_or(store_id)
                 .to_owned(),
             token: token.into(),
+            backoff: BACKOFF,
         }
+    }
+
+    /// The client this deployment runs: the API itself, authorised with
+    /// `credentials`.
+    ///
+    /// Credentials are taken rather than read here, so that the failure a
+    /// missing variable produces happens where #21 can act on it — at the
+    /// moment the store is built, and not at the first cache write.
+    pub(crate) fn live(credentials: Credentials) -> Self {
+        Self::at(API_BASE, &credentials.store_id, credentials.token)
+    }
+
+    /// The same client, waiting `backoff` before its second attempt.
+    pub(crate) fn with_backoff(self, backoff: Duration) -> Self {
+        Self { backoff, ..self }
     }
 
     /// Write `body` to `pathname`.
@@ -114,7 +215,7 @@ impl Blob {
         let mut url = self.url(&format!("{}/", self.base))?;
         url.query_pairs_mut().append_pair("pathname", pathname);
 
-        let response = self
+        let request = self
             .request(Method::PUT, url)?
             // Both asked for rather than left to the API's defaults. The
             // path an entry lives at is derived from its contents, so a
@@ -128,11 +229,9 @@ impl Blob {
             // and because it is what every store serves without being
             // configured for it.
             .header("x-vercel-blob-access", "public")
-            .body(body)
-            .send()
-            .await
-            .map_err(|_| Failure::Internal { doing: DOING })?;
+            .body(body);
 
+        let response = self.send(request, DOING).await?;
         succeeded(response, DOING)?;
         Ok(())
     }
@@ -148,11 +247,7 @@ impl Blob {
 
         const DOING: &str = "asking the blob store for a cached result";
 
-        let response = self
-            .request(Method::GET, url)?
-            .send()
-            .await
-            .map_err(|_| Failure::Internal { doing: DOING })?;
+        let response = self.send(self.request(Method::GET, url)?, DOING).await?;
 
         // A blob that is not there is the ordinary answer to this question
         // and not a refusal to answer it, so it is the one status this
@@ -184,11 +279,7 @@ impl Blob {
                 url.query_pairs_mut().append_pair("cursor", cursor);
             }
 
-            let response = self
-                .request(Method::GET, url)?
-                .send()
-                .await
-                .map_err(|_| Failure::Internal { doing: DOING })?;
+            let response = self.send(self.request(Method::GET, url)?, DOING).await?;
 
             let page: Page = self.read(succeeded(response, DOING)?, DOING).await?;
             blobs.extend(page.blobs);
@@ -212,13 +303,12 @@ impl Blob {
         let body = serde_json::to_vec(&Deletion { urls: pathnames })
             .map_err(|_| Failure::Internal { doing: DOING })?;
 
-        let response = self
+        let request = self
             .request(Method::POST, url)?
             .header("content-type", "application/json")
-            .body(body)
-            .send()
-            .await
-            .map_err(|_| Failure::Internal { doing: DOING })?;
+            .body(body);
+
+        let response = self.send(request, DOING).await?;
 
         // A blob that is already gone is the outcome this call asked for.
         // The API is idempotent here, and not relying on that costs one
@@ -231,6 +321,41 @@ impl Blob {
 
         succeeded(response, DOING)?;
         Ok(())
+    }
+
+    /// Send `request`, trying again while the store's answer says trying
+    /// again could help.
+    ///
+    /// Two things are worth another attempt and nothing else is: a request
+    /// that never became a response, and a `5xx`. Both mean the store, not
+    /// the request — so the same bytes sent again may work. A `4xx` is the
+    /// store reading what was asked and refusing it, and sending it again
+    /// is asking a settled question twice.
+    async fn send(
+        &self,
+        request: RequestBuilder,
+        doing: &'static str,
+    ) -> Result<Response, Failure> {
+        let mut attempt = 1;
+        let mut wait = self.backoff;
+
+        loop {
+            let again = request.try_clone().ok_or(Failure::Internal { doing })?;
+            let outcome = again.send().await;
+
+            let worth_retrying = match &outcome {
+                Ok(response) => response.status().is_server_error(),
+                Err(_) => true,
+            };
+
+            if !worth_retrying || attempt == ATTEMPTS {
+                return outcome.map_err(|_| Failure::Internal { doing });
+            }
+
+            tokio::time::sleep(wait).await;
+            wait *= 2;
+            attempt += 1;
+        }
     }
 
     /// A response's body, as whatever this client asked the API for.
@@ -328,6 +453,7 @@ mod tests {
 
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use axum::body::{Body, Bytes};
     use axum::extract::{Request, State};
@@ -759,5 +885,213 @@ mod tests {
         blob.put("diffs/v1/abc/meta.json", b"{}".to_vec())
             .await
             .expect_err("a write the store refused is not a write");
+    }
+
+    /// A store that is briefly unwell is the case worth spending a retry
+    /// on: the request was good, nothing about it needs changing, and the
+    /// alternative is a diff recomputed from two archive downloads because
+    /// one `503` arrived at the wrong moment.
+    #[tokio::test]
+    async fn a_request_the_store_could_not_answer_is_tried_again() {
+        let stub = Stub::answering(vec![
+            Reply::refusing(StatusCode::SERVICE_UNAVAILABLE, "service_unavailable"),
+            Reply::ok("{}"),
+        ])
+        .await;
+        let blob =
+            Blob::at(stub.base(), "a-test-store", "a-token").with_backoff(Duration::from_millis(1));
+
+        blob.put("diffs/v1/abc/meta.json", b"{}".to_vec())
+            .await
+            .expect("the second attempt is the one that worked");
+
+        assert_eq!(
+            stub.requests().len(),
+            2,
+            "a store that answered `503` should have been asked again"
+        );
+    }
+
+    /// The other edge of the same rule, and the one that costs something to
+    /// get wrong. A `404` is the store having read the request and answered
+    /// it; asking again is asking a settled question twice, and doing it
+    /// under a retry budget turns every cold cache — the commonest thing
+    /// this client does — into three round trips and two sleeps before the
+    /// diff can even start.
+    #[tokio::test]
+    async fn a_refusal_the_store_would_only_repeat_is_not_tried_again() {
+        let stub = Stub::answering(vec![Reply::refusing(StatusCode::NOT_FOUND, "not_found")]).await;
+        let blob =
+            Blob::at(stub.base(), "a-test-store", "a-token").with_backoff(Duration::from_millis(1));
+
+        blob.head("diffs/v1/nothing-here/meta.json")
+            .await
+            .expect("a cold cache is not a failure");
+
+        assert_eq!(
+            stub.requests().len(),
+            1,
+            "a `404` is an answer, so it should have been asked once"
+        );
+    }
+
+    /// The claim `tests/errors.rs` left for this issue to make. It asserted
+    /// redaction against a token-shaped string because this client did not
+    /// exist; this is the same claim against a failure built inside it.
+    ///
+    /// The token is put in both places a failure could pick one up — the
+    /// request this client sends, and the body the store refuses with — and
+    /// then every rendering of the failure is read for it: the `Debug` a log
+    /// line would carry, and the text that leaves on whichever channel
+    /// `respond` puts it on.
+    ///
+    /// The defence being checked is structural rather than a filter. A
+    /// failure here is built from a fixed phrase this module chose, so there
+    /// is nothing for a credential to arrive in. What this test catches is
+    /// the day someone adds a variant that carries the store's own words.
+    #[tokio::test]
+    async fn no_failure_this_client_builds_carries_the_token() {
+        // Assembled rather than written out, for the reason
+        // `tests/errors.rs` gives at length: a literal of this shape is
+        // indistinguishable from a real credential to a secret scanner, and
+        // a check that cries wolf is one people learn to click past.
+        //
+        // Do not "tidy" this back into one literal.
+        let token = ["vercel", "blob", "rw", "A1b2C3d4E5f6G7h8i9J0kL1mN2oP3qR4"].join("_");
+
+        let stub = Stub::answering(vec![Reply {
+            status: StatusCode::FORBIDDEN,
+            body: format!(r#"{{"error":{{"code":"forbidden","message":"token {token} denied"}}}}"#),
+        }])
+        .await;
+        let blob = Blob::at(stub.base(), "a-test-store", token.clone())
+            .with_backoff(Duration::from_millis(1));
+
+        let failure = blob
+            .put("diffs/v1/abc/meta.json", b"{}".to_vec())
+            .await
+            .expect_err("the store refused this write");
+
+        let logged = format!("{failure:?}");
+        let sent = match failure.respond() {
+            Ok(answer) => format!("{answer:?}"),
+            Err(error) => format!("{error:?}"),
+        };
+
+        for rendering in [&logged, &sent] {
+            assert!(
+                !rendering.contains(&token),
+                "the token survived into a failure: {rendering}"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Credentials
+    // -----------------------------------------------------------------
+    //
+    // The second seam, and it is a function over a lookup rather than over
+    // the process environment on purpose: `std::env::set_var` is global to
+    // the test binary and unsound beside threads that read it, so tests
+    // that set variables cannot run next to each other or next to anything
+    // else. A lookup makes each of these a pure question with a written-down
+    // answer.
+
+    /// An environment, as `resolve` reads one.
+    fn env(variables: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let variables: Vec<(String, String)> = variables
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+
+        move |wanted| {
+            variables
+                .iter()
+                .find(|(name, _)| name == wanted)
+                .map(|(_, value)| value.clone())
+        }
+    }
+
+    /// What this project is actually provisioned with. There is no
+    /// read-write token on it at all: the store id is an environment
+    /// variable and the credential is an OIDC token the platform mints and
+    /// refreshes, which is why the two are separate here rather than one
+    /// string the store id can be read out of.
+    #[test]
+    fn an_oidc_token_beside_a_store_id_is_what_authorises_a_request() {
+        let credentials = Credentials::resolve(env(&[
+            ("VERCEL_OIDC_TOKEN", "an-oidc-token"),
+            ("BLOB_STORE_ID", "store_a-test-store"),
+        ]))
+        .expect("this is the pair this deployment is given");
+
+        assert_eq!(credentials.store_id, "store_a-test-store");
+        assert_eq!(credentials.token, "an-oidc-token");
+    }
+
+    /// The fallback, for a deployment given a read-write token instead.
+    /// There is no store id variable in that case, because the token is the
+    /// store id: it is the fourth underscore-separated field of it. This is
+    /// the only place this client reads a credential for anything but its
+    /// value, and it is why the field exists at all.
+    ///
+    /// Assembled rather than written out, for the reason given above.
+    #[test]
+    fn a_read_write_token_names_the_store_it_is_for() {
+        let token = [
+            "vercel",
+            "blob",
+            "rw",
+            "a-test-store",
+            "A1b2C3d4E5f6G7h8i9J0kL",
+        ]
+        .join("_");
+
+        let credentials = Credentials::resolve(env(&[("BLOB_READ_WRITE_TOKEN", token.as_str())]))
+            .expect("a read-write token is credentials on its own");
+
+        assert_eq!(credentials.store_id, "a-test-store");
+        assert_eq!(credentials.token, token);
+    }
+
+    /// A misconfigured deployment has to say which variable to set, and say
+    /// it where it can be read: resolving here rather than at the first
+    /// cache write is the difference between a deploy that fails and a
+    /// deploy that looks healthy and quietly caches nothing for a week,
+    /// because a cache failure is swallowed by design (#21).
+    ///
+    /// Three ways to be misconfigured, and they are three because the
+    /// remedies differ: add the store id, set a credential at all, or
+    /// replace a token that is not one.
+    #[test]
+    fn a_deployment_missing_a_credential_fails_naming_the_variable_to_set() {
+        let cases: [(&[(&str, &str)], &str); 3] = [
+            (&[("VERCEL_OIDC_TOKEN", "an-oidc-token")], "BLOB_STORE_ID"),
+            (&[], "VERCEL_OIDC_TOKEN"),
+            (
+                &[("BLOB_READ_WRITE_TOKEN", "not-a-token")],
+                "BLOB_READ_WRITE_TOKEN",
+            ),
+        ];
+
+        for (variables, named) in cases {
+            // Matched rather than `expect_err`ed, because that would need
+            // `Credentials` to be `Debug` — and a derived `Debug` on a type
+            // holding a bearer token is the leak this module already spends
+            // a test on not having.
+            let Err(failure) = Credentials::resolve(env(variables)) else {
+                panic!("`{named}` is missing, so these are not credentials");
+            };
+
+            let message = match failure.respond() {
+                Ok(answer) => format!("{answer:?}"),
+                Err(error) => error.message.into_owned(),
+            };
+
+            assert!(
+                message.contains(named),
+                "the failure should name `{named}`, and says: {message}"
+            );
+        }
     }
 }
