@@ -85,6 +85,14 @@ pub struct Args {
     /// How alike a removed file and an added file must be before the pair is
     /// reported as one renamed file, from `0` to `1`. Lower it to find
     /// renames in files that also changed a lot.
+    // The range is declared rather than enforced, which is the opposite of
+    // what `page` does with a limit. The comparison narrows a value outside
+    // it, but what names the diff is the number as it arrived: the identifier
+    // is a contract with an implementation in another language, so narrowing
+    // here would mean two sides computing two names for one comparison. An
+    // agent that reads the bound never sends one — which is why the bound is
+    // in the schema and not only in the sentence above it.
+    #[schemars(range(min = 0.0, max = 1.0))]
     #[serde(default = "default_similarity_threshold")]
     pub similarity_threshold: f64,
 

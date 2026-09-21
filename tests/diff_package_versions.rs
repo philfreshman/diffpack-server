@@ -101,6 +101,14 @@ async fn the_definition_carries_everything_an_agent_needs() {
         tool["inputSchema"]
     );
 
+    // The threshold's range, where an agent reads it rather than in the
+    // sentence beside it. A value outside it is narrowed by the comparison
+    // and not by the identifier, so the same diff asked for twice out of
+    // range is two names for one answer — which the bound is what stops.
+    let threshold = &tool["inputSchema"]["properties"]["similarity_threshold"];
+    assert_eq!(threshold["minimum"], json!(0.0), "got {threshold}");
+    assert_eq!(threshold["maximum"], json!(1.0), "got {threshold}");
+
     assert_eq!(
         tool["inputSchema"]["properties"]["registry"]["enum"],
         json!(["npm", "crates", "pypi"]),
