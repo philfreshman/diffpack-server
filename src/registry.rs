@@ -200,7 +200,7 @@ impl Registry {
     /// cost.
     pub fn search(self, query: &str, limit: u32) -> SearchSource {
         let escaped = escape(query);
-        let (url, accept) = match self {
+        let (url, accept, whole_index) = match self {
             // The most each source answers, in that source's own units.
             // Narrowed here rather than sent: npm and crates.io both refuse a
             // larger one outright, so a caller asking for a thousand hits
@@ -210,6 +210,7 @@ impl Registry {
                 (
                     format!("https://registry.npmjs.org/-/v1/search?text={escaped}&size={size}"),
                     "application/json",
+                    false,
                 )
             }
             Self::Crates => {
@@ -217,6 +218,7 @@ impl Registry {
                 (
                     format!("https://crates.io/api/v1/crates?q={escaped}&per_page={per_page}"),
                     "application/json",
+                    false,
                 )
             }
             // Without this the same URL answers with the web page pip does
@@ -224,9 +226,14 @@ impl Registry {
             Self::PyPi => (
                 "https://pypi.org/simple/".to_owned(),
                 "application/vnd.pypi.simple.v1+json",
+                true,
             ),
         };
-        SearchSource { url, accept }
+        SearchSource {
+            url,
+            accept,
+            whole_index,
+        }
     }
 
     /// The hits a search answer names, or nothing if it is not an answer
@@ -523,6 +530,15 @@ pub struct SearchSource {
     pub url: String,
     /// What the request says it accepts.
     pub accept: &'static str,
+    /// Whether this source answers every query with the same document.
+    ///
+    /// True for a source that is an index rather than a reply, which is
+    /// PyPI's and nobody else's: its URL carries no query, so one fetch
+    /// serves every search made against it. What that buys is the difference
+    /// between holding one document and caching results — an answer that
+    /// carried the query in its URL would be a per-query cache, with a
+    /// staleness nobody asked for and no bound on what it holds.
+    pub whole_index: bool,
 }
 
 /// One package a search found.

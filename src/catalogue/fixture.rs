@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::error::Failure;
 use crate::registry::Registry;
@@ -42,7 +43,7 @@ impl Fixture {
     /// is in the archive fixtures: a failure a model can act on says which
     /// source went quiet, and this is the only place that knows both the URL
     /// and who it belongs to.
-    pub fn body(&self, url: &str, registry: Registry) -> Result<String, Failure> {
+    pub fn body(&self, url: &str, registry: Registry) -> Result<Arc<str>, Failure> {
         let missing = || Failure::Internal {
             doing: "reading the search fixtures",
         };
@@ -58,6 +59,8 @@ impl Fixture {
             Some(None) => return Err(super::unavailable(registry, SOURCE_DOWN)),
             None => return Err(missing()),
         };
-        std::fs::read_to_string(self.dir.join(file)).map_err(|_| missing())
+        std::fs::read_to_string(self.dir.join(file))
+            .map(Arc::from)
+            .map_err(|_| missing())
     }
 }

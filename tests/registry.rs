@@ -261,6 +261,7 @@ fn search_comes_from_the_registrys_own_index() {
         SearchSource {
             url: "https://registry.npmjs.org/-/v1/search?text=zod&size=10".to_owned(),
             accept: "application/json",
+            whole_index: false,
         }
     );
     assert_eq!(
@@ -268,6 +269,7 @@ fn search_comes_from_the_registrys_own_index() {
         SearchSource {
             url: "https://crates.io/api/v1/crates?q=json%20parser&per_page=5".to_owned(),
             accept: "application/json",
+            whole_index: false,
         },
         "a query is a parameter value, so a space in it is escaped and not sent"
     );
@@ -276,9 +278,31 @@ fn search_comes_from_the_registrys_own_index() {
         SearchSource {
             url: "https://pypi.org/simple/".to_owned(),
             accept: "application/vnd.pypi.simple.v1+json",
+            whole_index: true,
         },
         "PyPI has no search endpoint, so the source is the index itself"
     );
+}
+
+/// Whether a source answers every query with the same document, which is the
+/// difference between holding one index and caching results. PyPI's URL
+/// carries no query — the matching happens here — so one fetch serves every
+/// search that instance makes; npm's and crates.io's carry the query, and
+/// holding those answers would be a result cache with a staleness nobody
+/// asked for.
+#[test]
+fn only_a_source_that_is_the_whole_index_says_so() {
+    assert!(
+        Registry::PyPi.search("requests", 10).whole_index,
+        "PyPI's source is every name it publishes, whatever was asked"
+    );
+    for registry in [Registry::Npm, Registry::Crates] {
+        assert!(
+            !registry.search("requests", 10).whole_index,
+            "{} is asked the query itself",
+            registry.id()
+        );
+    }
 }
 
 /// What a source is asked *for* travels with where it is: the same URL serves
@@ -312,6 +336,7 @@ fn a_source_is_never_asked_for_more_than_it_answers() {
         SearchSource {
             url: "https://registry.npmjs.org/-/v1/search?text=zod&size=250".to_owned(),
             accept: "application/json",
+            whole_index: false,
         },
         "npm refuses a size over 250"
     );
@@ -320,6 +345,7 @@ fn a_source_is_never_asked_for_more_than_it_answers() {
         SearchSource {
             url: "https://crates.io/api/v1/crates?q=serde&per_page=100".to_owned(),
             accept: "application/json",
+            whole_index: false,
         },
         "crates.io refuses a per_page over 100"
     );

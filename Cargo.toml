@@ -42,19 +42,28 @@ diffpack-engine = { git = "https://github.com/philfreshman/diffpack-engine.git",
 # own, so a tower layer never sees that unwind and the request hangs
 # instead of failing. See `mcp::Guarded`.
 futures = { version = "0.3.34", default-features = false, features = ["std"] }
-# The HTTP client behind `src/archive/`, and the only one in this crate: a
+# The HTTP client behind `src/http.rs`, and the only one in this crate: a
 # tool never names it, and `scripts/check-tool-seams.sh` fails the build if one
 # does. Default features off, because what this server does is GET three known
 # hosts and read the bodies as bytes — no cookies, no JSON, no multipart, no
-# proxy discovery, no compression negotiation (an archive is already
-# compressed, and a body decoded on the way in would be a body whose size cap
-# was applied to the wrong number).
+# proxy discovery.
+#
+# `gzip` is the exception, and it arrived with #19. That note used to say no
+# compression negotiation at all, on the grounds that an archive is compressed
+# already — true, and it stopped being the whole story when the search source
+# chosen for PyPI turned out to be the index it publishes: 44 MB raw and 25 s
+# against a 30 s upstream timeout, against 9.7 MB and 4.4 s compressed. The
+# size cap is unaffected, because the running total is counted on decoded
+# chunks as they arrive; what weakens is the shortcut that refuses a body on
+# its declared length, which a compressed body no longer states. An archive
+# negotiates nothing it did not before: a registry serving a `.tgz` does not
+# gzip it a second time.
 #
 # `rustls-no-provider` rather than `rustls`: the default provider is
 # `aws-lc-rs`, which wants a C toolchain at build time and carries the OpenSSL
 # license. `src/archive/live.rs` installs `ring` instead, which is why `rustls`
 # is named below as a dependency of ours rather than only of reqwest's.
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["gzip", "rustls-no-provider"] }
 # The official MCP SDK, and the reason this crate does not hand-roll a
 # protocol. It implements revision `2026-07-28` while still answering clients
 # on `2025-11-25` and earlier, which is what makes one endpoint serve every
