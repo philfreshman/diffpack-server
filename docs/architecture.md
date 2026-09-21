@@ -287,7 +287,7 @@ not on `check-tool-seams.sh`'s list: `src/tools/mod.rs` is exempt from the
 import rule because it is the collection rather than a tool, and a tool still
 cannot reach the module.
 
-A `Record` is built before it is written, which is what makes the line
+A `Line` is built before it is written, which is what makes the line
 testable: `Sink` has a variant that keeps lines in memory, a `Ctx` carries
 one, and `tests/log.rs` reads back the line a real `tools/call` produced
 rather than one a test built.

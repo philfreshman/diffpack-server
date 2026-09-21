@@ -62,7 +62,7 @@ use serde::Serialize;
 
 use crate::archive::{Archive, FileMap};
 use crate::error::Failure;
-use crate::log::{Record, Sink, Spent};
+use crate::log::{Line, Sink, Spent};
 use crate::registry::Registry;
 
 /// Declare the tools, and build the collection and the dispatch from one list.
@@ -311,12 +311,12 @@ pub async fn call(
     ctx: &Ctx,
 ) -> Result<CallToolResult, ErrorData> {
     // Summarised before the dispatch, because the dispatch consumes them.
-    let record = Record::new(name).about(arguments.as_ref());
+    let line = Line::new(name).about(arguments.as_ref());
 
     let started = Instant::now();
     let answer = dispatch(name, arguments, ctx).await;
     ctx.log
-        .write(&record.taking(started.elapsed(), &ctx.spent).ending(&answer));
+        .write(&line.taking(started.elapsed(), &ctx.spent).ending(&answer));
 
     // The one place a `Failure` is put on its channel. Every path into this
     // function returns one, so there is no arm that can answer without

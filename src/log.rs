@@ -8,7 +8,7 @@
 //!
 //! # Why the line is a value before it is output
 //!
-//! [`Record`] is built, then written. That is what lets the suite assert what
+//! [`Line`] is built, then written. That is what lets the suite assert what
 //! a real call emitted: [`Sink`] has a variant that keeps lines in memory, a
 //! [`Ctx`](crate::tools::Ctx) carries one, and a test reads back the line the
 //! call produced rather than a line a test built. Emission that went straight
@@ -26,22 +26,26 @@ use serde_json::Value;
 use crate::error::Failure;
 
 /// One tool call, as the line it leaves behind.
+///
+/// Named for what `CONTEXT.md` calls it. The glossary coins Line, Phase and
+/// Cause in the same change this module arrives in, and a type here called
+/// anything else would be the drift those entries exist to stop.
 #[derive(Debug, Serialize)]
-pub struct Record {
+pub struct Line {
     /// Which tool ran.
     pub tool: String,
 
     /// What it was asked for.
-    pub args: Summary,
+    pub args: Arguments,
 
     /// How the call ended.
     pub result: &'static str,
 
     /// How long it took, by phase.
-    pub ms: Timings,
+    pub ms: Phases,
 }
 
-impl Record {
+impl Line {
     /// The line for a call of `tool`.
     ///
     /// Shortened like an argument is, because a name that reached here is not
@@ -50,16 +54,16 @@ impl Record {
     pub fn new(tool: &str) -> Self {
         Self {
             tool: shorten(tool),
-            args: Summary::default(),
+            args: Arguments::default(),
             result: "ok",
-            ms: Timings::default(),
+            ms: Phases::default(),
         }
     }
 
     /// The same line, carrying what the call was for.
     pub fn about(self, arguments: Option<&JsonObject>) -> Self {
         Self {
-            args: Summary::of(arguments),
+            args: Arguments::of(arguments),
             ..self
         }
     }
@@ -67,7 +71,7 @@ impl Record {
     /// The same line, saying where the call's time went.
     pub fn taking(self, total: Duration, spent: &Spent) -> Self {
         Self {
-            ms: Timings {
+            ms: Phases {
                 total: millis(total),
                 fetch: spent.fetch().map(millis),
             },
@@ -104,7 +108,7 @@ impl Record {
 /// measurement, and a percentile taken over a column where half the rows are
 /// a phase that never ran describes neither population.
 #[derive(Debug, Default, Serialize)]
-pub struct Timings {
+pub struct Phases {
     /// Everything: argument validation, the work, and building the answer.
     pub total: f64,
 
@@ -130,7 +134,7 @@ pub struct Timings {
 /// `diff_package_versions` asks for two versions through one `try_join!`, so
 /// two fetches overlap. Summing their durations reports a thousand
 /// milliseconds where the call waited five hundred, in the field directly
-/// beside [`Timings::total`] — which a reader compares it against, and which
+/// beside [`Phases::total`] — which a reader compares it against, and which
 /// it can then exceed.
 ///
 /// So what is kept is the window: the earliest a fetch began to the latest
@@ -226,15 +230,19 @@ fn millis(duration: Duration) -> f64 {
 
 /// A call's arguments, as much of them as belongs in a line.
 ///
+/// Not a Summary: that is the Totals and the sample `diff_package_versions`
+/// answers with, and a second meaning for it here would cost the glossary the
+/// one it already has.
+///
 /// The arguments as they arrived rather than the fields this module thought
 /// worth keeping. Which argument matters is the tool's business and there
 /// will be nineteen tools; a list here would be a list to widen, and the
 /// argument nobody thought to log is the one an incident turns on.
 #[derive(Debug, Default, Serialize)]
 #[serde(transparent)]
-pub struct Summary(JsonObject);
+pub struct Arguments(JsonObject);
 
-impl Summary {
+impl Arguments {
     /// The most of one name or one value a line carries.
     ///
     /// Sized so that the arguments a person reads arrive whole — a scoped
@@ -301,15 +309,15 @@ fn shorten(text: &str) -> String {
     // sequence in half would produce a line that is not valid JSON — and
     // compared the same way, so that a value made of multi-byte characters
     // and left whole does not arrive wearing the mark of one that was cut.
-    let kept: String = text.chars().take(Summary::LONGEST).collect();
+    let kept: String = text.chars().take(Arguments::LONGEST).collect();
     if kept.len() == text.len() {
         return kept;
     }
 
-    format!("{kept}{}", Summary::CUT)
+    format!("{kept}{}", Arguments::CUT)
 }
 
-/// Where a [`Record`] goes.
+/// Where a [`Line`] goes.
 ///
 /// Two variants rather than a trait, for the reason [ADR
 /// 0004](../docs/adr/0004-one-registry-module.md) gives: neither can arrive
@@ -326,14 +334,14 @@ pub enum Sink {
 }
 
 impl Sink {
-    /// Write `record` as one line.
+    /// Write `line`.
     ///
     /// Every failure here is swallowed, deliberately: a request that was
     /// answered correctly must not fail because the line describing it could
     /// not be written. A log that can break the thing it observes is worse
     /// than no log.
-    pub fn write(&self, record: &Record) {
-        let Ok(line) = serde_json::to_string(record) else {
+    pub fn write(&self, line: &Line) {
+        let Ok(line) = serde_json::to_string(line) else {
             return;
         };
 
