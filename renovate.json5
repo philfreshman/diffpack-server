@@ -1,0 +1,186 @@
+// Automatic dependency updates, as the sibling repositories have them.
+//
+// Renovate is a GitHub App rather than a workflow in `.github/workflows/`: it
+// runs on Mend's infrastructure, reads this file, and opens pull requests
+// against `development`. Nothing in CI invokes it, and there is no token in
+// this repository for it.
+//
+// It finds three sets of dependencies here without being told to:
+//
+//   cargo           `Cargo.toml` and `Cargo.lock`, including the
+//                   `diffpack-engine` git tag
+//   rust-toolchain  the `channel` in `rust-toolchain.toml`
+//   github-actions  the `uses:` lines in `.github/workflows/ci.yml`
+//
+// JSON5 rather than the `renovate.json` that `../diffpack` uses, for the same
+// reason `deny.toml` is a commented file: a dependency policy whose rules
+// carry no reason is a policy someone deletes a rule from. Renovate reads
+// both.
+//
+// # What makes automerging safe
+//
+// Every pull request into `development` runs `scripts/checks.sh` — clippy with
+// `-D warnings`, the whole test suite, `cargo deny`, `cargo audit` and the
+// seam rules — and all seven jobs are required status checks on the branch.
+// So an automerged update is one that compiled, passed the suite, carried no
+// advisory and introduced no license that `deny.toml` has not been shown. A
+// bump that breaks any of that stops being an automerge and becomes a red
+// pull request, which is the outcome we want from it.
+//
+// Majors are exempt on purpose: see the rule at the bottom.
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+
+  "extends": ["config:recommended"],
+
+  // The same two days as `../diffpack`, so that a fortnight's dependency
+  // churn across the three repositories arrives together rather than
+  // trickling in on three different cadences.
+  //
+  // Security fixes ignore this. Renovate's `vulnerabilityAlerts` defaults are
+  // `schedule: []` and `prCreation: "immediate"`, so an advisory that lands on
+  // the 3rd opens a pull request on the 3rd. That matters here because
+  // `cargo audit --deny warnings` turns every *other* pull request red as
+  // soon as an advisory is published, and the fix should already be in flight
+  // when that happens. It needs GitHub's Dependabot alerts switched on for
+  // the repository — Renovate reads them, it does not have its own feed.
+  "schedule": ["before 5am on the 1st and 15th day of the month"],
+
+  // No version younger than three days is proposed at all.
+  //
+  // `deny.toml` says why this repository is stricter than the other two: this
+  // is the one place in diffpack where package archives are fetched and
+  // extracted on a server rather than in a reader's browser, so the
+  // dependency graph is attack surface. The window a malicious crates.io
+  // publish is caught and yanked in is measured in hours to days, and
+  // automerging means nobody reads the diff before it is in `development`.
+  //
+  // `internalChecksFilter` defaults to `strict`, which is what makes this a
+  // filter rather than a delay: a version still inside the window is dropped
+  // from consideration, so no branch is cut and there is no pending check for
+  // GitHub's automerge to race past. The cost is that a release published on
+  // the 30th waits for the 15th, which is the right trade at a twice-monthly
+  // cadence.
+  //
+  // All three datasources in use here (`crate`, `github-tags`,
+  // `rust-version`) report release timestamps, so nothing is held forever for
+  // want of one.
+  "minimumReleaseAge": "3 days",
+
+  // Merged by GitHub once the required checks pass, not by Renovate polling.
+  "automerge": true,
+  "automergeType": "pr",
+  "platformAutomerge": true,
+
+  // `Cargo.lock` is committed, and `rangeStrategy=auto` leaves most upgrades
+  // to it: `axum = "0.8.9"` stays as written while the lock moves, because a
+  // caret range that still holds does not need `Cargo.toml` edited. That is
+  // also why the lockfile needs a sweep of its own — transitive dependencies
+  // move without any direct dependency asking them to, and nothing else here
+  // would ever propose them.
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 5am on the 1st day of the month"]
+  },
+
+  "labels": ["dependency-update"],
+
+  // `Checklist` and `Diffpack` are `../diffpack`'s columns, kept so a reader
+  // moving between the two repositories reads the same table. `Change` is
+  // added because two of the three managers here have no diffpack.io page and
+  // would otherwise have a row that says nothing about what moved.
+  "prBodyColumns": ["Checklist", "Package", "Change", "Diffpack", "Age", "Confidence"],
+  "prBodyDefinitions": {
+    "Checklist": "- [ ]",
+    // Only crates.io dependencies get a link: diffpack.io serves npm,
+    // crates.io and PyPI, so a GitHub Action or the Rust toolchain has no
+    // page there. The path segment is `crates` and Renovate's datasource id
+    // is `crate`, which is why this is a literal rather than
+    // `{{{datasource}}}` as it is in `../diffpack`. The host is the apex too,
+    // not the `www.` that `../diffpack` uses, because `www.diffpack.io`
+    // answers with a redirect to it.
+    "Diffpack": "{{#if (and (equals datasource 'crate') currentVersion newVersion)}}[{{{currentVersion}}} → {{{newVersion}}}](https://diffpack.io/crates/{{{depName}}}/{{{currentVersion}}}/{{{newVersion}}}){{else}}—{{/if}}"
+  },
+
+  "packageRules": [
+    {
+      // rmcp and schemars move together or not at all.
+      //
+      // `Cargo.toml` keeps schemars in step with rmcp's own dependency on it
+      // so that `JsonSchema` here is the same trait rmcp asks for. Bumped
+      // apart, the two can end up deriving against different versions of that
+      // trait and the tool schemas disagree with what rmcp publishes. One
+      // pull request means the compiler sees both at once.
+      "description": "rmcp and schemars share the JsonSchema trait",
+      "groupName": "rmcp and schemars",
+      "matchDepNames": ["rmcp", "schemars"]
+    },
+    {
+      // axum's major is vercel_runtime's to choose, not ours: `Cargo.toml`
+      // says so, because `vercel_runtime`'s axum integration is built against
+      // one major and wrapping our router in `VercelLayer` is a type error
+      // across the boundary. Grouping them is what lets the pair move on the
+      // day vercel_runtime supports the next axum, in one pull request that
+      // either compiles or does not.
+      "description": "axum's major belongs to vercel_runtime",
+      "groupName": "axum and vercel_runtime",
+      "matchDepNames": ["axum", "vercel_runtime"]
+    },
+    {
+      // The engine, which is ours and is not like the others.
+      //
+      // Three things are true of an engine bump that are not true of a
+      // dependency bump:
+      //
+      //   - `engine::VERSION` in `src/engine.rs` is a field in the cache key,
+      //     and `tests/engine.rs` fails when it and the tag disagree. So this
+      //     pull request is red until someone edits that constant, which is
+      //     deliberate: bumping the tag alone would serve diffs the current
+      //     engine would not produce.
+      //   - Every `diff_id` changes with it, so the cache starts cold. That
+      //     is by design (`docs/cache-key.md`), not a regression to chase.
+      //   - `tests/engine.rs` pins the unified-diff format byte for byte,
+      //     because the web app renders from the same output. A release that
+      //     moved a byte there is a release to read the notes for.
+      //
+      // Renovate raising it is how we learn a release exists. Landing it is a
+      // person's job.
+      "description": "an engine bump moves engine::VERSION and every diff_id",
+      "matchDepNames": ["diffpack-engine"],
+      "automerge": false,
+      "prBodyNotes": [
+        ":warning: `cargo test` fails until `engine::VERSION` in `src/engine.rs` is moved to match this tag — `tests/engine.rs` holds the two together because the constant is a field in the cache key.",
+        "Every `diff_id` changes with the engine version, so cached diffs written by the previous one are cold rather than stale. Read the engine's release notes for changes to rename detection, line counts or the unified-diff format before landing this."
+      ]
+    },
+    {
+      // The toolchain, which `rust-toolchain.toml` asks to be bumped
+      // deliberately.
+      //
+      // A new release brings new clippy lints, and `-D warnings` makes every
+      // one of them a failure — so the usual shape of this pull request is
+      // red with a list of things to fix, and automerging it would mean
+      // automerging that work. It also pins what Vercel's build container
+      // installs, so it is a deploy-affecting change with no test that can
+      // tell us it deployed.
+      "description": "a toolchain bump brings new clippy lints to fix",
+      "matchManagers": ["rust-toolchain"],
+      "automerge": false
+    },
+    {
+      // Last, so it wins over anything above it.
+      //
+      // The checks prove that a major compiles and passes, which is not the
+      // same as proving it is the major we want. rmcp's is the protocol
+      // revisions this server answers on, vercel_runtime's is how the handler
+      // is invoked, and `Cargo.toml` carries a paragraph on why each
+      // dependency is there at the version it is — a major is the moment to
+      // check that paragraph is still true. Renovate opens it and the
+      // Dependency Dashboard keeps it visible; nobody merges it in their
+      // sleep.
+      "description": "a major is read, not automerged",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ]
+}

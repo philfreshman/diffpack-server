@@ -51,6 +51,7 @@ fixtures/        Golden vectors two languages are tested against.
 scripts/         The checks CI runs, and the hook installer that makes a
                  commit run them too.
 deny.toml        The policy over the dependency graph.
+renovate.json5   Which dependency updates land on their own, and which wait.
 vercel.json      The deployment shape: the catch-all rewrite, the function
                  timeout, and which branches deploy.
 .githooks/       The pre-commit hook. Not active until install-hooks.sh.
@@ -116,6 +117,75 @@ to lose work — so a partial commit is checked by CI, not here. And `deny` and
 `git commit --no-verify` skips the hook, which is a reasonable thing to do for
 a work-in-progress commit on a branch. CI is the gate that cannot be skipped.
 `DIFFPACK_HOOK_ALL=1 git commit` forces all six regardless of what is staged.
+
+## Dependency updates
+
+[Renovate](https://docs.renovatebot.com) opens the pull requests, configured by
+[`renovate.json5`](renovate.json5). It is a GitHub App and not a workflow: it
+runs on Mend's infrastructure, so nothing in `.github/workflows/` invokes it and
+there is no token for it in this repository. It finds three sets of dependencies
+without being told to — `Cargo.toml` and `Cargo.lock`, the `channel` in
+`rust-toolchain.toml`, and the `uses:` lines in the CI workflow.
+
+Two runs a month, on the 1st and the 15th, the same days as the sibling
+repositories so that a fortnight's churn arrives together. The `Cargo.lock`
+sweep that moves transitive dependencies nothing asked for runs on the 1st.
+Security fixes ignore the schedule and open immediately.
+
+Nothing younger than three days is proposed at all. `deny.toml` says why this
+repository is stricter than the other two: it is the one place in diffpack
+where package archives are fetched and extracted on a server rather than in a
+reader's browser, so the dependency graph is attack surface, and a malicious
+publish is usually caught and yanked within hours.
+
+What lands on its own and what waits for a person:
+
+| Update | Automerged | Why |
+| --- | --- | --- |
+| A minor or patch, any manager | Yes | The seven required checks are the gate: clippy with `-D warnings`, the suite, `cargo deny`, `cargo audit` and the seam rules all ran against it. A bump that breaks any of them is a red pull request instead. |
+| `Cargo.lock` maintenance | Yes | Same gate, and it is the only thing that proposes transitive versions. |
+| A major, any dependency | No | The checks prove a major compiles and passes, not that it is the major we want. `Cargo.toml` carries a paragraph on why each dependency is at the version it is; a major is when to check that paragraph is still true. |
+| `rust-toolchain.toml` | No | A new release brings new clippy lints and `-D warnings` makes each one a failure, so this pull request usually arrives red with a list of things to fix. It also pins what Vercel's build container installs. |
+| `diffpack-engine` | No | See below. |
+
+Two pairs move together rather than separately, because `Cargo.toml` says they
+have to: `rmcp` with `schemars`, so that `JsonSchema` here stays the trait rmcp
+asks for, and `axum` with `vercel_runtime`, whose axum integration decides which
+axum major this crate may be on.
+
+**An engine bump is red on arrival, and that is the point.** `engine::VERSION`
+in `src/engine.rs` is a field in the cache key, and `tests/engine.rs` fails
+while it and the tag in `Cargo.toml` disagree — bumping the tag alone would
+serve diffs the current engine would not produce. So the pull request Renovate
+opens is a notification that a release exists; landing it means moving the
+constant in the same branch, reading the engine's release notes for changes to
+rename detection, line counts or the unified-diff format, and knowing that every
+`diff_id` changes so the cache starts cold.
+
+To check the config before pushing it:
+
+```bash
+npx --yes --package renovate@latest renovate-config-validator --strict
+```
+
+That is the only command here that needs Node, which is why it is not in
+`scripts/checks.sh`. Renovate validates the file on every run anyway and opens
+an issue against the repository when it cannot read it.
+
+Three things live on the GitHub side, because no file in this repository can
+set them:
+
+- The Renovate App, installed on `philfreshman/diffpack-server`.
+- **Allow auto-merge**, in the repository's settings. Without it,
+  `platformAutomerge` falls back to Renovate merging through the API — which
+  still works, but waits for its next run rather than landing the moment the
+  checks go green.
+- **Dependabot alerts**, under Code security. Renovate reads GitHub's
+  vulnerability alerts rather than keeping its own feed, so this is what makes
+  an advisory open a fix pull request the day it is published instead of on the
+  15th. It matters here because `cargo audit --deny warnings` turns every
+  *other* pull request red as soon as an advisory lands, and the fix should
+  already be in flight by then.
 
 ## Deployment
 
