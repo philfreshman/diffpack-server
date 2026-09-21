@@ -512,7 +512,12 @@ pub struct SearchSource {
 /// differ in what they carry rather than because a registry sometimes
 /// forgets: npm and crates.io answer with a version and a summary, and
 /// PyPI's index answers with a name and nothing else.
+// Inline in a schema rather than a `$ref` into `$defs`, for the reason
+// `Registry` and `page`'s two wire types are: the reader is a model, and a
+// shape it has to resolve a reference to learn is a shape it will guess at.
+// Three fields are cheaper to repeat than to look up.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[schemars(inline)]
 pub struct Hit {
     /// The package name, spelled as the registry spells it. Pass it back
     /// verbatim to any tool that takes a package.

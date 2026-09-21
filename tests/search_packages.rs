@@ -35,6 +35,109 @@ const TOOL: &str = "search_packages";
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/searches");
 
 // ---------------------------------------------------------------------------
+// What a client is told
+// ---------------------------------------------------------------------------
+
+/// The definition carries what an agent needs to call this correctly having
+/// read nothing else, which is #23's question asked of the tool that exists.
+#[tokio::test]
+async fn the_definition_carries_everything_an_agent_needs() {
+    let tool = listed(TOOL).await;
+
+    for field in ["registry", "query", "limit"] {
+        assert!(
+            tool["inputSchema"]["properties"][field].is_object(),
+            "the input schema should describe `{field}`, got {}",
+            tool["inputSchema"]
+        );
+    }
+    for required in ["registry", "query"] {
+        assert!(
+            tool["inputSchema"]["required"]
+                .as_array()
+                .is_some_and(|fields| fields.iter().any(|field| field == required)),
+            "`{required}` is not optional, got {}",
+            tool["inputSchema"]
+        );
+    }
+    assert!(
+        tool["inputSchema"]["required"]
+            .as_array()
+            .is_some_and(|fields| !fields.iter().any(|field| field == "limit")),
+        "a limit that has a default is not something a caller has to supply, got {}",
+        tool["inputSchema"]
+    );
+
+    assert_eq!(
+        tool["inputSchema"]["properties"]["registry"]["enum"],
+        json!(["npm", "crates", "pypi"]),
+        "the enum comes from the registry module rather than from prose here, got {tool}"
+    );
+
+    for field in ["items", "total"] {
+        assert!(
+            tool["outputSchema"]["properties"][field].is_object(),
+            "the output schema should describe `{field}`, got {}",
+            tool["outputSchema"]
+        );
+    }
+    for field in ["name", "version", "description"] {
+        assert!(
+            tool["outputSchema"]["properties"]["items"]["items"]["properties"][field].is_object(),
+            "a hit should describe `{field}`, got {}",
+            tool["outputSchema"]
+        );
+    }
+
+    assert_eq!(
+        tool["annotations"]["readOnlyHint"], true,
+        "searching changes nothing, and a client deciding whether to ask for \
+         confirmation reads this, got {}",
+        tool["annotations"]
+    );
+    assert_eq!(
+        tool["annotations"]["openWorldHint"], true,
+        "what answers a query is whatever the registry has, got {}",
+        tool["annotations"]
+    );
+}
+
+/// The one hint this tool answers differently from every other one here, and
+/// the reason is the whole difference between a search and everything else
+/// this server does: a published version's contents cannot change, and what a
+/// registry has today can. An agent that cached a search on this hint would
+/// be answering tomorrow's question with yesterday's index.
+#[tokio::test]
+async fn a_search_does_not_claim_the_same_answer_twice() {
+    let tool = listed(TOOL).await;
+
+    assert_eq!(
+        tool["annotations"]["idempotentHint"], false,
+        "a registry's index moves under a search, got {}",
+        tool["annotations"]
+    );
+}
+
+/// The asymmetry an agent cannot infer from the schema: a hit's version and
+/// description are absent for PyPI and present for the other two, because
+/// PyPI's index carries neither. A tool that left this to be discovered
+/// would have an agent deciding a PyPI package has no releases.
+#[tokio::test]
+async fn the_description_says_which_registry_answers_with_less() {
+    let tool = listed(TOOL).await;
+    let said = tool["description"].as_str().unwrap_or_default();
+
+    assert!(
+        said.contains("PyPI"),
+        "the description should name the registry that answers with less, got {said:?}"
+    );
+    assert!(
+        said.contains("nothing else") || said.contains("a name alone"),
+        "and should say what it leaves out, got {said:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // What it answers
 // ---------------------------------------------------------------------------
 
@@ -124,6 +227,31 @@ async fn a_pypi_search_answers_with_names_and_says_no_more_than_that() {
 // ---------------------------------------------------------------------------
 // Driving the endpoint
 // ---------------------------------------------------------------------------
+
+/// The listed definition of `name`, or a panic naming what was listed.
+async fn listed(name: &str) -> Value {
+    let answer = post(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": { "_meta": meta() },
+    }))
+    .await;
+
+    let tools = answer["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list should answer with an array, got {answer}"))
+        .clone();
+
+    tools
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .unwrap_or_else(|| {
+            let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+            panic!("`{name}` should be listed, got {names:?}")
+        })
+        .clone()
+}
 
 /// Call the tool with `arguments`, returning the `result` — or panicking with
 /// the JSON-RPC error, so a failure says what the server objected to.
