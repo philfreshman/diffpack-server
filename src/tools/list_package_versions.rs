@@ -65,6 +65,11 @@ pub struct Version {
     /// The version as the registry spells it. Pass it back exactly as it is
     /// written here: `v4.0.0` and `4.0.0` are different versions.
     pub version: String,
+
+    /// Whether this is a preview — an alpha, a beta, a release candidate or
+    /// a development build — rather than a release. Asked for "the latest
+    /// version", prefer the newest entry where this is false.
+    pub prerelease: bool,
 }
 
 impl Tool for ListPackageVersions {
@@ -99,6 +104,7 @@ impl Tool for ListPackageVersions {
             .into_iter()
             .map(|version| Version {
                 version: version.version,
+                prerelease: version.prerelease,
             })
             .collect();
 

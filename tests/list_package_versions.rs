@@ -123,9 +123,123 @@ async fn a_pypi_packages_versions_are_ordered_by_date_not_by_the_documents_order
     );
 }
 
+/// A scoped npm name is one package name, so it is one escaped path segment.
+/// The fixture set is keyed by the URL, so a listing that interpolated
+/// `@types/node` into a path — and so asked npm for a package called `node`
+/// inside a scope — finds nothing here.
+///
+/// The five releases are `@types/node`'s real ones and are what makes the
+/// case for ordering by date rather than by version number: npm's own listing
+/// shows 24.13.6 on top, published forty seconds after 22.20.4 and three days
+/// after 24.13.5, while `dist-tags.latest` is 26.6.2. Three different
+/// questions, and this tool answers the one an agent asked.
+#[tokio::test]
+async fn a_scoped_npm_package_is_asked_for_under_its_whole_name() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "@types/node",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "a scoped package the fixture set has is not an error, got {result}"
+    );
+
+    assert_eq!(
+        versions(&result),
+        vec!["24.13.6", "22.20.4", "25.9.8", "26.6.2", "24.13.5"],
+        "the newest release of this package is a 24.x patch and the second \
+         newest is a 22.x one, which is neither the semver order nor the \
+         `latest` tag: got {result}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Which of them are previews
+// ---------------------------------------------------------------------------
+
+/// An agent asked for "the last two versions" should not silently diff
+/// against a release candidate, so every entry says whether it is one.
+///
+/// npm and crates.io spell a version the way semver does, so what follows the
+/// first `-` is the prerelease. Build metadata is not: `2.0.1+build.5` is the
+/// same release as `2.0.1` with a label on it, and flagging it would tell an
+/// agent to avoid the newest stable release there is.
+#[tokio::test]
+async fn an_npm_prerelease_is_flagged_and_build_metadata_is_not() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "prereleases",
+    }))
+    .await;
+
+    assert_eq!(
+        previews(&result),
+        vec![
+            ("2.0.1+build.5", false),
+            ("2.0.0", false),
+            ("2.0.0-rc.1", true),
+            ("2.0.0-alpha.1", true),
+            ("1.0.0", false),
+        ],
+        "semver's prerelease is what follows the first `-`, and `+build.5` is \
+         not one: got {result}"
+    );
+}
+
+/// PyPI is not semver, and the difference is not cosmetic: PEP 440 glues its
+/// markers straight onto the release, so `1.0rc1` is a release candidate and
+/// there is no `-` anywhere in it. Reading it with npm's rule flags nothing.
+///
+/// `1.0.post1` is the other half. A post-release is a re-release of `1.0` —
+/// a fixed description, a corrected classifier — not a preview of anything,
+/// and flagging it would point an agent away from the newest thing there is.
+#[tokio::test]
+async fn a_pypi_prerelease_is_flagged_and_a_post_release_is_not() {
+    let result = call(json!({
+        "registry": "pypi",
+        "package": "prereleases",
+    }))
+    .await;
+
+    assert_eq!(
+        previews(&result),
+        vec![
+            ("1.0.post1", false),
+            ("1.0", false),
+            ("1.0rc1", true),
+            ("1.0b2", true),
+            ("1.0a1", true),
+            ("1.0.dev1", true),
+        ],
+        "PEP 440 needs no separator before its marker, and a post-release is \
+         not a preview: got {result}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Reading the answer
 // ---------------------------------------------------------------------------
+
+/// Each entry's version and whether it is a preview, in the order returned.
+fn previews(result: &Value) -> Vec<(&str, bool)> {
+    result["structuredContent"]["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a page carries its items, got {result}"))
+        .iter()
+        .map(|entry| {
+            let version = entry["version"]
+                .as_str()
+                .unwrap_or_else(|| panic!("every entry names a version, got {entry}"));
+            let prerelease = entry["prerelease"].as_bool().unwrap_or_else(|| {
+                panic!("every entry says whether it is a prerelease, got {entry}")
+            });
+            (version, prerelease)
+        })
+        .collect()
+}
 
 /// The `version` of every entry on this page, in the order they were returned.
 fn versions(result: &Value) -> Vec<&str> {

@@ -223,6 +223,7 @@ impl Registry {
                     .filter_map(|version| {
                         let published_at = document.time.get(&version)?.clone();
                         Some(Version {
+                            prerelease: self.is_prerelease(&version),
                             version,
                             published_at,
                         })
@@ -246,6 +247,7 @@ impl Registry {
                     .versions
                     .into_iter()
                     .map(|release| Version {
+                        prerelease: self.is_prerelease(&release.num),
                         version: release.num,
                         published_at: release.created_at,
                     })
@@ -277,6 +279,7 @@ impl Registry {
                     .versions
                     .into_iter()
                     .map(|release| Version {
+                        prerelease: self.is_prerelease(&release.version_key.version),
                         version: release.version_key.version,
                         published_at: release.published_at,
                     })
@@ -356,6 +359,30 @@ impl Registry {
         match self {
             Self::Npm | Self::Crates => &[],
             Self::PyPi => &["files.pythonhosted.org"],
+        }
+    }
+
+    /// Whether `version` is a preview rather than a release.
+    ///
+    /// A per-registry fact because the two spellings are genuinely different
+    /// standards rather than dialects: npm and crates.io use semver, where a
+    /// prerelease is what follows the first `-`, and PyPI uses PEP 440, where
+    /// it is an `a`, `b`, `rc` or `dev` segment glued to the release with no
+    /// separator required at all. `1.0rc1` is a release candidate on PyPI and
+    /// is not a version on either of the other two.
+    ///
+    /// Worth telling an agent because "the last two versions" is the question
+    /// this tool exists for, and the answer to it should not quietly be a
+    /// release candidate.
+    pub fn is_prerelease(self, version: &str) -> bool {
+        // Build metadata is not a prerelease under either standard — semver's
+        // `+build.5` and PEP 440's `+local` are labels on a release — and it
+        // can contain anything, so it goes before either rule looks.
+        let version = version.split('+').next().unwrap_or_default();
+
+        match self {
+            Self::Npm | Self::Crates => version.contains('-'),
+            Self::PyPi => pep440_prerelease(version),
         }
     }
 
@@ -509,6 +536,8 @@ pub struct Version {
     pub version: String,
     /// When the registry says it was published.
     pub published_at: String,
+    /// Whether it is a preview rather than a release.
+    pub prerelease: bool,
 }
 
 /// Where a search for a package is answered.
@@ -516,6 +545,49 @@ pub struct Version {
 pub struct SearchSource {
     /// The document to fetch, query and limit included.
     pub url: String,
+}
+
+/// Whether a PEP 440 version is a preview rather than a release.
+///
+/// Read rather than parsed: what is wanted is one bit, and a parser for the
+/// whole grammar — epochs, post-releases, local versions, the four spellings
+/// of every separator — is a dependency and a surface for a question this
+/// small. So the release segment is skipped and what follows it is looked at.
+///
+/// The markers are PEP 440's, `alpha`, `beta`, `c`, `pre` and `preview`
+/// included because the specification normalises those to `a`, `b` and `rc`
+/// rather than rejecting them. A digit has to follow, so `1.0build3` is not
+/// read as a beta.
+///
+/// A post-release is deliberately not one of them: `1.0.post1` is a
+/// re-release of `1.0`, not a preview of something later, and an agent told
+/// to avoid it would be avoiding the newest thing there is.
+fn pep440_prerelease(version: &str) -> bool {
+    /// What PEP 440 spells a prerelease with, before normalisation.
+    const MARKERS: [&str; 8] = ["a", "b", "c", "rc", "alpha", "beta", "pre", "preview"];
+
+    let version = version.to_ascii_lowercase();
+
+    // An epoch is `N!` in front of everything, and says nothing about this.
+    let version = version.rsplit('!').next().unwrap_or_default();
+
+    // The release segment — `1.0.2` — and then whichever of the four
+    // separators the publisher used, or none, which is also allowed.
+    let tail = version.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.');
+    let tail = tail.trim_start_matches(['.', '-', '_']);
+
+    // A development release sorts before every other form of the same
+    // version, including its own alphas, so it is a preview wherever it sits:
+    // `1.0.post1.dev2` is a preview of that post-release.
+    if tail.contains("dev") {
+        return true;
+    }
+
+    MARKERS.iter().any(|marker| {
+        tail.strip_prefix(marker).is_some_and(|after| {
+            after.is_empty() || after.starts_with(|c: char| c.is_ascii_digit())
+        })
+    })
 }
 
 /// A package name or a query as one path segment or one parameter value.
