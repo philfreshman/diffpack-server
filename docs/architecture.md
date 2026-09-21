@@ -16,7 +16,7 @@ src/tools/          one module per tool: definition and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap            #10
 src/store/          DiffStore: get(&DiffKey) / put(entry)                   #20 #21 #22
-src/page.rs         pagination and the 4.5 MB response ceiling              #43
+src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
 src/error.rs        Failure, the two channels, redaction
 src/engine.rs       the only importer of diffpack_engine
@@ -143,10 +143,25 @@ is not a tool's business. See [ADR 0003](adr/0003-the-cache-seam-is-a-store.md).
 ### `src/page.rs` — the response ceiling
 
 Vercel's function response limit is 4.5 MB, and every tool that returns a list,
-a tree or a patch set can exceed it. One module owns the ceiling, the cursor
-format and the "this is a page of N" shape, so that there is one implementation
-of staying under it rather than one per tool. See [ADR
+a tree, a file or a patch set can exceed it. One module owns the ceiling, the
+cursor format and the "this is a page of N" shape, so that there is one
+implementation of staying under it rather than one per tool. See [ADR
 0005](adr/0005-one-module-owns-the-response-ceiling.md).
+
+Two interfaces, because a tool's answer comes in two shapes. `paginate` takes
+a sequence and returns a `Page`: the items that fit, the next cursor, and the
+total. `truncate` takes one blob — a file's content, a file's diff — and
+returns an `Excerpt`: as much as fits, a marker saying it was cut, and the
+whole thing's real byte count. Truncation lives here rather than in a module
+of its own because what the two share is the subtle part and what they differ
+in is one field; ADR 0005 records the choice and its cost.
+
+Three things a caller does not do: count bytes, encode a cursor, or decide
+what "too big" means. The ceiling is on *serialised* bytes and is a third of
+the platform's cap, because `tools::invoke` puts a tool's answer on the wire
+twice — as `structuredContent` and as the escaped text block rmcp mirrors it
+into. A tool that counted items instead would be correct until someone diffed
+a package whose paths are long.
 
 ### `src/cache_key.rs` — `DiffKey`, `diff_id`, blob paths
 
