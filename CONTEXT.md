@@ -192,10 +192,13 @@ _Avoid_: command, endpoint, action, handler (alone)
 
 **Ctx**:
 What a Tool's handler is allowed to reach: the seams that carry state a
-handler should not build — `archive`, the DiffStore — built once per request
-and handed to every call. A pure module is not in it and does not need to be:
-a handler names `registry`, `page` and `handle` directly. Anything a handler
-needs that is neither in Ctx nor a pure module is a seam it has gone around.
+handler should not build — `archive`, `catalogue`, the DiffStore — built once
+per request and handed to every call. A pure module is not in it and does not
+need to be: a handler names `registry`, `page` and `handle` directly. Anything
+a handler needs that is neither in Ctx nor a pure module is a seam it has gone
+around. It is built whole or not at all: every seam live, or every seam
+reading from the fixture sets. There is no half of one, because the half that
+was not asked for would have to be live.
 _Avoid_: state, globals, services, dependencies
 
 **Hints**:

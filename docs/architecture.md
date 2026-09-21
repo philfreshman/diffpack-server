@@ -104,11 +104,21 @@ list of tools, and the generic call path where arguments are validated and
 
 `Ctx` is what a handler may reach, built once per request by the service
 factory `router::router_with` takes and cloned into every call. It carries
-`Archive` today and `DiffStore` (#20) beside it; `registry`, `page` and
-`handle` are not in it and do not need to be, because a pure module is named
-directly. That factory is also the seam the suite drives: a test builds a
-`Ctx` over the fixture archive adapter and reaches it through the path
+`Archive` and `Catalogue` today and `DiffStore` (#20) beside them; `registry`,
+`page` and `handle` are not in it and do not need to be, because a pure module
+is named directly. That factory is also the seam the suite drives: a test
+builds a `Ctx` over the fixture adapters and reaches it through the path
 production takes, rather than around it.
+
+It is built two ways and only two: `Ctx::new` is every seam live and
+`Ctx::fixture` is every seam reading from the checked-in sets under
+`fixtures/`. Both name every field, so a seam added later is a compile error
+in each of them and its author answers for production and for the suite at
+once. There is deliberately no builder that supplies one seam and fills the
+rest, because filling them meant filling them live: a test naming the archive
+carried a live catalogue beside it, and the first tool to read a version list
+through such a context would have asked npm from CI. `tests/ctx.rs` is what
+holds this — it drives every seam a context carries rather than a tool.
 
 ### `src/registry.rs` — what a registry is
 
