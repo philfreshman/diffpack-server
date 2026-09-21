@@ -101,8 +101,22 @@ impl Tool for ResolveArchiveUrl {
         // listed rather than built needs a fetch, and fetching is #10's.
         match args.registry.archive(&args.package, &args.version)? {
             ArchiveSource::Archive { url } => Ok(Output { url }),
+            // The way forward is the registries this tool could have
+            // answered for, asked of the same module with the same call
+            // rather than written out as a sentence that #28 would have to
+            // find and widen.
             ArchiveSource::Listing { .. } => Err(Failure::UnresolvableArchiveUrl {
                 registry: args.registry.id().to_owned(),
+                resolvable: Registry::ALL
+                    .iter()
+                    .filter(|registry| {
+                        matches!(
+                            registry.archive(&args.package, &args.version),
+                            Ok(ArchiveSource::Archive { .. })
+                        )
+                    })
+                    .map(|registry| registry.id().to_owned())
+                    .collect(),
             }),
         }
     }

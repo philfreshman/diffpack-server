@@ -119,7 +119,15 @@ pub enum Failure {
     /// PyPI lists a version's files in its own metadata and nowhere else, so
     /// there is nothing to build — which is a property of that registry
     /// rather than a gap here. #10 answers it by asking PyPI.
-    UnresolvableArchiveUrl { registry: String },
+    ///
+    /// `resolvable` is the way forward, and it comes from the caller for the
+    /// same reason [`Failure::NoSuchVersion`]'s `known` does: the registries
+    /// that can be resolved are [`crate::registry`]'s to know, and a list
+    /// written out here would be a copy that #28 has to find.
+    UnresolvableArchiveUrl {
+        registry: String,
+        resolvable: Vec<String>,
+    },
 
     /// The caller's parameters did not validate.
     InvalidParams { message: String },
@@ -255,11 +263,19 @@ impl Failure {
                 limit / 1_000_000,
             ),
 
-            Self::UnresolvableArchiveUrl { registry } => format!(
-                "`{registry}` does not serve a version's archive from a path that can be \
-                 built out of a package name and a version, so there is no URL to resolve. \
-                 `npm` and `crates` do."
-            ),
+            Self::UnresolvableArchiveUrl {
+                registry,
+                resolvable,
+            } => {
+                let mut message = format!(
+                    "`{registry}` does not serve a version's archive from a path that can be \
+                     built out of a package name and a version, so there is no URL to resolve."
+                );
+                if !resolvable.is_empty() {
+                    let _ = write!(message, " These do: {}.", resolvable.join(", "));
+                }
+                message
+            }
 
             // These four never reach a model — `respond` sends them down the
             // protocol channel — but a `message` that lied about them would

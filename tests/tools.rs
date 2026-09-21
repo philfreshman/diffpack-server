@@ -205,6 +205,13 @@ async fn a_registry_this_tool_cannot_resolve_is_a_tool_error() {
         text.contains("pypi"),
         "the message should name what was asked for, got {text}"
     );
+    for resolvable in ["npm", "crates"] {
+        assert!(
+            text.contains(resolvable),
+            "a message the model can act on names `{resolvable}`, which would have \
+             worked: got {text}"
+        );
+    }
 }
 
 /// Arguments that do not validate are the client's mistake, not the model's,
