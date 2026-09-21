@@ -18,13 +18,18 @@ use std::collections::HashMap;
 use axum::body::Body;
 use axum::http::Request;
 use diffpack_server::archive::Archive;
+use diffpack_server::mcp::Diffpack;
 use diffpack_server::registry::Registry;
 use diffpack_server::router;
+use diffpack_server::tools::Ctx;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const CURRENT: &str = "2026-07-28";
+
+/// The fixture sets this suite's server is built over.
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 /// The one tool this server has. #11 onward add the rest.
 const TOOL: &str = "resolve_archive_url";
@@ -478,7 +483,7 @@ async fn post(body: Value) -> Value {
         .body(Body::from(body.to_string()))
         .expect("the request should build");
 
-    let response = router::router()
+    let response = server()
         .oneshot(request)
         .await
         .expect("the router answers every request");
@@ -497,4 +502,18 @@ async fn post(body: Value) -> Value {
             String::from_utf8_lossy(&bytes)
         )
     })
+}
+
+/// A server whose context reads the fixture sets.
+///
+/// `router::router()` would build a live one. Nothing this suite calls
+/// reaches a seam today, which is exactly how the bug #64 fixed stayed
+/// invisible: a context is safe by what it happens not to be asked for until
+/// somebody adds the call that asks. A fixture root costs nothing here and
+/// means the next test added cannot leave this process.
+fn server() -> axum::Router {
+    router::router_with(
+        || Ok(Diffpack::with_ctx(Ctx::fixture(FIXTURES))),
+        Vec::new(),
+    )
 }
