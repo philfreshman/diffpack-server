@@ -22,10 +22,17 @@
 //!
 //! # Nothing here is cached
 //!
-//! The 256 MB budget belongs to diff results. A package's version list is
-//! registry metadata that goes stale the moment somebody publishes, so it is
-//! fetched per call and kept fresh with MCP's `ttlMs` hint instead of being
-//! written to the blob store (#18).
+//! The 256 MB budget belongs to diff results. What a registry says a package
+//! has released goes stale the moment somebody publishes, so it is fetched
+//! per call rather than written to the blob store (#18).
+//!
+//! #18 asked for a short `ttlMs` on the answer as the freshness signal
+//! instead. A `tools/call` result has nowhere to put one: in the
+//! `2026-07-28` schema `CacheableResult` is extended by `DiscoverResult`,
+//! the four list results and `ReadResourceResult`, while `CallToolResult`
+//! extends plain `Result`. So the hint belongs to the `diffpack://` resource
+//! #16 adds, and until then fetching per call is the whole of the freshness
+//! story — every answer is as fresh as the registry was when it was asked.
 
 mod fixture;
 mod live;
