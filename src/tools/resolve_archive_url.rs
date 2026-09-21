@@ -19,16 +19,16 @@
 //!
 //! # Where the URL comes from
 //!
-//! [`crate::engine`], which is the same code the browser runs. This module
-//! matches on no registry name of its own: the registry table is one module's
-//! job (ADR 0004, #42) and until it exists the engine is where the patterns
-//! live. A copy here would be the fifth one that ADR rejects.
+//! [`crate::registry`], which routes it through the engine — the same code
+//! the browser runs. This module matches on no registry name of its own: what
+//! a registry is has one home (ADR 0004, #42), and a copy here would be the
+//! fifth one that ADR rejects.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::engine;
 use crate::error::Failure;
+use crate::registry::{ArchiveSource, Registry};
 use crate::tools::{Ctx, Tool};
 
 /// The tool.
@@ -45,10 +45,13 @@ pub struct ResolveArchiveUrl;
 pub struct Args {
     /// The registry that publishes the package: `npm` or `crates`.
     ///
-    /// `pypi` is a registry this server knows but cannot resolve a URL for,
-    /// because PyPI lists a version's files in its metadata rather than
-    /// serving them from a predictable path.
-    pub registry: String,
+    /// The enum comes from [`crate::registry`], so the list an agent is shown
+    /// is the list this server has rather than a description of it.
+    ///
+    /// `pypi` parses and is a registry this server knows, but this tool
+    /// cannot resolve a URL for it: PyPI lists a version's files in its
+    /// metadata rather than serving them from a predictable path.
+    pub registry: Registry,
 
     /// The package name as the registry spells it, scope included:
     /// `zod`, `@types/node`, `serde`.
@@ -93,14 +96,27 @@ impl Tool for ResolveArchiveUrl {
     type Output = Output;
 
     async fn call(args: Args, _ctx: &Ctx) -> Result<Output, Failure> {
-        // The engine owns the patterns, and its `Err` is a string written for
-        // whoever was calling it. It is not forwarded: a message a model
-        // reads is built from fields this crate chose, which is what
-        // `src/error.rs` is for.
-        match engine::build_tarball_url(&args.registry, &args.package, &args.version) {
-            Ok(url) => Ok(Output { url }),
-            Err(_) => Err(Failure::UnresolvableArchiveUrl {
-                registry: args.registry,
+        // `crate::registry` owns where an archive is; this tool owns which
+        // of the two answers it can serve. A registry whose archive is
+        // listed rather than built needs a fetch, and fetching is #10's.
+        match args.registry.archive(&args.package, &args.version)? {
+            ArchiveSource::Archive { url } => Ok(Output { url }),
+            // The way forward is the registries this tool could have
+            // answered for, asked of the same module with the same call
+            // rather than written out as a sentence that #28 would have to
+            // find and widen.
+            ArchiveSource::Listing { .. } => Err(Failure::UnresolvableArchiveUrl {
+                registry: args.registry.id().to_owned(),
+                resolvable: Registry::ALL
+                    .iter()
+                    .filter(|registry| {
+                        matches!(
+                            registry.archive(&args.package, &args.version),
+                            Ok(ArchiveSource::Archive { .. })
+                        )
+                    })
+                    .map(|registry| registry.id().to_owned())
+                    .collect(),
             }),
         }
     }

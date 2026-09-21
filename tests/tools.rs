@@ -75,6 +75,22 @@ async fn a_tool_is_listed_with_everything_an_agent_needs() {
     );
 }
 
+/// `registry` is the enum `src/registry.rs` defines, not a string a tool
+/// describes in prose. The schema is where an agent learns what it may pass,
+/// so a tool that spelled the list itself would be the fifth copy ADR 0004
+/// rejects — and the one an agent reads first.
+#[tokio::test]
+async fn the_registry_parameter_is_the_enum_the_registry_module_owns() {
+    let tool = listed(TOOL).await;
+    let registry = &tool["inputSchema"]["properties"]["registry"];
+
+    assert_eq!(
+        registry["enum"],
+        json!(["npm", "crates", "pypi"]),
+        "the schema should list the registries this server has, got {registry}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // What it answers
 // ---------------------------------------------------------------------------
@@ -189,6 +205,13 @@ async fn a_registry_this_tool_cannot_resolve_is_a_tool_error() {
         text.contains("pypi"),
         "the message should name what was asked for, got {text}"
     );
+    for resolvable in ["npm", "crates"] {
+        assert!(
+            text.contains(resolvable),
+            "a message the model can act on names `{resolvable}`, which would have \
+             worked: got {text}"
+        );
+    }
 }
 
 /// Arguments that do not validate are the client's mistake, not the model's,
@@ -216,6 +239,41 @@ async fn arguments_that_do_not_validate_are_a_protocol_error() {
         answer["result"]["isError"].is_null(),
         "a call that never ran is not a tool that failed, got {answer}"
     );
+}
+
+/// A registry that is not one of the three does not reach a handler: the
+/// schema declares the enum, so the value fails to validate and the client —
+/// which was told the list — is who can fix the call. The refusal names the
+/// registries that exist, because a client told only that `go` is wrong has
+/// to go and find out what is right.
+#[tokio::test]
+async fn a_registry_outside_the_enum_is_refused_by_naming_the_ones_that_exist() {
+    let answer = post(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": TOOL,
+            "arguments": { "registry": "go", "package": "logrus", "version": "1.9.3" },
+            "_meta": meta(),
+        },
+    }))
+    .await;
+
+    assert_eq!(
+        answer["error"]["code"], -32602,
+        "an argument outside the declared enum is invalid params, got {answer}"
+    );
+
+    let message = answer["error"]["message"]
+        .as_str()
+        .expect("a protocol error carries a message");
+    for known in ["npm", "crates", "pypi"] {
+        assert!(
+            message.contains(known),
+            "the refusal should name `{known}`, got {message}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
