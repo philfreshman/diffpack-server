@@ -21,17 +21,19 @@
 #   1. An allow-list over `use`. A tool may import the standard library, the
 #      MCP and serialisation crates, and the seam modules. Anything else
 #      fails, including a crate nobody has added to this repository yet —
-#      which is the point, since the client this is meant to keep out (#20's
-#      Blob client) does not exist yet and will not be called what this script
-#      guesses.
+#      which is the point: the client this is meant to keep out is hand-rolled
+#      over `reqwest` inside `src/store/`, so there is no dependency name for
+#      this script to have guessed at.
 #   2. A deny-list over the whole file, for the names that mean a seam was
 #      crossed even when there is no `use` to catch: `reqwest::get(..)` spelled
 #      out in full, a blob token read from the environment.
 #
-# The deny-list is a backstop, not the defence. The defence is privacy: #20's
-# Blob client is a private module inside `src/store/`, so a tool cannot name
-# it and the compiler says so. This script is what notices when someone makes
-# it `pub` to get at it in a hurry.
+# The deny-list is a backstop, not the defence. The defence is privacy: the
+# Blob client (#20) is a private module inside `src/store/`, so a tool cannot
+# name it and the compiler says so. This script is what notices when someone
+# makes it `pub` to get at it in a hurry. The environment variables are on the
+# list for the same reason the token is: a tool that read one would be building
+# a client of its own out of sight of the seam.
 #
 # Mentions in a comment count, because a grep cannot tell a comment from code
 # and a name written in a comment is a name someone can move into one. Write
@@ -63,7 +65,7 @@ readonly ALLOWED_ROOTS=(crate self super std core alloc futures rmcp serde serde
 readonly ALLOWED_MODULES=(archive cache_key engine error handle page registry store tools)
 
 # Names that mean a seam was crossed, wherever they appear.
-readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN'
+readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN|BLOB_STORE_ID|VERCEL_OIDC_TOKEN'
 
 if [[ ! -d "$TOOLS" ]]; then
   echo "ok: no tool modules yet (${TOOLS}/ does not exist)"

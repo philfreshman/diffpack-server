@@ -1,10 +1,15 @@
 //! Archives from the registries themselves.
 //!
-//! The HTTP client this crate has, and the only one: it lives here because
-//! eight tools that each know how to fetch is eight places to fix a timeout,
-//! a user agent or a retry ([ADR
+//! The HTTP client that reaches the registries, and the only one that does:
+//! it lives here because eight tools that each know how to fetch is eight
+//! places to fix a timeout, a user agent or a retry ([ADR
 //! 0001](../docs/adr/0001-the-archive-seam-is-a-filemap.md)). What leaves
 //! this module is bytes or a [`Failure`], never a status code.
+//!
+//! `src/store/` has a client of its own, and deliberately: the policy below
+//! is about what a registry may be asked for and where a redirect may lead,
+//! which is nothing the blob store needs and would be the wrong rule to hold
+//! it to.
 //!
 //! # What a request here is allowed to do
 //!

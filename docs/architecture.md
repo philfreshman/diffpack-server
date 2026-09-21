@@ -15,7 +15,7 @@ src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
 src/tools/          one module per tool: definition and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
-src/store/          DiffStore: get(&DiffKey) / put(entry)                   #20 #21 #22
+src/store/          DiffStore: get(&DiffKey) / put(entry)                   #21 #22
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
@@ -102,7 +102,7 @@ list of tools, and the generic call path where arguments are validated and
 
 `Ctx` is what a handler may reach, built once per request by the service
 factory `router::router_with` takes and cloned into every call. It carries
-`Archive` today and `DiffStore` (#20) beside it; `registry`, `page` and
+`Archive` today and `DiffStore` (#21) beside it; `registry`, `page` and
 `handle` are not in it and do not need to be, because a pure module is named
 directly. That factory is also the seam the suite drives: a test builds a
 `Ctx` over the fixture archive adapter and reaches it through the path
@@ -168,6 +168,26 @@ Vercel Blob client is the implementation behind it and is private to this
 module, along with the 256 MB budget and the eviction that keeps it (#22). A
 tool asks for a result and gets one or does not; how many HTTP calls that took
 is not a tool's business. See [ADR 0003](adr/0003-the-cache-seam-is-a-store.md).
+
+The client is here today and `DiffStore` arrives with #21, so nothing in this
+module is public yet. Four operations — write a blob, ask whether one is
+there, list what is under a prefix, delete several at once — and no more,
+because a general client for the service is the shape ADR 0003 rejected.
+
+There is no published specification for that API and no usable Rust client for
+it, so the wire is taken from what `@vercel/blob` sends, read out of its
+source. Three of those facts are not guessable and fail only against the real
+store: a write's pathname is a query parameter rather than a path segment, the
+store id is provisioned with a `store_` prefix the header does not want, and
+`access` has no default. The tests drive the client through a stub HTTP server
+on a loopback port, so what they hold is the request this module writes rather
+than a shape it was told to produce — and because the client is private, they
+live in the module rather than in `tests/`.
+
+This is the crate's second HTTP client, and separate from `archive`'s on
+purpose: that one may follow a redirect only onto a registry's hosts, which is
+a rule about somebody else's servers and not about this store. One client
+serving both would be one policy serving two sets of reasons.
 
 ### `src/page.rs` — the response ceiling
 
