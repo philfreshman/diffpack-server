@@ -157,6 +157,14 @@ whole thing's real byte count. Truncation lives here rather than in a module
 of its own because what the two share is the subtle part and what they differ
 in is one field; ADR 0005 records the choice and its cost.
 
+`limit` and `cursor` are types this module owns — `page::Limit` and
+`page::Cursor` — rather than a `u32` and a `String` a tool describes for
+itself. They are the only part of the ceiling an agent ever sees, so the
+default, the range and the "passed back unchanged" rule are written into their
+schemas and every paginating tool inherits them by naming the type. `Cursor`
+deserialises by decoding, so a cursor that is not ours is `-32602` before a
+handler runs, the same way a `DiffHandle` is.
+
 Three things a caller does not do: count bytes, encode a cursor, or decide
 what "too big" means. The ceiling is on *serialised* bytes and is a third of
 the platform's cap, because `tools::invoke` puts a tool's answer on the wire
