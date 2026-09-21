@@ -24,9 +24,21 @@
 #      which is the point, since the client this is meant to keep out (#20's
 #      Blob client) does not exist yet and will not be called what this script
 #      guesses.
+#
+#      `mod.rs` is exempt from this one, because it is the only file here that
+#      is not a tool: it is the collection, the `Ctx` every handler is given,
+#      and the dispatch that runs one. Those need things a tool must not have
+#      — `crate::log`, for one, because the single line per call is written by
+#      the dispatch and a tool that wrote its own would make "one line per
+#      call" false. Exempting the file is the honest version of that: the
+#      alternative is adding `log` to the list below, which would permit in
+#      nineteen tools the thing this paragraph exists to forbid.
 #   2. A deny-list over the whole file, for the names that mean a seam was
 #      crossed even when there is no `use` to catch: `reqwest::get(..)` spelled
-#      out in full, a blob token read from the environment.
+#      out in full, a blob token read from the environment. This one covers
+#      `mod.rs` too — the collection has no more business holding an HTTP
+#      client than a tool does, so the exemption above is from the import
+#      list and not from the rules.
 #
 # The deny-list is a backstop, not the defence. The defence is privacy: #20's
 # Blob client is a private module inside `src/store/`, so a tool cannot name
@@ -129,7 +141,8 @@ while IFS= read -r hit; do
       offenders+=("${where}: imports \`crate::${module}\`, which is not a seam a tool goes through")
     fi
   done
-done < <(grep -rnE '^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]' --include='*.rs' "$TOOLS")
+done < <(grep -rnE '^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]' --include='*.rs' \
+  --exclude='mod.rs' "$TOOLS")
 
 # Rule 2: the names, wherever they are written.
 while IFS= read -r hit; do

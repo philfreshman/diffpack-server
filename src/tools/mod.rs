@@ -61,6 +61,7 @@ use serde::Serialize;
 
 use crate::archive::Archive;
 use crate::error::Failure;
+use crate::log::{Record, Sink};
 
 /// Declare the tools, and build the collection and the dispatch from one list.
 ///
@@ -96,17 +97,20 @@ macro_rules! tools {
         }
 
         /// Run the tool `name`, or refuse a name that is not one of ours.
-        pub async fn call(
+        ///
+        /// Private, and reached only through [`call`], which is what makes
+        /// the log line a property of every dispatch rather than of the
+        /// tools that remembered to write one.
+        async fn dispatch(
             name: &str,
             arguments: Option<JsonObject>,
             ctx: &Ctx,
-        ) -> Result<CallToolResult, ErrorData> {
+        ) -> Result<CallToolResult, Failure> {
             match name {
                 $(<$module::$tool as Tool>::NAME => invoke::<$module::$tool>(arguments, ctx).await,)+
-                unknown => Failure::NoSuchTool {
+                unknown => Err(Failure::NoSuchTool {
                     name: unknown.to_owned(),
-                }
-                .respond(),
+                }),
             }
         }
     };
@@ -145,6 +149,7 @@ tools! {
 #[non_exhaustive]
 pub struct Ctx {
     archive: Arc<Archive>,
+    log: Sink,
 }
 
 impl Ctx {
@@ -161,7 +166,17 @@ impl Ctx {
     pub fn with_archive(archive: Archive) -> Self {
         Self {
             archive: Arc::new(archive),
+            log: Sink::default(),
         }
+    }
+
+    /// The same, writing its log lines to `log`.
+    ///
+    /// The other half of the seam `tests/log.rs` drives: production writes to
+    /// the runtime logs and the suite writes to a buffer it can read back,
+    /// through the same factory and the same [`call`].
+    pub fn logging_to(self, log: Sink) -> Self {
+        Self { log, ..self }
     }
 
     /// A version's files.
@@ -215,8 +230,35 @@ pub trait Tool {
     ///
     /// The error type is [`Failure`] rather than anything of MCP's, which is
     /// what keeps a handler from putting a failure on the wrong channel:
-    /// [`Failure::respond`] decides that once, in [`invoke`], for every tool.
+    /// [`call`] decides that once, for every tool, after the line describing
+    /// the call has been written.
     fn call(args: Self::Args, ctx: &Ctx) -> impl Future<Output = Result<Self::Output, Failure>>;
+}
+
+/// Run the tool `name`, and leave one line behind saying what happened.
+///
+/// The line is written here rather than in a handler because "every tool call
+/// emits one" is a property of the dispatch: a tool that forgot would not
+/// fail to compile, and the gap would be invisible until the call nobody
+/// logged was the one being looked for.
+pub async fn call(
+    name: &str,
+    arguments: Option<JsonObject>,
+    ctx: &Ctx,
+) -> Result<CallToolResult, ErrorData> {
+    // Summarised before the dispatch, because the dispatch consumes them.
+    let record = Record::new(name).about(arguments.as_ref());
+
+    let answer = dispatch(name, arguments, ctx).await;
+    ctx.log.write(&record.ending(&answer));
+
+    // The one place a `Failure` is put on its channel. Every path into this
+    // function returns one, so there is no arm that can answer without
+    // having been described a line earlier.
+    match answer {
+        Ok(result) => Ok(result),
+        Err(failure) => failure.respond(),
+    }
 }
 
 /// The definition of `T`, as `tools/list` returns it.
@@ -233,40 +275,31 @@ fn definition<T: Tool>() -> Definition {
         )
 }
 
-/// Deserialize `arguments`, run `T`, and put the answer or the failure on the
-/// channel it belongs to.
+/// Deserialize `arguments` and run `T`.
 ///
 /// This is where every tool's error handling happens, which is why a handler
-/// has none of its own. Arguments that do not validate are the client's
-/// mistake and take the protocol channel; anything that goes wrong afterwards
-/// is [`Failure`]'s to place.
+/// has none of its own. Everything that can go wrong is a [`Failure`],
+/// including arguments that did not validate and an answer that would not
+/// serialise — which is what lets [`call`] name the outcome in a line before
+/// [`Failure::respond`] decides which channel it leaves on.
 async fn invoke<T: Tool>(
     arguments: Option<JsonObject>,
     ctx: &Ctx,
-) -> Result<CallToolResult, ErrorData> {
-    let args = match serde_json::from_value::<T::Args>(arguments.unwrap_or_default().into()) {
-        Ok(args) => args,
-        Err(invalid) => {
-            return Failure::InvalidParams {
-                message: invalid.to_string(),
-            }
-            .respond()
-        }
-    };
+) -> Result<CallToolResult, Failure> {
+    let args = serde_json::from_value::<T::Args>(arguments.unwrap_or_default().into()).map_err(
+        |invalid| Failure::InvalidParams {
+            message: invalid.to_string(),
+        },
+    )?;
 
-    let output = match T::call(args, ctx).await {
-        Ok(output) => output,
-        Err(failure) => return failure.respond(),
-    };
+    let output = T::call(args, ctx).await?;
 
     // A tool whose own output will not serialise is a bug in this crate, not
     // something the caller did, so it takes the internal channel rather than
     // being reported as the tool failing.
-    match serde_json::to_value(output) {
-        Ok(value) => Ok(CallToolResult::structured(value)),
-        Err(_) => Failure::Internal {
+    serde_json::to_value(output)
+        .map(CallToolResult::structured)
+        .map_err(|_| Failure::Internal {
             doing: "answering a tool call",
-        }
-        .respond(),
-    }
+        })
 }

@@ -14,10 +14,12 @@
 //!   of serde" belongs here: the recovery is to ask for a version that
 //!   exists, and only the model can do that.
 //!
-//! [`Failure::respond`] is the whole rule. Its return type is exactly a tool
-//! handler's — `Result<CallToolResult, ErrorData>` — so a handler that ends
-//! in `failure.respond()` cannot put a failure on the wrong channel by
-//! accident. `Err` is the protocol; `Ok` with `isError` is the model's.
+//! [`Failure::respond`] is the whole rule, and it is called in exactly one
+//! place: [`crate::tools::call`], once every dispatch has finished. `Err` is
+//! the protocol; `Ok` with `isError` is the model's. A handler never reaches
+//! it — everything that can go wrong inside one is a [`Failure`] returned
+//! upwards — which is what lets the same value be named in a log line before
+//! it becomes an answer.
 //!
 //! # What does not appear in a message
 //!
@@ -217,8 +219,9 @@ impl Failure {
     /// Put this failure on the channel it belongs to.
     ///
     /// `Ok` is a tool error the model reads and can act on; `Err` is a
-    /// protocol error it never sees. The return type is a tool handler's, so
-    /// `failure.respond()` is the whole of a handler's error path.
+    /// protocol error it never sees. Called once, by
+    /// [`crate::tools::call`], which is the only place that has both the
+    /// failure and the answer it becomes.
     pub fn respond(self) -> Result<CallToolResult, ErrorData> {
         match self {
             // The caller's fault, or nobody's: there is nothing a model can
@@ -246,6 +249,38 @@ impl Failure {
             other => Ok(CallToolResult::error(vec![ContentBlock::text(
                 other.message(),
             )])),
+        }
+    }
+
+    /// Which failure this is, in one word, for the line [`crate::log`]
+    /// writes.
+    ///
+    /// Not [`Self::message`] and not `Debug`: a message is a sentence written
+    /// for a model and carries the package name a caller sent, so counting by
+    /// it would give one bucket per call. This is the cause alone, which is
+    /// what "error rate by cause" is a rate of.
+    ///
+    /// The match is exhaustive on purpose. A variant added without a name
+    /// here does not compile, which is the only way a new cause cannot arrive
+    /// silently as somebody else's.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NoSuchPackage { .. } => "no_such_package",
+            Self::NoSuchVersion { .. } => "no_such_version",
+            Self::RateLimited { .. } => "rate_limited",
+            Self::TimedOut { .. } => "timed_out",
+            Self::Unreachable { .. } => "unreachable",
+            Self::Unavailable { .. } => "unavailable",
+            Self::MalformedArchive { .. } => "malformed_archive",
+            Self::TooLarge { .. } => "too_large",
+            Self::NoSuchFile { .. } => "no_such_file",
+            Self::PathIsDirectory { .. } => "path_is_directory",
+            Self::ItemTooLarge { .. } => "item_too_large",
+            Self::UnresolvableArchiveUrl { .. } => "unresolvable_archive_url",
+            Self::InvalidParams { .. } => "invalid_params",
+            Self::NoSuchTool { .. } => "no_such_tool",
+            Self::NoSuchResource { .. } => "no_such_resource",
+            Self::Internal { .. } => "internal",
         }
     }
 
