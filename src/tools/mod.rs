@@ -206,7 +206,25 @@ impl Ctx {
 /// The same shape as [`crate::mcp::Guarded`]: a wrapper that adds one
 /// property to something a caller already knows how to use, so that the
 /// property is not a thing each caller has to remember.
-#[derive(Debug)]
+///
+/// `Copy`, and [`Timed::fetch`] takes it by value, because of how the one
+/// tool that reads two archives asks for them:
+///
+/// ```ignore
+/// try_join!(
+///     ctx.archive().fetch(registry, &package, &from),
+///     ctx.archive().fetch(registry, &package, &to),
+/// )
+/// ```
+///
+/// Each `ctx.archive()` there is a temporary that the statement drops while
+/// the futures are still running. Taken by reference, the borrow outlives
+/// what it borrows and the tool does not compile; moved into the future, it
+/// is two pointers that go where the work goes. The alternative was a `let`
+/// binding at each such call site, which is a thing to remember at the one
+/// place this seam is used concurrently — and the seam exists so that
+/// counting a fetch is not a thing to remember.
+#[derive(Debug, Clone, Copy)]
 pub struct Timed<'a> {
     archive: &'a Archive,
     spent: &'a Spent,
@@ -216,7 +234,7 @@ impl Timed<'_> {
     /// The files in `version` of `package`, and the time it took on the
     /// request's tally.
     pub async fn fetch(
-        &self,
+        self,
         registry: Registry,
         package: &str,
         version: &str,
