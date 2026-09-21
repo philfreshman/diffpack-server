@@ -47,19 +47,25 @@ const USER_AGENT: &str = concat!(
     " (+https://github.com/philfreshman/diffpack-server)",
 );
 
-/// Ask `registry` for whatever is at `url`.
+/// Ask `registry` for whatever is at `url`, saying what this will accept.
 ///
 /// The response arrives whatever its status says; mapping a status onto a
 /// [`Failure`] is the caller's, because the two callers mean different things
 /// by the same number.
-pub async fn get(url: &str, registry: Registry) -> Result<Response, Failure> {
+///
+/// `accept` is a header rather than a constant here because one source needs
+/// it to answer at all — PyPI's index is a web page unless a request asks for
+/// PEP 691's JSON — and which media type that is belongs to the module that
+/// knows what a registry is.
+pub async fn get(url: &str, accept: &str, registry: Registry) -> Result<Response, Failure> {
     let name = registry.name();
 
     // Two budgets, and they are not the same one. The client's timeout
     // covers a request that stalls; `within_budget` covers the whole
     // exchange, so that a body arriving one slow byte at a time still ends
     // inside the time the function has to answer in.
-    error::within_budget(name, client()?.get(url).send())
+    let request = client()?.get(url).header(reqwest::header::ACCEPT, accept);
+    error::within_budget(name, request.send())
         .await?
         .map_err(|cause| failed(cause, name))
 }

@@ -200,22 +200,33 @@ impl Registry {
     /// cost.
     pub fn search(self, query: &str, limit: u32) -> SearchSource {
         let escaped = escape(query);
-        let url = match self {
+        let (url, accept) = match self {
             // The most each source answers, in that source's own units.
             // Narrowed here rather than sent: npm and crates.io both refuse a
             // larger one outright, so a caller asking for a thousand hits
             // would get an error instead of the hundred that exist.
             Self::Npm => {
                 let size = limit.min(250);
-                format!("https://registry.npmjs.org/-/v1/search?text={escaped}&size={size}")
+                (
+                    format!("https://registry.npmjs.org/-/v1/search?text={escaped}&size={size}"),
+                    "application/json",
+                )
             }
             Self::Crates => {
                 let per_page = limit.min(100);
-                format!("https://crates.io/api/v1/crates?q={escaped}&per_page={per_page}")
+                (
+                    format!("https://crates.io/api/v1/crates?q={escaped}&per_page={per_page}"),
+                    "application/json",
+                )
             }
-            Self::PyPi => "https://pypi.org/simple/".to_owned(),
+            // Without this the same URL answers with the web page pip does
+            // not read either.
+            Self::PyPi => (
+                "https://pypi.org/simple/".to_owned(),
+                "application/vnd.pypi.simple.v1+json",
+            ),
         };
-        SearchSource { url }
+        SearchSource { url, accept }
     }
 
     /// The hits a search answer names, or nothing if it is not an answer
@@ -499,11 +510,19 @@ pub struct VersionSource {
     pub order: Order,
 }
 
-/// Where a search for a package is answered.
+/// Where a search for a package is answered, and what to ask it for.
+///
+/// The two travel together because one of the three needs both: the same URL
+/// serves PyPI's index as a web page or as PEP 691's JSON depending on what
+/// the request says it accepts. A caller told only where to go would be
+/// handed HTML and read no hits out of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchSource {
-    /// The document to fetch, query and limit included.
+    /// The document to fetch, query and limit included where the source
+    /// takes them.
     pub url: String,
+    /// What the request says it accepts.
+    pub accept: &'static str,
 }
 
 /// One package a search found.

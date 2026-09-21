@@ -260,12 +260,14 @@ fn search_comes_from_the_registrys_own_index() {
         Registry::Npm.search("zod", 10),
         SearchSource {
             url: "https://registry.npmjs.org/-/v1/search?text=zod&size=10".to_owned(),
+            accept: "application/json",
         }
     );
     assert_eq!(
         Registry::Crates.search("json parser", 5),
         SearchSource {
             url: "https://crates.io/api/v1/crates?q=json%20parser&per_page=5".to_owned(),
+            accept: "application/json",
         },
         "a query is a parameter value, so a space in it is escaped and not sent"
     );
@@ -273,8 +275,27 @@ fn search_comes_from_the_registrys_own_index() {
         Registry::PyPi.search("requests", 10),
         SearchSource {
             url: "https://pypi.org/simple/".to_owned(),
+            accept: "application/vnd.pypi.simple.v1+json",
         },
         "PyPI has no search endpoint, so the source is the index itself"
+    );
+}
+
+/// What a source is asked *for* travels with where it is: the same URL serves
+/// PyPI's index as a web page or as PEP 691 JSON depending on what the
+/// request says it accepts, so a caller that sent the wrong one would be
+/// handed HTML and read no hits out of it at all.
+#[test]
+fn a_source_says_what_to_ask_it_for() {
+    assert_eq!(
+        Registry::Npm.search("zod", 10).accept,
+        "application/json",
+        "npm's search endpoint answers JSON and nothing else"
+    );
+    assert_eq!(
+        Registry::PyPi.search("requests", 10).accept,
+        "application/vnd.pypi.simple.v1+json",
+        "and PyPI's index is HTML unless this asks otherwise"
     );
 }
 
@@ -290,6 +311,7 @@ fn a_source_is_never_asked_for_more_than_it_answers() {
         Registry::Npm.search("zod", 1_000),
         SearchSource {
             url: "https://registry.npmjs.org/-/v1/search?text=zod&size=250".to_owned(),
+            accept: "application/json",
         },
         "npm refuses a size over 250"
     );
@@ -297,6 +319,7 @@ fn a_source_is_never_asked_for_more_than_it_answers() {
         Registry::Crates.search("serde", 1_000),
         SearchSource {
             url: "https://crates.io/api/v1/crates?q=serde&per_page=100".to_owned(),
+            accept: "application/json",
         },
         "crates.io refuses a per_page over 100"
     );

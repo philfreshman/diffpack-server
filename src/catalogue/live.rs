@@ -11,7 +11,7 @@ use reqwest::{Response, StatusCode};
 
 use crate::error::Failure;
 use crate::http;
-use crate::registry::Registry;
+use crate::registry::{Registry, SearchSource};
 
 /// The adapter that asks.
 #[derive(Debug)]
@@ -22,9 +22,15 @@ impl Live {
         Self
     }
 
-    /// Whatever `url` serves, as text, refusing anything over `limit`.
-    pub async fn body(&self, url: &str, limit: u64, registry: Registry) -> Result<String, Failure> {
-        let response = success(http::get(url, registry).await?, registry)?;
+    /// Whatever `source` serves, as text, refusing anything over `limit`.
+    pub async fn body(
+        &self,
+        source: &SearchSource,
+        limit: u64,
+        registry: Registry,
+    ) -> Result<String, Failure> {
+        let asked = http::get(&source.url, source.accept, registry).await?;
+        let response = success(asked, registry)?;
 
         // An answer this server will not hold, and one that is not text, are
         // the same thing to a caller: the source answered and what it sent

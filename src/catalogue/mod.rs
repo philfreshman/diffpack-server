@@ -106,22 +106,22 @@ impl Catalogue {
         query: &str,
         limit: u32,
     ) -> Result<Vec<Hit>, Failure> {
-        let url = registry.search(query, limit).url;
+        let source = registry.search(query, limit);
 
         // The same check the archive path makes, and not because this URL
         // could plausibly be wrong: it is built by `registry` and is allowed
         // by construction. It is here so that the rule is "every outbound
         // request is checked" rather than "every outbound request that
         // somebody thought about".
-        if !registry::allows(&url) {
+        if !registry::allows(&source.url) {
             return Err(Failure::Internal {
                 doing: "asking a registry for what it publishes",
             });
         }
 
         let body = match &self.source {
-            Source::Live(live) => live.body(&url, self.limit, registry).await?,
-            Source::Fixture(fixture) => fixture.body(&url, registry)?,
+            Source::Live(live) => live.body(&source, self.limit, registry).await?,
+            Source::Fixture(fixture) => fixture.body(&source.url, registry)?,
         };
 
         registry

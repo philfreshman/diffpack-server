@@ -37,7 +37,11 @@ impl Live {
         version: &str,
     ) -> Result<Vec<u8>, Failure> {
         let name = registry.name();
-        let response = success(http::get(url, registry).await?, registry, package, version)?;
+        // An archive is bytes and a registry serves it as bytes whatever
+        // this says, so the header is the honest wildcard rather than a
+        // media type this server would not check anyway.
+        let asked = http::get(url, "*/*", registry).await?;
+        let response = success(asked, registry, package, version)?;
 
         http::read_within(response, limit, name, |bytes| {
             super::too_large(package, version, bytes, limit)
