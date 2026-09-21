@@ -44,6 +44,13 @@ futures = { version = "0.3.34", default-features = false, features = ["std"] }
 # tower `Service`, so it composes with axum directly. No client features: this
 # crate is a server.
 rmcp = { version = "3.4.0", features = ["server", "transport-streamable-http-server"] }
+# Input and output schemas, derived from the types a tool handler actually
+# reads and returns rather than written out beside them — see `src/tools`. It
+# is already in the graph as rmcp's own dependency and the version is kept in
+# step with rmcp's so that `JsonSchema` here is the same trait rmcp asks for;
+# if the two ever diverge the compiler says so rather than the schemas
+# quietly disagreeing.
+schemars = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
