@@ -202,6 +202,70 @@ async fn a_file_that_fits_comes_back_whole_and_says_it_was_not_cut() {
 }
 
 // ---------------------------------------------------------------------------
+// Text that was never text
+// ---------------------------------------------------------------------------
+
+/// A file that is not valid UTF-8 comes back decoded lossily, which is what
+/// the extractor already does to it, and the answer says so.
+///
+/// Not an error, because a binary file in a package is an ordinary thing and
+/// an agent asking about one has not made a mistake. But without the flag it
+/// is handed a string of replacement characters and cannot tell a PNG from a
+/// source file somebody saved in the wrong encoding — and those have
+/// different next moves.
+///
+/// The expected text is what `python3 -c` said the fixture's ten bytes decode
+/// to, not what this server said: a PNG signature whose first byte stands
+/// alone, then two bytes that are never valid. Three replacement characters,
+/// and `PNG` still legible between them.
+#[tokio::test]
+async fn a_file_that_is_not_utf8_comes_back_lossily_decoded_and_flagged() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "odd-files",
+        "version": "1.0.0",
+        "path": "logo.png",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "a package shipping a binary file is ordinary, got {result}"
+    );
+    assert_eq!(
+        result["structuredContent"]["validUtf8"],
+        json!(false),
+        "without this an agent cannot tell a binary from a mis-encoded source \
+         file, and the two have different next moves: got {result}"
+    );
+    assert_eq!(
+        result["structuredContent"]["text"], "\u{FFFD}PNG\r\n\u{1a}\n\u{FFFD}\u{FFFD}",
+        "got {result}"
+    );
+}
+
+/// The other half, and the one that keeps the flag from being decoration: an
+/// ordinary source file says it decoded cleanly. A flag set on every answer
+/// is a flag an agent learns to skip.
+#[tokio::test]
+async fn an_ordinary_file_says_it_is_valid_utf8() {
+    let result = call(json!({
+        "registry": "crates",
+        "package": "serde",
+        "version": "1.0.0",
+        "path": "src/lib.rs",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["validUtf8"],
+        json!(true),
+        "got {result}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // How it fails
 // ---------------------------------------------------------------------------
 
