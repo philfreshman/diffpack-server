@@ -61,10 +61,19 @@ pub struct Args {
 
 /// One published version of the package.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct Version {
     /// The version as the registry spells it. Pass it back exactly as it is
     /// written here: `v4.0.0` and `4.0.0` are different versions.
     pub version: String,
+
+    /// When the registry says this version was published, in the registry's
+    /// own wording. This is what the list is ordered by.
+    ///
+    /// Absent where the registry does not say. A version without one is
+    /// listed after every version that has one, so it is at the end of the
+    /// list without being the oldest release.
+    pub published_at: Option<String>,
 
     /// Whether this is a preview — an alpha, a beta, a release candidate or
     /// a development build — rather than a release. Asked for "the latest
@@ -104,6 +113,7 @@ impl Tool for ListPackageVersions {
             .into_iter()
             .map(|version| Version {
                 version: version.version,
+                published_at: version.published_at,
                 prerelease: version.prerelease,
             })
             .collect();

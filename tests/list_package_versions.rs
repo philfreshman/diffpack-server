@@ -34,9 +34,14 @@
 use axum::body::Body;
 use axum::http::Request;
 use diffpack_server::catalogue::Catalogue;
+use diffpack_server::error::Failure;
 use diffpack_server::mcp::Diffpack;
+use diffpack_server::page;
+use diffpack_server::registry::Registry;
 use diffpack_server::router;
+use diffpack_server::tools::list_package_versions::{Args, ListPackageVersions, Version};
 use diffpack_server::tools::Ctx;
+use diffpack_server::tools::Tool;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -139,9 +144,46 @@ async fn a_pypi_packages_versions_are_ordered_by_date_not_by_the_documents_order
 
     assert_eq!(
         versions(&result),
-        vec!["2.34.2", "2.31.0", "2.9.2", "2.9.0", "0.10.0"],
+        vec![
+            "2.34.2",
+            "2.31.0",
+            "2.9.2",
+            "2.9.0",
+            "0.10.0",
+            "2.23.0-py2.7"
+        ],
         "deps.dev lists these lexically, so the last entry is 2.9.2 and \
          reversing the document would put a 2016 release on top: got {result}"
+    );
+}
+
+/// deps.dev leaves `publishedAt` off some versions — one of `requests`' 161
+/// and thirty-seven of `numpy`'s 171, including ordinary-looking releases
+/// like 1.10.0. They are published versions, so dropping them would answer
+/// "what versions are there" with a list missing a fifth of them.
+///
+/// They cannot be placed in an order built from dates, so they go last: the
+/// promise is newest first, and a release this server cannot date is not one
+/// it can call the newest.
+#[tokio::test]
+async fn a_version_the_source_gives_no_date_for_is_listed_last_rather_than_dropped() {
+    let result = call(json!({
+        "registry": "pypi",
+        "package": "requests",
+    }))
+    .await;
+
+    let listed = versions(&result);
+
+    assert!(
+        listed.contains(&"2.23.0-py2.7"),
+        "a version with no date is still a version the package has, got {result}"
+    );
+    assert_eq!(
+        listed.last(),
+        Some(&"2.23.0-py2.7"),
+        "an undated release cannot be claimed to be the newest, so it sits \
+         after every release that can be dated: got {result}"
     );
 }
 
@@ -175,6 +217,40 @@ async fn a_scoped_npm_package_is_asked_for_under_its_whole_name() {
         "the newest release of this package is a 24.x patch and the second \
          newest is a 22.x one, which is neither the semver order nor the \
          `latest` tag: got {result}"
+    );
+}
+
+/// The order is by publish date, so the date is in the answer.
+///
+/// Without it an agent is given a sequence it cannot check and cannot
+/// explain: an undated release sits last, which looks exactly like being the
+/// oldest, and a backport sitting above a newer major looks like a mistake.
+/// With it, both are self-evident.
+#[tokio::test]
+async fn an_answer_says_when_each_version_was_published() {
+    let result = call(json!({
+        "registry": "pypi",
+        "package": "requests",
+    }))
+    .await;
+
+    let items = result["structuredContent"]["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a page carries its items, got {result}"));
+
+    assert_eq!(
+        items[0]["publishedAt"], "2026-05-14T19:25:26Z",
+        "the date is the registry's own, passed through rather than reformatted: got {result}"
+    );
+
+    let undated = items
+        .last()
+        .unwrap_or_else(|| panic!("the package has versions, got {result}"));
+    assert_eq!(undated["version"], "2.23.0-py2.7", "got {result}");
+    assert!(
+        undated["publishedAt"].is_null(),
+        "a version the source gave no date for says so rather than being \
+         given one: got {undated}"
     );
 }
 
@@ -270,7 +346,7 @@ async fn a_walk_of_the_pages_is_the_whole_listing() {
     );
     assert_eq!(
         first["structuredContent"]["total"],
-        json!(5),
+        json!(6),
         "the total is how many versions the package has and not how many are \
          on this page — an agent told it received 2 of 2 has no reason to ask \
          again: got {first}"
@@ -334,6 +410,171 @@ async fn a_package_the_registry_does_not_have_is_a_tool_error_naming_it() {
 }
 
 // ---------------------------------------------------------------------------
+// What a client is told
+// ---------------------------------------------------------------------------
+
+/// The definition carries what an agent needs to call this correctly having
+/// read nothing else, which is #23's question asked of the tool that exists.
+#[tokio::test]
+async fn the_definition_carries_everything_an_agent_needs() {
+    let tool = listed(TOOL).await;
+
+    for field in ["registry", "package", "cursor", "limit"] {
+        assert!(
+            tool["inputSchema"]["properties"][field].is_object(),
+            "the input schema should describe `{field}`, got {}",
+            tool["inputSchema"]
+        );
+    }
+    for required in ["registry", "package"] {
+        assert!(
+            tool["inputSchema"]["required"]
+                .as_array()
+                .is_some_and(|fields| fields.iter().any(|field| field == required)),
+            "`{required}` is not optional, got {}",
+            tool["inputSchema"]
+        );
+    }
+    assert!(
+        !tool["inputSchema"]["properties"]["version"].is_object(),
+        "this tool answers what the versions *are*, so asking for one would \
+         be asking the question backwards: got {}",
+        tool["inputSchema"]
+    );
+
+    assert_eq!(
+        tool["inputSchema"]["properties"]["registry"]["enum"],
+        json!(["npm", "crates", "pypi"]),
+        "the enum comes from `src/registry.rs` rather than from prose here, got {tool}"
+    );
+
+    assert_eq!(
+        tool["outputSchema"]["type"], "object",
+        "a tool answering with structured content declares its shape, got {tool}"
+    );
+
+    assert_eq!(
+        tool["annotations"]["readOnlyHint"], true,
+        "reading a registry's metadata changes nothing, got {}",
+        tool["annotations"]
+    );
+    assert_eq!(
+        tool["annotations"]["openWorldHint"], true,
+        "the arguments name a package on a registry, which is a world this \
+         server does not control, got {}",
+        tool["annotations"]
+    );
+}
+
+/// The one thing an agent cannot work out from a list of versions it is
+/// shown: that the order is by publish date rather than by version number.
+/// An agent that assumes otherwise reads the first entry as "the latest
+/// release" and is wrong whenever a backport was the last thing published,
+/// which on `@types/node` is most weeks.
+#[tokio::test]
+async fn the_description_says_the_order_is_by_date_rather_than_by_number() {
+    let tool = listed(TOOL).await;
+    let description = tool["description"].as_str().unwrap_or_else(|| {
+        panic!("a tool an agent picks without documentation has one, got {tool}")
+    });
+
+    assert!(
+        description.contains("publish date") && description.contains("version number"),
+        "the description should say which of the two orders this is, since \
+         an agent cannot tell from the answer: got {description}"
+    );
+}
+
+/// `limit` and `cursor` carry `src/page.rs`'s numbers, not numbers this tool
+/// wrote down.
+#[tokio::test]
+async fn the_paging_arguments_document_the_numbers_that_bind() {
+    let tool = listed(TOOL).await;
+    let limit = &tool["inputSchema"]["properties"]["limit"];
+
+    assert_eq!(limit["default"], json!(page::DEFAULT_LIMIT), "got {limit}");
+    assert_eq!(limit["maximum"], json!(page::MAX_LIMIT), "got {limit}");
+    assert!(
+        limit["description"]
+            .as_str()
+            .is_some_and(|said| said.contains("clamped")),
+        "the description is the one `page::Limit` writes, got {limit}"
+    );
+
+    let cursor = &tool["inputSchema"]["properties"]["cursor"];
+    assert_eq!(cursor["pattern"], "^p1:[0-9]+$", "got {cursor}");
+}
+
+// ---------------------------------------------------------------------------
+// The handler, reached directly
+// ---------------------------------------------------------------------------
+//
+// The second seam, and a narrow one on purpose. Everything above goes over
+// the wire because that is where a definition and a handler can disagree.
+// What is left for these two is the part JSON cannot show: which `Failure`
+// the handler returned, and that the answer is a `Page<Version>` of typed
+// values rather than a shape that happens to serialise to the right JSON.
+
+/// The handler answers in the crate's own types.
+#[tokio::test]
+async fn the_handler_answers_with_typed_versions() {
+    let page = ListPackageVersions::call(
+        Args {
+            registry: Registry::Crates,
+            package: "tokio".to_owned(),
+            cursor: None,
+            limit: None,
+        },
+        &Ctx::with_catalogue(Catalogue::fixture(FIXTURES)),
+    )
+    .await
+    .expect("the fixture set has this crate");
+
+    assert_eq!(
+        page.items.first(),
+        Some(&Version {
+            version: "1.53.1".to_owned(),
+            published_at: Some("2026-07-20T17:06:09.996426Z".to_owned()),
+            prerelease: false,
+        }),
+        "a `prerelease` that serialised correctly by accident — a string, a \
+         number — would pass every test above and fail a client validating \
+         against the schema"
+    );
+    assert_eq!(page.total, 5);
+    assert_eq!(page.next_cursor, None);
+}
+
+/// Which failure it is, rather than which words it produced.
+///
+/// The test over the wire asserts that the message names the package, which
+/// is what a model reads. This asserts the variant, which is what decides the
+/// channel it goes out on — and it is `NoSuchPackage` rather than
+/// `NoSuchVersion`, because a version list is asked for by package alone.
+#[tokio::test]
+async fn the_handler_returns_the_failure_that_names_the_absent_package() {
+    let failure = ListPackageVersions::call(
+        Args {
+            registry: Registry::Npm,
+            package: "not-a-real-package".to_owned(),
+            cursor: None,
+            limit: None,
+        },
+        &Ctx::with_catalogue(Catalogue::fixture(FIXTURES)),
+    )
+    .await
+    .expect_err("the fixture set says this URL serves nothing");
+
+    match failure {
+        Failure::NoSuchPackage { registry, package } => {
+            assert_eq!(package, "not-a-real-package");
+            assert_eq!(registry, "npm");
+        }
+        other => panic!("a missing package should say so, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Reading the answer
 // ---------------------------------------------------------------------------
 
@@ -367,6 +608,31 @@ fn versions(result: &Value) -> Vec<&str> {
                 .unwrap_or_else(|| panic!("every entry names a version, got {entry}"))
         })
         .collect()
+}
+
+/// The listed definition of `name`, or a panic naming what was listed.
+async fn listed(name: &str) -> Value {
+    let answer = post(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": { "_meta": meta() },
+    }))
+    .await;
+
+    let tools = answer["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list should answer with an array, got {answer}"))
+        .clone();
+
+    tools
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .unwrap_or_else(|| {
+            let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+            panic!("`{name}` should be listed, got {names:?}")
+        })
+        .clone()
 }
 
 /// Call the tool with `arguments`, returning the `result` — or panicking with

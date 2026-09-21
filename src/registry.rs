@@ -220,13 +220,10 @@ impl Registry {
                 document
                     .versions
                     .into_keys()
-                    .filter_map(|version| {
-                        let published_at = document.time.get(&version)?.clone();
-                        Some(Version {
-                            prerelease: self.is_prerelease(&version),
-                            version,
-                            published_at,
-                        })
+                    .map(|version| Version {
+                        prerelease: self.is_prerelease(&version),
+                        published_at: document.time.get(&version).cloned(),
+                        version,
                     })
                     .collect::<Vec<_>>()
             }
@@ -239,7 +236,7 @@ impl Registry {
                 #[derive(Deserialize)]
                 struct Release {
                     num: String,
-                    created_at: String,
+                    created_at: Option<String>,
                 }
 
                 let document: Document = serde_json::from_str(document).ok()?;
@@ -267,7 +264,8 @@ impl Registry {
                 #[serde(rename_all = "camelCase")]
                 struct Release {
                     version_key: VersionKey,
-                    published_at: String,
+                    #[serde(default)]
+                    published_at: Option<String>,
                 }
                 #[derive(Deserialize)]
                 struct VersionKey {
@@ -287,9 +285,14 @@ impl Registry {
             }
         };
 
-        // Newest first, and by the date rather than by the name. Ties keep
-        // whatever order they arrived in, which for two releases published
-        // in the same instant is not a question anyone is asking.
+        // Newest first, and by the date rather than by the name. A version
+        // the source gave no date for sorts last, which is what reversing
+        // `Option`'s own order does — `None` is less than every `Some` — and
+        // is the only honest place for it: the promise is newest first, and a
+        // release this server cannot date is not one it can call the newest.
+        //
+        // Ties keep whatever order they arrived in, which for two releases
+        // published in the same instant is not a question anyone is asking.
         versions.sort_by(|a, b| b.published_at.cmp(&a.published_at));
         Some(versions)
     }
@@ -534,8 +537,14 @@ pub struct VersionSource {
 pub struct Version {
     /// The version as the registry spells it.
     pub version: String,
-    /// When the registry says it was published.
-    pub published_at: String,
+    /// When the registry says it was published, where it says.
+    ///
+    /// `None` is a real answer and not a gap in this crate: deps.dev leaves
+    /// the date off some versions — one of `requests`' 161 and thirty-seven
+    /// of `numpy`'s 171 — and those are published releases. Dropping them
+    /// would answer "what versions are there" with a list missing a fifth of
+    /// them, so they are kept and sorted last.
+    pub published_at: Option<String>,
     /// Whether it is a preview rather than a release.
     pub prerelease: bool,
 }
