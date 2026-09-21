@@ -5,13 +5,15 @@ An MCP server in Rust, deployed to Vercel, exposing what
 tools an agent can call: resolve a package on npm, crates.io or PyPI, fetch and
 extract its archives, and diff one version against another.
 
-**Status: transport, and the first tool that reads a package.** The crate
-builds, tests and deploys, and `/mcp` speaks Streamable HTTP: a client
-connects, negotiates a protocol revision, lists tools and calls one. There are
-two. `resolve_archive_url` answers from its arguments and fetches nothing;
+**Status: transport, and the tools that read a package.** The crate builds,
+tests and deploys, and `/mcp` speaks Streamable HTTP: a client connects,
+negotiates a protocol revision, lists tools and calls one. There are three.
+`resolve_archive_url` answers from its arguments and fetches nothing;
 `list_package_files` downloads a published version and lists what is inside
-it, a page at a time. The tools that diff one version against another arrive
-with [#13](https://github.com/philfreshman/diffpack-server/issues/13) onward.
+it, a page at a time; `get_file_content` returns one of those files, cut
+short if it is longer than a response can carry. The tools that diff one
+version against another arrive with
+[#13](https://github.com/philfreshman/diffpack-server/issues/13) onward.
 `/health` is the other route and is what a monitor watches.
 
 Production serves whatever was last merged to `main`, so a branch merged into
@@ -275,11 +277,13 @@ which suits a serverless function that has no warm process to hold one in —
 and it answers clients back to `2025-11-25` as well. `POST` only: `GET` and
 `DELETE` are `405`, and no answer ever carries an `Mcp-Session-Id`.
 
-A client can connect, list tools and call either of the two there are:
+A client can connect, list tools and call any of the three there are:
 `resolve_archive_url`, which returns the URL a package version's archive is
-served from without fetching anything, and `list_package_files`, which fetches
+served from without fetching anything; `list_package_files`, which fetches
 that archive and lists the paths inside it with the top-level directory
-stripped. The tools that diff one version against another arrive with
+stripped; and `get_file_content`, which returns one of those files, saying
+when it had to cut one short and when the bytes were not valid UTF-8. The
+tools that diff one version against another arrive with
 [#13](https://github.com/philfreshman/diffpack-server/issues/13) onward.
 
 Claude Code:

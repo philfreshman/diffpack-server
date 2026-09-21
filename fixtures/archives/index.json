@@ -15,6 +15,8 @@
 
   "https://registry.npmjs.org/many-files/-/many-files-1.0.0.tgz": "many-files-1.0.0.tgz",
 
+  "https://registry.npmjs.org/odd-files/-/odd-files-1.0.0.tgz": "odd-files-1.0.0.tgz",
+
   "https://pypi.org/pypi/sneaky/1.0.0/json": "sneaky-1.0.0.json",
   "https://cdn.example.invalid/sneaky-1.0.0.tar.gz": "sneaky-1.0.0.tar.gz",
 

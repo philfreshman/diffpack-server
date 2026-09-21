@@ -51,7 +51,11 @@ _Avoid_: metadata, index, manifest, JSON
 An Archive after extraction: every file path in that version mapped to its
 entry, with the archive's top-level directory already stripped. It is what a
 diff is computed from, and it is the boundary the rest of the crate sees — a
-tool asks for a FileMap, never for an Archive.
+tool asks for a FileMap, never for an Archive. Every entry's content is text,
+because extraction decodes it that way: bytes that are not valid UTF-8 become
+replacement characters rather than an error, so a FileMap holds a readable
+rendering of a binary file and not the file. Nothing downstream can undo
+that, which is why a tool returning content says whether it happened.
 _Avoid_: tree, file list, contents, extracted archive
 
 **Name rule**:
@@ -198,7 +202,9 @@ The same ceiling over an answer that is one thing rather than a sequence: a
 file's content, a file's Patch. An Excerpt has a marker and a real byte count
 where a Page has a cursor and a total — which is the whole of the difference,
 and why both live in `src/page.rs` ([ADR
-0005](docs/adr/0005-one-module-owns-the-response-ceiling.md)).
+0005](docs/adr/0005-one-module-owns-the-response-ceiling.md)). The byte count
+is the text's own, so for a file that did not decode it is the size of the
+readable rendering rather than of what the registry served.
 _Avoid_: snippet, preview, head
 
 **Cursor**:
@@ -208,6 +214,15 @@ not at all. A cursor a client wrote for itself is refused. A tool declares it
 as that module's type, so the rule reaches an agent in the schema rather than
 in a sentence the tool wrote.
 _Avoid_: token, offset, page number
+
+**Cap**:
+How many bytes a caller asks one Excerpt for — `max_bytes`, and the Limit's
+opposite number on the blob-shaped half. It is the same kind of politeness
+and the same kind of not-protection: it can only ask for *less* than the
+Response ceiling already allows, because the ceiling is the platform's and
+not a caller's to raise. Omitting it means the ceiling alone, which is what
+makes a long file come back cut whether or not anyone asked.
+_Avoid_: max bytes (as a concept), truncation limit, size (unqualified)
 
 **Limit**:
 How many items a caller asks one Page for. Clamped to a documented maximum

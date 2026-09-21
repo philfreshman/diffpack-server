@@ -119,6 +119,7 @@ macro_rules! tools {
 // in step and no way to register a tool in the wrong place — the sort is a
 // property of the collection rather than a call at the end of a builder.
 tools! {
+    get_file_content::GetFileContent,
     list_package_files::ListPackageFiles,
     resolve_archive_url::ResolveArchiveUrl,
 }

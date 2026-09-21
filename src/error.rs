@@ -126,6 +126,31 @@ pub enum Failure {
         limit: u64,
     },
 
+    /// The version has no file at that path.
+    ///
+    /// The commonest way an agent arrives here is by writing the archive's
+    /// top-level directory back into the path it was given without one, so
+    /// the message says that rather than only saying no.
+    NoSuchFile {
+        package: String,
+        version: String,
+        path: String,
+    },
+
+    /// The path names a directory, which has no content to return.
+    ///
+    /// Distinct from a path that is not there at all, and deliberately: the
+    /// extractor gives a directory the empty string, so the two would
+    /// otherwise both arrive as nothing and a model could not tell "this
+    /// module ships no code" from "I spelled the path wrong". The remedies
+    /// differ too — one is to ask for a file inside, the other is to find out
+    /// what the paths are.
+    PathIsDirectory {
+        package: String,
+        version: String,
+        path: String,
+    },
+
     /// One item of an answer is larger than a whole response.
     ///
     /// Distinct from [`Failure::TooLarge`], which is about an archive this
@@ -298,6 +323,26 @@ impl Failure {
                  Diff a smaller package, or ask for a single file instead of the whole tree.",
                 bytes / 1_000_000,
                 limit / 1_000_000,
+            ),
+
+            Self::NoSuchFile {
+                package,
+                version,
+                path,
+            } => format!(
+                "`{package}` {version} has no file at `{path}`. List the version's files \
+                 to see which paths it has: they have the archive's top-level directory \
+                 removed, so a path never begins with the package's own folder."
+            ),
+
+            Self::PathIsDirectory {
+                package,
+                version,
+                path,
+            } => format!(
+                "`{path}` in `{package}` {version} is a directory, not a file, so it has \
+                 no content to read. Ask for a file inside it, or list the version's files \
+                 to see what it holds."
             ),
 
             Self::ItemTooLarge {

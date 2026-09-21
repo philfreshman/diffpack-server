@@ -190,6 +190,35 @@ for i in $(seq 1 "$MANY"); do
 done
 targz "many-files-1.0.0.tgz" "package" "$many"
 
+# --- a package whose files are awkward to hand back ------------------------
+#
+# Two files, each for a criterion #12 carries that no ordinary package can
+# fail.
+#
+# `logo.png` is not valid UTF-8. The extractor decodes lossily, so it comes
+# back as replacement characters rather than as an error, and a tool has to
+# say which of those two things happened — an agent shown a file of `\uFFFD`
+# with no flag cannot tell a binary from a text file full of garbage. The
+# bytes are a real PNG signature followed by two that are invalid on their
+# own, so the file is recognisably binary as well as undecodable.
+#
+# `big.txt` is larger than a whole response. It is what proves the server
+# applies its own cap with no `max_bytes` asked for, which is the case a
+# caller cannot reach by asking nicely and the one that would otherwise be a
+# platform error with nothing in it.
+odd=$work/odd
+mkdir -p "$odd/package"
+# Octal, because `write` is for text: 0211 is the PNG signature's first byte
+# and a continuation byte on its own, and 0377 0376 are never valid UTF-8.
+printf '\211PNG\r\n\032\n\377\376' >"$odd/package/logo.png"
+# 100,000 lines of twenty bytes, which is exactly 2,000,000. Generated
+# rather than written out because what matters is the size; `awk` rather than
+# `yes | head` because this script runs under `pipefail`, where the writer
+# taking SIGPIPE is a failed pipeline.
+awk 'BEGIN { for (i = 0; i < 100000; i++) print "export const n = 0;" }' \
+  >"$odd/package/big.txt"
+targz "odd-files-1.0.0.tgz" "package" "$odd"
+
 # --- the archive this server will not fetch -------------------------------
 #
 # A real archive at a host no registry names, referenced by a listing that

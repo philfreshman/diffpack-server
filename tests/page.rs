@@ -523,7 +523,7 @@ fn a_cut_blob_is_cut_on_what_it_costs_encoded_not_on_its_own_length() {
 fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
     let content = "abcdefghij".repeat(1_000);
 
-    let asked_for_less = page::truncate(&content, Some(100));
+    let asked_for_less = page::truncate(&content, Some(page::MaxBytes::new(100)));
     let shown = asked_for_less
         .text
         .find("\n[truncated")
@@ -535,7 +535,7 @@ fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
     assert!(asked_for_less.truncated);
     assert_eq!(asked_for_less.bytes, 10_000, "and still the real total");
 
-    let asked_for_everything = page::truncate(&content, Some(usize::MAX));
+    let asked_for_everything = page::truncate(&content, Some(page::MaxBytes::new(u64::MAX)));
     assert_eq!(
         asked_for_everything.text, content,
         "a cap larger than the text is not a cut"
@@ -543,7 +543,7 @@ fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
     assert!(!asked_for_everything.truncated);
 
     let huge = "x".repeat(page::PAYLOAD_CEILING * 2);
-    let refused_the_raise = page::truncate(&huge, Some(usize::MAX));
+    let refused_the_raise = page::truncate(&huge, Some(page::MaxBytes::new(u64::MAX)));
     assert!(
         refused_the_raise.truncated,
         "asking for all of it does not make it fit"
