@@ -25,6 +25,24 @@
 //! reads costs an agent a confirmation prompt it did not need; defaulting to
 //! true on one that writes is worse. A tool has to say.
 //!
+//! # Who reads a description
+//!
+//! Every `description` in a tool's schema reaches a model: [`Tool::DESCRIPTION`],
+//! and one per field of [`Tool::Args`] and [`Tool::Output`] that carries a doc
+//! comment. Those are written for that reader and name nothing in this
+//! repository — a model told a field's enum "comes from [`crate::registry`]"
+//! has been handed our reasoning rather than something it can act on. Why a
+//! field is the shape it is goes in an ordinary `//` comment beside it, or in
+//! the tool module's own header. `tests/tools.rs` holds every tool to this,
+//! over the whole collection rather than tool by tool, so the rule arrives
+//! before the tool that would have broken it (#23).
+//!
+//! The doc comment on an `Args` or `Output` struct itself is the exception and
+//! goes the other way: `rmcp` strips the root `title` and `description` off
+//! both schemas as noise, so a sentence written there reaches nobody. It is a
+//! note to the next reader of the file, and a rule a caller has to know cannot
+//! live in one.
+//!
 //! # What a tool may reach
 //!
 //! [`Ctx`], and nothing else it has to build itself.

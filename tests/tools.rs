@@ -95,6 +95,36 @@ async fn the_registry_parameter_is_the_enum_the_registry_module_owns() {
     );
 }
 
+/// Nothing an agent reads names a Rust path.
+///
+/// Every `description` in a tool's definition reaches a model, and one saying
+/// a field's "enum comes from [`crate::registry`]" hands it this repository's
+/// reasoning rather than anything it can act on. The reasoning belongs beside
+/// the code it is about; the schema belongs to the caller. #23 owns that.
+///
+/// Over every listed tool rather than [`TOOL`], and over the whole of each
+/// definition rather than the fields this file names elsewhere: the
+/// description that leaks next is in a tool nobody has written yet, in
+/// whatever shape its schema turns out to have.
+#[tokio::test]
+async fn no_description_an_agent_reads_names_a_rust_path() {
+    let mut leaked = Vec::new();
+
+    for tool in everything_listed().await {
+        let name = tool["name"].as_str().unwrap_or("<unnamed>").to_owned();
+        descriptions(&tool, &mut |said| {
+            if said.contains("crate::") || said.contains("[`") {
+                leaked.push(format!("{name}: {said}"));
+            }
+        });
+    }
+
+    assert!(
+        leaked.is_empty(),
+        "these reach a model and are written for us: {leaked:#?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // What it answers
 // ---------------------------------------------------------------------------
@@ -322,8 +352,12 @@ async fn a_registry_outside_the_enum_is_refused_by_naming_the_ones_that_exist() 
 // Driving the endpoint
 // ---------------------------------------------------------------------------
 
-/// The listed definition of `name`, or a panic naming what was listed.
-async fn listed(name: &str) -> Value {
+/// Every tool, as `tools/list` returns it.
+///
+/// The collection rather than one member of it, because a rule every tool is
+/// held to is asserted over what the server actually offers — a test that
+/// named its tools would only ever hold the ones written before it.
+async fn everything_listed() -> Vec<Value> {
     let answer = post(json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -332,10 +366,35 @@ async fn listed(name: &str) -> Value {
     }))
     .await;
 
-    let tools = answer["result"]["tools"]
+    answer["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("tools/list should answer with an array, got {answer}"))
-        .clone();
+        .clone()
+}
+
+/// Every `description` anywhere in `value`, however deeply nested.
+///
+/// A walk rather than a list of places to look: a `description` on a field of
+/// a type in `$defs` reaches a model exactly as one on a top-level property
+/// does, and so will whatever nesting the next tool's schema has.
+fn descriptions(value: &Value, found: &mut impl FnMut(&str)) {
+    match value {
+        Value::Object(fields) => {
+            for (key, child) in fields {
+                match (key.as_str(), child.as_str()) {
+                    ("description", Some(said)) => found(said),
+                    _ => descriptions(child, found),
+                }
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| descriptions(item, found)),
+        _ => {}
+    }
+}
+
+/// The listed definition of `name`, or a panic naming what was listed.
+async fn listed(name: &str) -> Value {
+    let tools = everything_listed().await;
 
     tools
         .iter()
