@@ -14,9 +14,12 @@
 # two top-level directories a wheel has and does not wrap, and the file
 # extensions each registry serves.
 #
-# `gzip -n` so a rebuild produces the same bytes rather than a fresh
-# timestamp, and `COPYFILE_DISABLE` so macOS does not slip `._` resource forks
-# into a tar.
+# A rebuild has to produce the same bytes, or every regeneration is a diff
+# nobody can review. Three things would otherwise vary: gzip stamps the time
+# (`gzip -n`), tar and zip stamp each file's mtime (fixed below before either
+# runs), and tar records who built it (zeroed, through whichever spelling of
+# the flags this tar has). `COPYFILE_DISABLE` is macOS, which would otherwise
+# slip `._` resource forks into a tar.
 #
 # Run from the repository root:
 #
@@ -38,6 +41,20 @@ export COPYFILE_DISABLE=1
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
+# The same instant for every entry in every archive. Which instant does not
+# matter; that it is not "now" does.
+readonly STAMP=202601010000
+
+# bsdtar and GNU tar spell "do not record who I am" differently, and both are
+# in use. A tar that has neither still builds, and its archives differ between
+# machines rather than being wrong.
+tar_owner=()
+if tar --uid 0 --gid 0 -cf /dev/null -T /dev/null 2>/dev/null; then
+  tar_owner=(--uid 0 --gid 0 --uname "" --gname "")
+elif tar --owner=0 --group=0 -cf /dev/null -T /dev/null 2>/dev/null; then
+  tar_owner=(--owner=0 --group=0)
+fi
+
 mkdir -p "$ARCHIVES"
 
 # Write $2 to $1, creating the directories above it.
@@ -49,15 +66,16 @@ write() {
 # A gzip'd tar of $2 (a directory under $work), at $ARCHIVES/$1.
 targz() {
   local out=$1 root=$2
-  (cd "$work" && tar -cf - "$root") | gzip -n -9 >"${ARCHIVES}/${out}"
+  find "$work/$root" -exec touch -t "$STAMP" {} +
+  (cd "$work" && tar "${tar_owner[@]}" -cf - "$root") | gzip -n -9 >"${ARCHIVES}/${out}"
 }
 
-# A zip of $2's contents (a directory), at $ARCHIVES/$1. `-X` drops the
-# platform's extra attributes and the fixed mtime keeps a rebuild
-# byte-for-byte, since zip stores a timestamp per entry.
+# A zip of $2's contents (a directory), at $ARCHIVES/$1, or of $2 under the
+# wrapper directory $3 when one is given. `-X` drops the platform's extra
+# attributes.
 zip_up() {
   local out=$1 dir=$2 prefix=${3:-}
-  find "$dir" -exec touch -t 202601010000 {} +
+  find "$dir" -exec touch -t "$STAMP" {} +
   rm -f "${ARCHIVES:?}/${out}"
   local root=$dir target=.
   if [[ -n "$prefix" ]]; then
