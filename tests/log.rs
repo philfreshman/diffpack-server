@@ -387,6 +387,47 @@ async fn no_line_carries_a_credential_or_a_signed_url() {
     }
 }
 
+/// The same rule over the halves of a call that are not an argument's value:
+/// an argument's *name*, and the name of the tool.
+///
+/// Both arrive from whoever called and neither has been refused yet when the
+/// line is summarised — the arguments are summarised before any schema reads
+/// them, and a name no tool answers to is summarised before the dispatch
+/// refuses it. A redactor that covered only the values would leave the
+/// easier half of the line to write into.
+#[tokio::test]
+async fn a_credential_in_a_name_reaches_no_line_either() {
+    let secret = "https://blob.vercel-storage.com/diffs/abc?token=s3cr3t&expires=1";
+
+    let named_argument = Capture::new();
+    call(
+        &named_argument,
+        "list_package_files",
+        json!({
+            "registry": "npm",
+            "package": "@types/node",
+            "version": "20.1.0",
+            secret: "1",
+        }),
+    )
+    .await;
+
+    let line = one(&named_argument).to_string();
+    assert!(
+        !line.contains(secret),
+        "an argument's name is as much the caller's as its value: {line}"
+    );
+
+    let named_tool = Capture::new();
+    call(&named_tool, secret, json!({})).await;
+
+    let line = one(&named_tool).to_string();
+    assert!(
+        !line.contains(secret),
+        "a name no tool answers to is still written down: {line}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Driving the endpoint
 // ---------------------------------------------------------------------------

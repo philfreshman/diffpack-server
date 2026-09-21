@@ -43,9 +43,13 @@ pub struct Record {
 
 impl Record {
     /// The line for a call of `tool`.
+    ///
+    /// Shortened like an argument is, because a name that reached here is not
+    /// always one of ours: a name no tool answers to is refused by the
+    /// dispatch, and whatever the caller sent is what this line is about.
     pub fn new(tool: &str) -> Self {
         Self {
-            tool: tool.to_owned(),
+            tool: shorten(tool),
             args: Summary::default(),
             result: "ok",
             ms: Timings::default(),
@@ -231,14 +235,14 @@ fn millis(duration: Duration) -> f64 {
 pub struct Summary(JsonObject);
 
 impl Summary {
-    /// The most of one argument's value a line carries.
+    /// The most of one name or one value a line carries.
     ///
     /// Sized so that the arguments a person reads arrive whole — a scoped
     /// package name and a version are nowhere near it — and the ones nobody
     /// reads do not. A cursor and a diff handle are the long ones, and their
     /// first characters tell two calls apart, which is all a line needs them
     /// for.
-    const VALUE_CAP: usize = 100;
+    const LONGEST: usize = 100;
 
     /// What a cut value ends with, so that a shortened value cannot be read
     /// as a complete one.
@@ -253,7 +257,7 @@ impl Summary {
         Self(
             arguments
                 .iter()
-                .map(|(name, value)| (name.clone(), summarise(value)))
+                .map(|(name, value)| (shorten(name), summarise(value)))
                 .collect(),
         )
     }
@@ -265,32 +269,44 @@ impl Summary {
 /// and carry nothing to redact, and a structure is left to `serde_json` — no
 /// tool takes one today, and guessing at how to shorten a shape nothing sends
 /// would be guessing.
+fn summarise(value: &Value) -> Value {
+    match value.as_str() {
+        Some(text) => Value::String(shorten(text)),
+        None => value.clone(),
+    }
+}
+
+/// One piece of caller-supplied text: redacted, then short enough to sit in a
+/// line.
+///
+/// A name goes through this as well as a value, because both arrive from
+/// whoever called: an argument nothing declared is summarised before any
+/// schema has refused it, and a tool name nothing answers to is summarised
+/// before the dispatch refuses it. A rule that covered only the values would
+/// be a rule with the easier half of the line outside it.
 ///
 /// Redacted before it is cut, and the order is the whole of it. A signed URL
 /// cut at a hundred characters can lose its `?` and arrive as an ordinary
 /// URL with a token in the path, which is the shape the redactor no longer
 /// recognises — so cutting first would hide a secret from the check rather
 /// than from the line.
-fn summarise(value: &Value) -> Value {
-    let Some(text) = value.as_str() else {
-        return value.clone();
-    };
-
+fn shorten(text: &str) -> String {
     // `redact` is `crate::error`'s, so what must not reach an operator and
     // what must not reach a model are one definition. A second one here
     // would be a second list to widen when #20 brings a new credential
     // shape.
     let text = crate::error::redact(text);
 
-    if text.len() <= Summary::VALUE_CAP {
-        return Value::String(text);
+    // Counted in characters rather than bytes, because cutting a UTF-8
+    // sequence in half would produce a line that is not valid JSON — and
+    // compared the same way, so that a value made of multi-byte characters
+    // and left whole does not arrive wearing the mark of one that was cut.
+    let kept: String = text.chars().take(Summary::LONGEST).collect();
+    if kept.len() == text.len() {
+        return kept;
     }
 
-    // By characters rather than bytes: `VALUE_CAP` is about how much of a
-    // line this takes up, and cutting a UTF-8 sequence in half would produce
-    // a line that is not valid JSON.
-    let kept: String = text.chars().take(Summary::VALUE_CAP).collect();
-    Value::String(format!("{kept}{}", Summary::CUT))
+    format!("{kept}{}", Summary::CUT)
 }
 
 /// Where a [`Record`] goes.
