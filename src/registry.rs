@@ -201,10 +201,18 @@ impl Registry {
     pub fn search(self, query: &str, limit: u32) -> SearchSource {
         let escaped = escape(query);
         let url = match self {
+            // The most each source answers, in that source's own units.
+            // Narrowed here rather than sent: npm and crates.io both refuse a
+            // larger one outright, so a caller asking for a thousand hits
+            // would get an error instead of the hundred that exist.
             Self::Npm => {
-                format!("https://registry.npmjs.org/-/v1/search?text={escaped}&size={limit}")
+                let size = limit.min(250);
+                format!("https://registry.npmjs.org/-/v1/search?text={escaped}&size={size}")
             }
-            Self::Crates => format!("https://crates.io/api/v1/crates?q={escaped}&per_page={limit}"),
+            Self::Crates => {
+                let per_page = limit.min(100);
+                format!("https://crates.io/api/v1/crates?q={escaped}&per_page={per_page}")
+            }
             Self::PyPi => "https://pypi.org/simple/".to_owned(),
         };
         SearchSource { url }

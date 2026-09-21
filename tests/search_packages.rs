@@ -71,6 +71,56 @@ async fn an_npm_search_answers_with_the_packages_it_found() {
     );
 }
 
+/// crates.io, which answers in a shape of its own and with three version
+/// fields that need not agree. The version a hit carries is the one
+/// crates.io would install, which is what `tests/registry.rs` holds the
+/// reading to; what this asserts is that the tool goes through that reading
+/// rather than around it.
+#[tokio::test]
+async fn a_crates_io_search_answers_with_the_crates_it_found() {
+    let result = call(json!({
+        "registry": "crates",
+        "query": "serde",
+    }))
+    .await;
+
+    let items = &result["structuredContent"]["items"];
+    assert_eq!(
+        items[0],
+        json!({
+            "name": "serde",
+            "version": "1.0.229",
+            "description": "A generic serialization/deserialization framework",
+        }),
+        "got {items}"
+    );
+}
+
+/// PyPI, whose answer is the index of everything it publishes rather than a
+/// reply to a query. What a caller sees is the same shape as the other two,
+/// minus the fields PyPI's index does not carry — which is the one asymmetry
+/// the tool's description tells an agent about out loud.
+#[tokio::test]
+async fn a_pypi_search_answers_with_names_and_says_no_more_than_that() {
+    let result = call(json!({
+        "registry": "pypi",
+        "query": "yaml",
+    }))
+    .await;
+
+    let items = &result["structuredContent"]["items"];
+    assert_eq!(
+        items[0],
+        json!({ "name": "yaml" }),
+        "a PyPI hit is a name, and no empty version or description beside it, got {items}"
+    );
+    assert_eq!(
+        items[1]["name"], "yamldown",
+        "and the rest are ranked against the query here — `yamldown` before \
+         `yamllint` because the two are the same length, got {items}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Driving the endpoint
 // ---------------------------------------------------------------------------

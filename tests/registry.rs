@@ -278,6 +278,30 @@ fn search_comes_from_the_registrys_own_index() {
     );
 }
 
+/// A limit is asked of a source in that source's own units, and no source is
+/// asked for more than it answers: npm refuses a `size` over 250 and
+/// crates.io a `per_page` over 100, so a caller's larger limit is narrowed
+/// here rather than sent and rejected. The narrowing is this module's
+/// because the numbers are the registries', and a caller that had to know
+/// them would be the per-registry match this module holds.
+#[test]
+fn a_source_is_never_asked_for_more_than_it_answers() {
+    assert_eq!(
+        Registry::Npm.search("zod", 1_000),
+        SearchSource {
+            url: "https://registry.npmjs.org/-/v1/search?text=zod&size=250".to_owned(),
+        },
+        "npm refuses a size over 250"
+    );
+    assert_eq!(
+        Registry::Crates.search("serde", 1_000),
+        SearchSource {
+            url: "https://crates.io/api/v1/crates?q=serde&per_page=100".to_owned(),
+        },
+        "crates.io refuses a per_page over 100"
+    );
+}
+
 /// What a search answers with is this module's to read, for the same reason
 /// where to ask it is: the three sources agree about nothing — npm wraps a
 /// package in an `objects` array, crates.io returns `crates`, and PyPI's

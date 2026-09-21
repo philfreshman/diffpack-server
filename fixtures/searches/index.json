@@ -1,3 +1,5 @@
 {
+  "https://crates.io/api/v1/crates?q=serde&per_page=100": "crates-serde.json",
+  "https://pypi.org/simple/": "pypi-simple.json",
   "https://registry.npmjs.org/-/v1/search?text=zod&size=200": "npm-zod.json"
 }
