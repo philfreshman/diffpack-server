@@ -336,6 +336,60 @@ fn crates_ios_search_answer_reads_as_hits() {
     );
 }
 
+/// PyPI's index is every name it publishes and nothing else, so the matching
+/// and the ordering are this server's rather than a search engine's. The rule
+/// is one a model can be told in a sentence and a reader can predict: the
+/// name itself first, then the names that start with the query, then the ones
+/// that merely contain it; shortest first inside each group, and
+/// alphabetically where two are the same length.
+///
+/// Matching ignores case because a half-remembered name is the thing this
+/// tool is for. The name that comes back is still the index's own spelling —
+/// `PyYAML` is answered as `PyYAML`, because that is what every other tool
+/// here takes as a package.
+#[test]
+fn pypis_index_reads_as_hits_the_query_matches() {
+    let body = r#"{"meta":{"api-version":"1.4"},"projects":[
+        {"name":"requests"},
+        {"name":"ruamel.yaml"},
+        {"name":"yamllint"},
+        {"name":"PyYAML"},
+        {"name":"yaml"},
+        {"name":"yamldown"}
+    ]}"#;
+
+    let names: Vec<String> = Registry::PyPi
+        .read_hits(body, "yaml", 10)
+        .expect("the index reads")
+        .into_iter()
+        .map(|hit| hit.name)
+        .collect();
+
+    assert_eq!(
+        names,
+        vec!["yaml", "yamldown", "yamllint", "PyYAML", "ruamel.yaml"],
+        "the name itself, then what starts with it, then what contains it"
+    );
+}
+
+/// A PyPI hit has a name and nothing else, and that is the source rather than
+/// an omission: the index carries no version and no summary for anything in
+/// it. A hit that invented either would be this server guessing on a
+/// registry's behalf.
+#[test]
+fn a_pypi_hit_carries_the_name_the_index_carries_and_no_more() {
+    let body = r#"{"meta":{"api-version":"1.4"},"projects":[{"name":"requests"}]}"#;
+
+    assert_eq!(
+        Registry::PyPi.read_hits(body, "requests", 10),
+        Some(vec![Hit {
+            name: "requests".to_owned(),
+            version: None,
+            description: None,
+        }])
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The outbound allowlist
 // ---------------------------------------------------------------------------

@@ -229,7 +229,7 @@ impl Registry {
     /// does: a body that will not read is the source serving something
     /// broken, and the caller is the one holding the registry and the query
     /// that belong in that message.
-    pub fn read_hits(self, body: &str, _query: &str, limit: u32) -> Option<Vec<Hit>> {
+    pub fn read_hits(self, body: &str, query: &str, limit: u32) -> Option<Vec<Hit>> {
         let hits: Vec<Hit> = match self {
             Self::Npm => {
                 let answer: NpmSearch = serde_json::from_str(body).ok()?;
@@ -262,7 +262,45 @@ impl Registry {
                     .collect()
             }
 
-            Self::PyPi => return None,
+            // The index is every name PyPI publishes, so matching and
+            // ordering happen here rather than at the source. `rank` is the
+            // whole of the relevance this server claims, and it is written
+            // where the reader asking "how does PyPI differ here?" is
+            // already looking.
+            Self::PyPi => {
+                let index: PyPiIndex = serde_json::from_str(body).ok()?;
+                let query = query.to_lowercase();
+
+                let mut matched: Vec<(Rank, &str)> = index
+                    .projects
+                    .iter()
+                    .filter_map(|project| {
+                        rank(&project.name, &query).map(|rank| (rank, project.name.as_str()))
+                    })
+                    .collect();
+
+                // Length before spelling: of two names that both start with
+                // the query, the shorter is the one that is mostly the
+                // query. Alphabetical is the tie-break rather than the rule,
+                // so the order does not depend on the order the index
+                // happened to list them in.
+                matched.sort_by(|(left_rank, left), (right_rank, right)| {
+                    left_rank
+                        .cmp(right_rank)
+                        .then_with(|| left.len().cmp(&right.len()))
+                        .then_with(|| left.cmp(right))
+                });
+
+                matched
+                    .into_iter()
+                    .map(|(_, name)| Hit {
+                        name: name.to_owned(),
+                        // The index carries neither, for any project in it.
+                        version: None,
+                        description: None,
+                    })
+                    .collect()
+            }
         };
 
         Some(hits.into_iter().take(limit as usize).collect())
@@ -517,6 +555,55 @@ struct CratesCrate {
     name: String,
     default_version: Option<String>,
     description: Option<String>,
+}
+
+/// PyPI's index: every project it publishes, and for each of them a name.
+///
+/// PEP 691's JSON form. The `_last-serial` each project carries is not read
+/// — it says when a project last changed, which is not a question a search
+/// asks.
+#[derive(Deserialize)]
+struct PyPiIndex {
+    projects: Vec<PyPiProject>,
+}
+
+#[derive(Deserialize)]
+struct PyPiProject {
+    name: String,
+}
+
+/// How well a name answers a query, best first.
+///
+/// Three degrees and no score: a number would invite arithmetic on it, and
+/// what this actually knows about a name is which of three things it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Rank {
+    /// The query is the name.
+    Exact,
+    /// The name starts with the query.
+    Prefix,
+    /// The name has the query somewhere inside it.
+    Contains,
+}
+
+/// How well `name` answers `query`, or nothing if it does not.
+///
+/// `query` arrives already lower-cased, because it is the same query for
+/// every one of nine hundred thousand names and lowering it once is the
+/// difference between a scan and a scan that allocates. Case is ignored
+/// because a half-remembered name is what a search is for; the name is
+/// answered with as the index spells it either way.
+fn rank(name: &str, query: &str) -> Option<Rank> {
+    let name = name.to_lowercase();
+    if name == query {
+        Some(Rank::Exact)
+    } else if name.starts_with(query) {
+        Some(Rank::Prefix)
+    } else if name.contains(query) {
+        Some(Rank::Contains)
+    } else {
+        None
+    }
 }
 
 /// Which end of a version list the newest release is at.
