@@ -182,6 +182,27 @@ a sixth or a rename of one of these would be a difference between what the web
 app shows and what an agent is told.
 _Avoid_: change type, state, kind
 
+**Tree**:
+A Diff arranged the way the two versions' files are: every directory and
+every file in either of them, each with its Status and the lines it gained
+and lost. It is one Diff's shape where a FileMap is what one Version ships,
+and it is ordered where a FileMap is a map. Two things about it are the
+engine's and neither is guessable from an answer, so both are said out loud
+wherever one is served: a directory's counts are the sum of its children's,
+and a directory a rename left empty is not in the Tree at all. One file or
+one directory in it is a *node* — not an Entry, which is the cache's, and not
+a FileMap's entry either.
+_Avoid_: file tree, hierarchy, listing, entry (for a node)
+
+**Subtree**:
+The part of a Tree under one directory: what `get_diff_tree`'s `path` names
+and what its `depth` bounds. A directory is not inside its own subtree, so
+the one that was asked for is not in what comes back — the rule
+`list_package_files`'s `prefix` follows. Distinct from a Page, which is how
+much of a subtree one answer carries: a subtree is what was asked for and a
+Page is as much of it as fits.
+_Avoid_: branch, folder, section, sub-directory
+
 **Patch**:
 One file's rendered unified diff — the text with `@@` hunks in it. A Diff
 covers a whole version pair; a Patch covers one file inside it.
