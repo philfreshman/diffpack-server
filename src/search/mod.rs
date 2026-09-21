@@ -146,6 +146,16 @@ impl Search {
             Source::Fixture(fixture) => fixture.body(&source.url, registry)?,
         };
 
+        // Weighed here and not only inside the live adapter, for the reason
+        // `archive` and `catalogue` weigh theirs here: the cap is a rule
+        // about what this server will read rather than about where bytes came
+        // from, so a fixture set cannot answer with something the registries
+        // would have been refused for.
+        let weight = body.len() as u64;
+        if weight > self.limit {
+            return Err(too_large(registry, weight, self.limit));
+        }
+
         registry.read_hits(&body, query, limit).ok_or_else(|| {
             unreadable(
                 registry,
