@@ -151,13 +151,7 @@ impl Registry {
         }
     }
 
-    /// Where `package`'s versions are listed, and which way that source
-    /// lists them.
-    ///
-    /// The two travel together because #18 promises one order — newest
-    /// first, every registry — and only crates.io answers that way already.
-    /// A caller told where to ask and left to remember which way the answer
-    /// runs is a caller that lists npm backwards.
+    /// Where `package`'s versions are listed.
     ///
     /// The package name is escaped rather than interpolated: a scoped npm
     /// name is one package name, and `@types/node` written into a path
@@ -167,11 +161,9 @@ impl Registry {
         match self {
             Self::Npm => VersionSource {
                 url: format!("https://registry.npmjs.org/{escaped}"),
-                order: Order::OldestFirst,
             },
             Self::Crates => VersionSource {
                 url: format!("https://crates.io/api/v1/crates/{escaped}"),
-                order: Order::NewestFirst,
             },
             // PyPI's own JSON names a package's releases but without the
             // dates that order them, and its simple index is HTML. deps.dev
@@ -179,9 +171,73 @@ impl Registry {
             // two agree about what versions a package has.
             Self::PyPi => VersionSource {
                 url: format!("https://api.deps.dev/v3/systems/pypi/packages/{escaped}"),
-                order: Order::OldestFirst,
             },
         }
+    }
+
+    /// The versions a [`VersionSource`] body names, newest first, or nothing
+    /// if this server cannot read it.
+    ///
+    /// # Why the order is computed here rather than declared
+    ///
+    /// This used to be a field beside the URL saying which way each source
+    /// runs. It was wrong, and wrong in a way no amount of reversing fixes:
+    /// deps.dev sorts PyPI's versions *lexically by version string*, so
+    /// `requests` ends at `2.9.2` and reversing it reports that as the
+    /// newest release rather than `2.34.2`. npm's is worse — its versions
+    /// are a JSON object, and `serde_json`'s map is a `BTreeMap` here, so
+    /// the document's own order is gone before this crate ever sees it.
+    ///
+    /// All three documents carry a publish date per version, so that is what
+    /// newest first means: most recently published first. It is not the
+    /// highest version number — npm's `@types/node` publishes a 22.x patch
+    /// after a 26.x release most weeks, and both registries' own listings
+    /// show the patch on top.
+    ///
+    /// The dates are compared as the strings the registry wrote. Each source
+    /// spells them one way, so ordering within one answer is exact, and no
+    /// calendar has to be parsed to sort releases.
+    ///
+    /// `None` rather than an error, for the same reason
+    /// [`choose_archive`](Self::choose_archive) is: a document this server
+    /// cannot read is something the caller has to explain to a model, and
+    /// the caller is the one holding the package name that belongs in that
+    /// message.
+    pub fn read_versions(self, document: &str) -> Option<Vec<Version>> {
+        let mut versions = match self {
+            Self::Npm => {
+                // Only the keys are wanted from `versions`; the dates are in
+                // `time`, which also carries `created` and `modified`. The
+                // intersection is the point: `time` alone would invent two
+                // versions, and `versions` alone has no order.
+                #[derive(Deserialize)]
+                struct Document {
+                    versions: std::collections::BTreeMap<String, de::IgnoredAny>,
+                    time: std::collections::BTreeMap<String, String>,
+                }
+
+                let document: Document = serde_json::from_str(document).ok()?;
+                document
+                    .versions
+                    .into_keys()
+                    .filter_map(|version| {
+                        let published_at = document.time.get(&version)?.clone();
+                        Some(Version {
+                            version,
+                            published_at,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            }
+
+            Self::Crates | Self::PyPi => return None,
+        };
+
+        // Newest first, and by the date rather than by the name. Ties keep
+        // whatever order they arrived in, which for two releases published
+        // in the same instant is not a question anyone is asking.
+        versions.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+        Some(versions)
     }
 
     /// Where a search for `query` is answered, and for at most `limit` hits.
@@ -388,8 +444,20 @@ pub const VERSION_RULE: &str = "A version is one published version, spelled the 
 pub struct VersionSource {
     /// The document to fetch.
     pub url: String,
-    /// The order that document lists versions in.
-    pub order: Order,
+}
+
+/// One published version of a package, and when it was published.
+///
+/// The date is here because it is what the order is computed from — see
+/// [`Registry::read_versions`] — rather than because a caller asked for it.
+/// It is the string the registry wrote, not a parsed instant: this crate has
+/// no calendar in it and does not need one to put releases in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Version {
+    /// The version as the registry spells it.
+    pub version: String,
+    /// When the registry says it was published.
+    pub published_at: String,
 }
 
 /// Where a search for a package is answered.
@@ -397,19 +465,6 @@ pub struct VersionSource {
 pub struct SearchSource {
     /// The document to fetch, query and limit included.
     pub url: String,
-}
-
-/// Which end of a version list the newest release is at.
-///
-/// Not a detail of parsing: #18 answers newest-first whatever was asked, so
-/// this is what a caller reverses by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Order {
-    /// The source lists the newest release first, which is the order a caller
-    /// answers in.
-    NewestFirst,
-    /// The source lists the oldest release first, so a caller reverses it.
-    OldestFirst,
 }
 
 /// A package name or a query as one path segment or one parameter value.
