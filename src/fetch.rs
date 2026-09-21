@@ -191,9 +191,10 @@ fn retry_after(response: &Response) -> Option<std::time::Duration> {
 /// The declared length is checked before a byte of the body is read, and the
 /// running total is checked as each chunk arrives — a body with no
 /// `Content-Length`, one whose header lies, or one that was decoded on the
-/// way in, is stopped at the limit rather than after it. The difference matters: the refusal exists so that a
-/// package name in a tool argument cannot fill this function's memory, and a
-/// cap applied after buffering would have already spent it.
+/// way in, is stopped at the limit rather than after it. The difference
+/// matters: the refusal exists so that a package name in a tool argument
+/// cannot fill this function's memory, and a cap applied after buffering
+/// would have already spent it.
 async fn read_within(
     mut response: Response,
     limit: u64,
