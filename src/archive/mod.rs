@@ -19,6 +19,7 @@
 //! test of the path production takes.
 
 mod fixture;
+mod live;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -61,10 +62,19 @@ pub struct Archive {
 /// where two types are read in two files. The same reasoning as [ADR
 /// 0004](../docs/adr/0004-one-registry-module.md).
 enum Source {
+    Live(live::Live),
     Fixture(fixture::Fixture),
 }
 
 impl Archive {
+    /// Archives from the registries, which is what production runs.
+    pub fn live() -> Self {
+        Self {
+            source: Source::Live(live::Live::new()),
+            limit: SIZE_LIMIT,
+        }
+    }
+
     /// An archive read from `dir` rather than from a registry.
     ///
     /// `dir` holds an `index.json` mapping a URL to the file beside it that
@@ -98,7 +108,7 @@ impl Archive {
             // registry's answer to give, and a caller that had to know PyPI
             // needs asking would be carrying this module's job around.
             ArchiveSource::Listing { url } => {
-                let listing = self.bytes(&url, package, version).await?;
+                let listing = self.bytes(&url, registry, package, version).await?;
                 let listing = String::from_utf8(listing)
                     .map_err(|_| unreadable(package, version, "its metadata is not text"))?;
 
@@ -112,7 +122,7 @@ impl Archive {
             }
         };
 
-        let bytes = self.bytes(&url, package, version).await?;
+        let bytes = self.bytes(&url, registry, package, version).await?;
         extract(&bytes, package, version)
     }
 
@@ -122,7 +132,13 @@ impl Archive {
     /// The cap covers every body and not only the archive: a metadata
     /// document is a download too, and one that is somehow enormous is the
     /// same problem arriving a hop earlier.
-    async fn bytes(&self, url: &str, package: &str, version: &str) -> Result<Vec<u8>, Failure> {
+    async fn bytes(
+        &self,
+        url: &str,
+        registry: Registry,
+        package: &str,
+        version: &str,
+    ) -> Result<Vec<u8>, Failure> {
         // Every outbound request, checked against the hosts the registries
         // between them name — not only the one that could plausibly be
         // wrong. The URL of a first hop is built by `registry` and is
@@ -140,17 +156,16 @@ impl Archive {
         }
 
         let bytes = match &self.source {
+            Source::Live(live) => {
+                live.bytes(url, self.limit, registry, package, version)
+                    .await?
+            }
             Source::Fixture(fixture) => fixture.bytes(url)?,
         };
 
         let weight = bytes.len() as u64;
         if weight > self.limit {
-            return Err(Failure::TooLarge {
-                package: package.to_owned(),
-                version: version.to_owned(),
-                bytes: weight,
-                limit: self.limit,
-            });
+            return Err(too_large(package, version, weight, self.limit));
         }
         Ok(bytes)
     }
@@ -181,5 +196,18 @@ fn unreadable(package: &str, version: &str, reason: &str) -> Failure {
         package: package.to_owned(),
         version: version.to_owned(),
         reason: reason.to_owned(),
+    }
+}
+
+/// An archive this server declined to hold, in the words a model reads.
+///
+/// One constructor for both adapters and both halves of the live one's check,
+/// so the refusal says the same thing however it was reached.
+fn too_large(package: &str, version: &str, bytes: u64, limit: u64) -> Failure {
+    Failure::TooLarge {
+        package: package.to_owned(),
+        version: version.to_owned(),
+        bytes,
+        limit,
     }
 }
