@@ -350,8 +350,8 @@ impl Failure {
                 bytes,
                 limit,
             } => format!(
-                "{registry}'s list of `{package}` versions is {} MB, over this server's \
-                 {} MB limit for it. There is no shorter version of it to ask for.",
+                "The versions {registry} has published for `{package}` come to {} MB, over \
+                 this server's {} MB limit for them. There is no shorter answer to ask for.",
                 bytes / 1_000_000,
                 limit / 1_000_000,
             ),

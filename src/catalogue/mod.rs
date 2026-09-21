@@ -108,13 +108,13 @@ impl Catalogue {
         let document = self.bytes(&url, registry, package).await?;
 
         let document = String::from_utf8(document)
-            .map_err(|_| unreadable(registry, package, "its version list is not text"))?;
+            .map_err(|_| unreadable(registry, package, "what the registry served is not text"))?;
 
         registry.read_versions(&document).ok_or_else(|| {
             unreadable(
                 registry,
                 package,
-                "the registry's version list is not in a shape this server can read",
+                "the registry answered in a shape this server does not know",
             )
         })
     }
@@ -136,7 +136,7 @@ impl Catalogue {
             return Err(unreadable(
                 registry,
                 package,
-                "its version list is served from a host this server does not fetch from",
+                "they are served from a host this server does not fetch from",
             ));
         }
 
