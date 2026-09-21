@@ -103,12 +103,12 @@ fn walking_every_page_yields_each_item_exactly_once_and_in_order() {
     let all: Vec<String> = (0..1_003).map(|n| format!("src/file{n}.rs")).collect();
 
     let mut seen: Vec<String> = Vec::new();
-    let mut cursor: Option<String> = None;
+    let mut cursor: Option<page::Cursor> = None;
     let mut pages = 0;
 
     loop {
-        let page =
-            page::paginate(all.clone(), Some(37), cursor.as_deref()).expect("every cursor resumes");
+        let page = page::paginate(all.clone(), Some(page::Limit::new(37)), cursor)
+            .expect("every cursor resumes");
 
         assert_eq!(
             page.total,
@@ -160,14 +160,16 @@ fn the_ceiling_is_on_bytes_so_one_limit_is_not_safe_for_every_item() {
         .map(|n| format!("line {n}\n").repeat(12_000))
         .collect();
 
-    let by_count = page::paginate(small.clone(), Some(200), None).expect("a page of small items");
+    let by_count = page::paginate(small.clone(), Some(page::Limit::new(200)), None)
+        .expect("a page of small items");
     assert_eq!(
         by_count.items.len(),
         200,
         "200 short paths are nowhere near the ceiling, so the limit is what binds"
     );
 
-    let by_bytes = page::paginate(large.clone(), Some(200), None).expect("a page of large items");
+    let by_bytes = page::paginate(large.clone(), Some(page::Limit::new(200)), None)
+        .expect("a page of large items");
     assert!(
         by_bytes.items.len() < 200,
         "200 items of ~90 KB is over 17 MB; the limit cannot be what binds"
@@ -202,13 +204,17 @@ fn a_walk_is_stable_when_bytes_rather_than_the_limit_end_each_page() {
         .collect();
 
     let mut seen: Vec<String> = Vec::new();
-    let mut cursor: Option<String> = None;
+    let mut cursor: Option<page::Cursor> = None;
     let mut cut_by_bytes = 0;
     let mut pages = 0;
 
     loop {
-        let page = page::paginate(all.clone(), Some(page::MAX_LIMIT as u32), cursor.as_deref())
-            .expect("every cursor resumes");
+        let page = page::paginate(
+            all.clone(),
+            Some(page::Limit::new(page::MAX_LIMIT as u32)),
+            cursor,
+        )
+        .expect("every cursor resumes");
 
         pages += 1;
         assert!(
@@ -254,15 +260,16 @@ fn an_item_too_large_for_a_page_of_its_own_is_refused_rather_than_dropped() {
     let huge = "x".repeat(page::PAYLOAD_CEILING);
     let all = vec!["before".to_owned(), huge, "after".to_owned()];
 
-    let first = page::paginate(all.clone(), Some(10), None).expect("the first page");
+    let first =
+        page::paginate(all.clone(), Some(page::Limit::new(10)), None).expect("the first page");
     assert_eq!(
         first.items,
         ["before"],
         "the oversized item does not fit beside the one before it"
     );
-    assert_eq!(first.next_cursor.as_deref(), Some("p1:1"));
+    assert_eq!(first.next_cursor, Some(page::Cursor::at(1)));
 
-    let refused = page::paginate(all.clone(), Some(10), first.next_cursor.as_deref())
+    let refused = page::paginate(all.clone(), Some(page::Limit::new(10)), first.next_cursor)
         .expect_err("an item over the ceiling cannot be returned in any page");
     let said = message_of(refused);
 
@@ -275,7 +282,12 @@ fn an_item_too_large_for_a_page_of_its_own_is_refused_rather_than_dropped() {
         "the failure carries the cursor that continues past it; it said: {said}"
     );
 
-    let past = page::paginate(all.clone(), Some(10), Some("p1:2")).expect("a page past it");
+    let past = page::paginate(
+        all.clone(),
+        Some(page::Limit::new(10)),
+        Some(page::Cursor::at(2)),
+    )
+    .expect("a page past it");
     assert_eq!(
         past.items,
         ["after"],
@@ -309,7 +321,7 @@ fn a_cursor_that_is_not_ours_is_refused_on_the_protocol_channel() {
     for wrong in [
         "", "5", "p2:5", "p1:", "p1:five", "p1:-1", "cursor", "p1:5:5",
     ] {
-        let refused = page::paginate(all.clone(), None, Some(wrong))
+        let refused = page::Cursor::decode(wrong)
             .err()
             .unwrap_or_else(|| panic!("`{wrong}` is not a cursor this module wrote"));
 
@@ -321,9 +333,10 @@ fn a_cursor_that_is_not_ours_is_refused_on_the_protocol_channel() {
 
     // And the one that is ours round-trips, which is what makes it a format
     // rather than an implementation detail two tools could spell differently.
-    let page = page::paginate(all.clone(), Some(4), None).expect("the first page");
-    assert_eq!(page.next_cursor.as_deref(), Some("p1:4"));
-    let second = page::paginate(all.clone(), Some(4), page.next_cursor.as_deref())
+    let page =
+        page::paginate(all.clone(), Some(page::Limit::new(4)), None).expect("the first page");
+    assert_eq!(page.next_cursor, Some(page::Cursor::at(4)));
+    let second = page::paginate(all.clone(), Some(page::Limit::new(4)), page.next_cursor)
         .expect("the cursor it wrote");
     assert_eq!(second.items, [4, 5, 6, 7]);
 }
@@ -349,7 +362,7 @@ fn limit_is_clamped_into_the_documented_range() {
         "no limit means the documented default"
     );
     assert_eq!(
-        page::paginate(all.clone(), Some(99_999), None)
+        page::paginate(all.clone(), Some(page::Limit::new(99_999)), None)
             .expect("a page")
             .items
             .len(),
@@ -357,7 +370,7 @@ fn limit_is_clamped_into_the_documented_range() {
         "more than the maximum means the maximum"
     );
     assert_eq!(
-        page::paginate(all.clone(), Some(0), None)
+        page::paginate(all.clone(), Some(page::Limit::new(0)), None)
             .expect("a page")
             .items
             .len(),
@@ -374,7 +387,7 @@ fn limit_is_clamped_into_the_documented_range() {
 fn a_cursor_past_the_end_ends_the_walk_rather_than_failing_it() {
     let all: Vec<u32> = (0..10).collect();
 
-    let page = page::paginate(all, None, Some("p1:10")).expect("a page at the end");
+    let page = page::paginate(all, None, Some(page::Cursor::at(10))).expect("a page at the end");
 
     assert!(page.items.is_empty());
     assert_eq!(page.total, 10, "the sequence is still ten long");
@@ -540,5 +553,132 @@ fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
             .expect("text serialises")
             .len()
             <= page::PAYLOAD_CEILING
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The two arguments that carry the ceiling into a tool's schema
+// ---------------------------------------------------------------------------
+//
+// #43 says one module owns the ceiling and no tool names the number. Enforcing
+// it is half of that: the other half is the schema a tool declares, because
+// `limit` and `cursor` are the only part of this module an agent ever sees.
+// A tool that wrote `limit: Option<u32>` with a sentence about the default
+// would be naming the number again — in the one place #23 says an agent reads
+// it, and in the copy no test compares against `MAX_LIMIT`.
+//
+// So the types are this module's, the way `Registry` is `src/registry.rs`'s
+// and `DiffHandle` is `src/handle.rs`'s.
+
+/// The pagination arguments as a tool declares them. Written out here rather
+/// than reached for inside `src/tools/` because it is the shape being tested,
+/// not any one tool: whatever #11 and #14 call themselves, this is what their
+/// `Args` has to contain for the numbers to be inherited rather than retyped.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PagingArgs {
+    #[serde(default)]
+    limit: Option<page::Limit>,
+    #[serde(default)]
+    cursor: Option<page::Cursor>,
+}
+
+/// The numbers reach an agent through the schema or they do not reach it at
+/// all. A tool naming `page::Limit` gets the default and the maximum without
+/// writing either, which is what makes "no tool names the number" true of the
+/// schema and not only of the enforcement.
+#[test]
+fn a_paginating_tools_schema_inherits_the_default_and_the_maximum() {
+    let schema = serde_json::to_value(schemars::schema_for!(PagingArgs)).expect("a schema");
+    let limit = &schema["properties"]["limit"];
+
+    assert_eq!(
+        limit["maximum"],
+        serde_json::json!(page::MAX_LIMIT),
+        "the maximum an agent is shown is the one that binds, got {limit}"
+    );
+    assert_eq!(
+        limit["default"],
+        serde_json::json!(page::DEFAULT_LIMIT),
+        "and so is the default it gets by omitting the field, got {limit}"
+    );
+    assert_eq!(
+        limit["minimum"],
+        serde_json::json!(1),
+        "a page of nothing is not a page, got {limit}"
+    );
+    assert!(
+        limit["description"]
+            .as_str()
+            .is_some_and(|said| said.contains("clamp")),
+        "an agent that asks for too much is not refused, and the schema says so, got {limit}"
+    );
+}
+
+/// A cursor is opaque to a client, which is a rule only the schema can state.
+/// An agent told nothing will eventually build one out of a number, and a
+/// cursor a client wrote for itself is the one case this format refuses.
+#[test]
+fn the_cursor_a_tool_declares_says_to_pass_it_back_unchanged() {
+    let schema = serde_json::to_value(schemars::schema_for!(PagingArgs)).expect("a schema");
+    let cursor = &schema["properties"]["cursor"];
+
+    // `["string", "null"]` rather than `"string"`: the field is optional, and
+    // that is how schemars spells an optional field. What matters is that the
+    // one thing a client may put there is the string this module wrote.
+    assert_eq!(
+        cursor["type"],
+        serde_json::json!(["string", "null"]),
+        "a cursor crosses the wire as the string this module wrote, got {cursor}"
+    );
+    assert_eq!(
+        cursor["pattern"], "^p1:[0-9]+$",
+        "the one format, stated where a client reads it, got {cursor}"
+    );
+    assert!(
+        cursor["description"]
+            .as_str()
+            .is_some_and(|said| said.contains("unchanged")),
+        "the rule is that it is passed back as it arrived, got {cursor}"
+    );
+}
+
+/// The same refusal as `Cursor::decode`, arriving one step earlier: a tool's
+/// arguments are deserialized before its handler runs, so a cursor that is
+/// not ours never reaches one. That is what makes a tool's `-32602` automatic
+/// rather than something each handler remembers — the property `DiffHandle`
+/// has for the same reason.
+#[test]
+fn a_cursor_that_is_not_ours_is_refused_before_a_handler_runs() {
+    let refused = serde_json::from_value::<PagingArgs>(serde_json::json!({ "cursor": "5" }))
+        .expect_err("a bare offset is not a cursor this module wrote");
+
+    assert!(
+        refused.to_string().contains("next_cursor"),
+        "the refusal says what to pass instead; it said: {refused}"
+    );
+
+    let accepted = serde_json::from_value::<PagingArgs>(serde_json::json!({ "cursor": "p1:4" }))
+        .expect("the cursor this module writes is the cursor it reads");
+    assert_eq!(accepted.cursor, Some(page::Cursor::at(4)));
+}
+
+/// A limit arrives as a number and is clamped by the module, not by the tool.
+/// The schema says 1 to `MAX_LIMIT`; a client that ignores it still gets an
+/// answer, because refusing a page nobody can be harmed by is worse than
+/// trimming it.
+#[test]
+fn a_limit_is_a_number_on_the_wire_and_the_module_clamps_it() {
+    let args = serde_json::from_value::<PagingArgs>(serde_json::json!({ "limit": 99_999 }))
+        .expect("a limit outside the range is clamped rather than refused");
+
+    let all: Vec<u32> = (0..5_000).collect();
+    assert_eq!(
+        page::paginate(all, args.limit, args.cursor)
+            .expect("a page")
+            .items
+            .len(),
+        page::MAX_LIMIT,
+        "the clamp is the module's, wherever the number came from"
     );
 }

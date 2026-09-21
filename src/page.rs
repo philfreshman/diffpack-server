@@ -5,8 +5,10 @@
 //! client, so every tool that returns a list, a tree, a file or a patch has
 //! to stay under it. This module is the one place that knows the number.
 
-use schemars::JsonSchema;
-use serde::Serialize;
+use std::borrow::Cow;
+
+use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::Failure;
 
@@ -71,7 +73,7 @@ pub struct Page<T> {
 
     /// Where to resume. Absent when this page ends the sequence.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<String>,
+    pub next_cursor: Option<Cursor>,
 
     /// How many items the whole sequence has.
     pub total: usize,
@@ -83,14 +85,11 @@ pub struct Page<T> {
 /// cursor, and does not decide what "too big" means.
 pub fn paginate<T: Serialize>(
     items: impl IntoIterator<Item = T>,
-    limit: Option<u32>,
-    cursor: Option<&str>,
+    limit: Option<Limit>,
+    cursor: Option<Cursor>,
 ) -> Result<Page<T>, Failure> {
-    let start = match cursor {
-        Some(cursor) => Cursor::decode(cursor)?.offset,
-        None => 0,
-    };
-    let wanted = limit.map_or(DEFAULT_LIMIT, |asked| (asked as usize).clamp(1, MAX_LIMIT));
+    let start = cursor.map_or(0, |cursor| cursor.offset);
+    let wanted = limit.map_or(DEFAULT_LIMIT, Limit::items);
 
     let mut taken = Vec::new();
     let mut spent = 0;
@@ -136,7 +135,7 @@ pub fn paginate<T: Serialize>(
     }
 
     let reached = start + taken.len();
-    let next_cursor = (reached < total).then(|| Cursor::at(reached).encode());
+    let next_cursor = (reached < total).then(|| Cursor::at(reached));
 
     Ok(Page {
         items: taken,
@@ -162,17 +161,102 @@ fn measure<T: Serialize>(item: &T) -> Result<usize, Failure> {
         })
 }
 
+// ---------------------------------------------------------------------------
+// The two arguments an agent sees
+// ---------------------------------------------------------------------------
+//
+// `limit` and `cursor` are the whole of this module's surface on the wire, and
+// they arrive as tool arguments. They are types rather than a `u32` and a
+// `String` for the same reason `Registry` is a type and not a string: the
+// schema a tool declares is where an agent reads the rule, so the module that
+// owns the rule has to be the one that writes the schema. A tool spelling out
+// `limit: Option<u32>` with a sentence about the default would be naming the
+// number again, in the one copy no test compares against `MAX_LIMIT`.
+
+/// How many items one page was asked for.
+///
+/// A number on the wire, clamped here rather than by the tool that was handed
+/// it. Out of range is not a refusal: a client that asked for five thousand
+/// entries still gets a page, and `total` is what tells it there are more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct Limit(u32);
+
+impl Limit {
+    /// A limit a caller asked for, unclamped.
+    ///
+    /// `const` so that a tool's own documented default — if it ever wants one
+    /// narrower than [`DEFAULT_LIMIT`] — is a constant rather than a call.
+    pub const fn new(asked: u32) -> Self {
+        Self(asked)
+    }
+
+    /// How many items this limit actually allows.
+    ///
+    /// The clamp is here, not at the boundary, so that a `Limit` built any
+    /// other way than by deserialising one is held to the same range.
+    fn items(self) -> usize {
+        (self.0 as usize).clamp(1, MAX_LIMIT)
+    }
+}
+
+/// The range and the default, where an agent reads them.
+///
+/// [`DEFAULT_LIMIT`] and [`MAX_LIMIT`] are written into the schema rather than
+/// into each tool's prose, so a tool that takes a `Limit` documents the
+/// numbers that bind and cannot document any others. Changing `MAX_LIMIT`
+/// changes every tool's schema in the same commit.
+impl JsonSchema for Limit {
+    fn schema_name() -> Cow<'static, str> {
+        "Limit".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::Limit").into()
+    }
+
+    /// Inline rather than a `$ref`. The reader is a model deciding what to
+    /// pass, and a bound it has to resolve a reference to learn is a bound it
+    /// will guess at instead.
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "integer",
+            "minimum": 1,
+            "maximum": MAX_LIMIT,
+            "default": DEFAULT_LIMIT,
+            "description": format!(
+                "How many items to return on this page. Omit it for {DEFAULT_LIMIT}. \
+                 A value outside 1 to {MAX_LIMIT} is clamped into that range rather than \
+                 refused, and the answer's `total` is the whole sequence's length either \
+                 way, so a page that came back short is not the end of it.",
+            ),
+        })
+    }
+}
+
 /// Where a walk resumes.
-struct Cursor {
+///
+/// Opaque to a client: it is what the previous page handed back, passed in
+/// unchanged. One format across every paginating tool, which is the whole of
+/// what makes it a format rather than something two tools could spell
+/// differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cursor {
     offset: usize,
 }
 
 impl Cursor {
-    fn at(offset: usize) -> Self {
+    /// The cursor that resumes at `offset`.
+    pub fn at(offset: usize) -> Self {
         Self { offset }
     }
 
-    fn encode(&self) -> String {
+    /// The cursor as it travels.
+    pub fn encode(&self) -> String {
         format!("{CURSOR_VERSION}:{}", self.offset)
     }
 
@@ -181,20 +265,90 @@ impl Cursor {
     /// A cursor is opaque to a client — the specification says so — which is
     /// exactly why a malformed one is the client's mistake rather than
     /// something a model can fix by rewording. It takes the protocol channel.
-    fn decode(cursor: &str) -> Result<Self, Failure> {
-        let refused = || Failure::InvalidParams {
-            message: format!(
-                "`{cursor}` is not a cursor. Pass back the `next_cursor` from the previous \
-                 page unchanged, or omit it to start from the beginning."
-            ),
-        };
+    ///
+    /// Public for the caller that holds a cursor as a string rather than as a
+    /// tool argument: the resource layer (#16) reads one out of a URI, where
+    /// there is no schema to have refused it first.
+    pub fn decode(cursor: &str) -> Result<Self, Failure> {
+        parse(cursor).map_err(|message| Failure::InvalidParams { message })
+    }
+}
 
-        let (version, offset) = cursor.split_once(':').ok_or_else(refused)?;
-        if version != CURSOR_VERSION {
-            return Err(refused());
-        }
+/// Decode `cursor`, or say what to pass instead.
+///
+/// The message names `next_cursor` rather than the format, because a client
+/// that wrote its own cursor needs to be told to stop rather than told how to
+/// write a better one.
+fn parse(cursor: &str) -> Result<Cursor, String> {
+    let refused = || {
+        format!(
+            "`{cursor}` is not a cursor. Pass back the `next_cursor` from the previous \
+             page unchanged, or omit it to start from the beginning."
+        )
+    };
 
-        Ok(Self::at(offset.parse().map_err(|_| refused())?))
+    let (version, offset) = cursor.split_once(':').ok_or_else(refused)?;
+    if version != CURSOR_VERSION {
+        return Err(refused());
+    }
+
+    Ok(Cursor::at(offset.parse().map_err(|_| refused())?))
+}
+
+/// On the wire a cursor is the one string [`Cursor::encode`] produces.
+///
+/// What a page returns and what the next call takes are the same thing,
+/// without either end saying how a cursor is spelled.
+impl Serialize for Cursor {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.encode())
+    }
+}
+
+/// Reading an argument is decoding it.
+///
+/// This is what makes a paginating tool's `-32602` automatic: `tools::invoke`
+/// deserialises a handler's `Args` before the handler runs, so a cursor that
+/// is not ours never reaches one and no handler has to remember to check.
+/// The same property [`crate::handle::DiffHandle`] has, for the same reason.
+impl<'de> Deserialize<'de> for Cursor {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // `Cow` rather than `&str`: a tool's arguments arrive as a parsed
+        // `serde_json::Value`, which owns its strings and has nothing to
+        // borrow from.
+        let text = Cow::<str>::deserialize(deserializer)?;
+        parse(&text).map_err(de::Error::custom)
+    }
+}
+
+/// The `cursor` field every paginating tool declares.
+///
+/// A string with the rule where the field is: an agent told only that this is
+/// a string will eventually build one out of an offset, and a cursor a client
+/// wrote for itself is the one case this format refuses.
+impl JsonSchema for Cursor {
+    fn schema_name() -> Cow<'static, str> {
+        "Cursor".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::Cursor").into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "pattern": format!("^{CURSOR_VERSION}:[0-9]+$"),
+            "description": "\
+                Where to resume a walk of this sequence: the `next_cursor` from the \
+                previous page, passed back unchanged. Omit it to start from the \
+                beginning. It is opaque and it is not an index — a cursor written by \
+                hand is refused.",
+        })
     }
 }
 

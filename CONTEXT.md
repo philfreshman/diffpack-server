@@ -195,14 +195,18 @@ _Avoid_: snippet, preview, head
 **Cursor**:
 Where a walk of a sequence resumes. One format across every paginating tool,
 minted by `src/page.rs` and opaque to a client: it is passed back unchanged or
-not at all. A cursor a client wrote for itself is refused.
+not at all. A cursor a client wrote for itself is refused. A tool declares it
+as that module's type, so the rule reaches an agent in the schema rather than
+in a sentence the tool wrote.
 _Avoid_: token, offset, page number
 
 **Limit**:
 How many items a caller asks one Page for. Clamped to a documented maximum
-and filled in when absent, both by `src/page.rs`. It is politeness about how
-much an agent reads at once rather than protection: the Response ceiling is
-the protection, and a Page inside a Limit can still be cut short by it.
+and filled in when absent, both by `src/page.rs` — and documented by it too:
+a tool declares that module's type, so the default and the range in its schema
+are the ones that bind. It is politeness about how much an agent reads at once
+rather than protection: the Response ceiling is the protection, and a Page
+inside a Limit can still be cut short by it.
 _Avoid_: count, size, max results, budget
 
 **Response ceiling**:

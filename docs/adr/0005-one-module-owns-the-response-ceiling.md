@@ -51,6 +51,43 @@ than 100%, so an ordinary answer leaves most of a megabyte unused. Being wrong
 the other way does not produce a slightly large response; it produces a
 platform error with nothing in it this repository can explain.
 
+## The two arguments an agent sees belong here too
+
+Enforcing the ceiling is half of "no tool names the number". The other half is
+the schema, because `limit` and `cursor` are the only part of this module an
+agent ever reads, and a tool declaring `limit: Option<u32>` with a sentence
+about the default would be naming the number again — in the copy no test
+compares against `MAX_LIMIT`, and in the one place #23 says an agent looks.
+
+So `page::Limit` and `page::Cursor` are types this module owns and every
+paginating tool declares. The default, the minimum and the maximum are written
+into `Limit`'s schema; the "passed back unchanged, never written by hand" rule
+is written into `Cursor`'s. A tool inherits both by naming the type, and
+changing `MAX_LIMIT` changes every tool's schema in the same commit.
+
+`Cursor` deserialises by decoding, which is the property
+[`DiffHandle`](0006-the-handle-carries-its-inputs.md) has for the same reason:
+`tools::invoke` reads a handler's `Args` before the handler runs, so a cursor
+that is not ours is `-32602` without any handler remembering to check.
+
+### Rejected: two constants and a documented convention
+
+`DEFAULT_LIMIT` and `MAX_LIMIT` are public, so a tool can already write
+`#[schemars(range(max = 1000))]` and a description quoting them, and a
+convention in `docs/architecture.md` can say that it must.
+
+That is the shape this ADR rejected one level down, arrived at from the schema
+instead of from the enforcement. The numbers in a `schemars` attribute are
+literals — the attribute cannot take a constant — so the tool's schema and the
+module's clamp agree only until one of them moves, and the disagreement is
+silent: an agent is told the maximum is 1000, asks for 1000, and gets 200
+because `MAX_LIMIT` changed. Five tools is five chances at that, which is the
+same argument as the ceiling itself.
+
+The cost is two more types in a module named for neither, and a tool that
+wants a narrower default of its own has to clamp it after the fact rather than
+declaring it. Nothing in phases 3 or 4 wants one.
+
 ## Truncation lives here too, as a second interface
 
 #12 and #15 do not paginate. They return one blob — a file's content, a file's
