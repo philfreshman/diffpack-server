@@ -126,6 +126,82 @@ async fn a_file_from_a_pypi_package_comes_back_through_the_metadata_hop() {
 }
 
 // ---------------------------------------------------------------------------
+// Cutting it
+// ---------------------------------------------------------------------------
+
+/// A cut has to be loud. A silently shortened file is how an agent concludes
+/// a function does not exist — it read what it was given, found no
+/// `serialize`, and had nothing in the answer to tell it the file went on.
+///
+/// So all three are asserted together: the text that came back, that it says
+/// it was cut, and that the byte count is the *file's* and not the excerpt's.
+/// A tool reporting the returned length there would be telling an agent that
+/// a file it has seen a fifth of is a fifth long.
+///
+/// 51 is the fixture's own size, from `wc -c` on the archive `tar` packed —
+/// not from this server, which would agree with a bug.
+///
+/// Where the cut falls and what the marker says are `src/page.rs`'s, and
+/// `tests/page.rs` holds them. What is asserted here is that this tool goes
+/// through that module: it keeps what was asked for, and it does not invent
+/// a count of its own.
+#[tokio::test]
+async fn a_file_over_max_bytes_is_cut_and_says_so_and_states_the_real_size() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "@types/node",
+        "version": "20.1.0",
+        "path": "package.json",
+        "max_bytes": 12,
+    }))
+    .await;
+
+    let text = result["structuredContent"]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the answer carries the text, got {result}"));
+
+    assert!(
+        text.starts_with("{\n  \"name\": "),
+        "the first 12 bytes of the file, and the cut falls after them: got {text:?}"
+    );
+    assert_eq!(
+        result["structuredContent"]["truncated"],
+        json!(true),
+        "a cut an agent cannot see is how it concludes a function is missing, got {result}"
+    );
+    assert_eq!(
+        result["structuredContent"]["bytes"],
+        json!(51),
+        "the whole file's size, not the excerpt's, got {result}"
+    );
+}
+
+/// A file that fits comes back whole and says so, which is the half that
+/// stops `truncated` from being decoration: an agent that saw it set on
+/// every answer would learn to ignore it.
+#[tokio::test]
+async fn a_file_that_fits_comes_back_whole_and_says_it_was_not_cut() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "@types/node",
+        "version": "20.1.0",
+        "path": "package.json",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["truncated"],
+        json!(false),
+        "51 bytes is not over any cap this server has, got {result}"
+    );
+    assert_eq!(
+        result["structuredContent"]["bytes"],
+        json!(51),
+        "the size is stated whether or not there was a cut, got {result}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // How it fails
 // ---------------------------------------------------------------------------
 

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine;
 use crate::error::Failure;
+use crate::page::{self, Excerpt};
 use crate::registry::Registry;
 use crate::tools::{Ctx, Tool};
 
@@ -29,13 +30,19 @@ pub struct Args {
     /// directory already removed: `src/index.js`, never
     /// `zod-4.0.0/src/index.js`.
     pub path: String,
+
+    // No doc comment, on purpose: `page` writes this field's description,
+    // and a sentence here would replace the one carrying the number that
+    // binds. The same rule the paging arguments follow.
+    #[serde(default)]
+    pub max_bytes: Option<page::MaxBytes>,
 }
 
 /// One file, as much of it as fits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct Content {
-    /// The file's text.
-    pub text: String,
+    #[serde(flatten)]
+    pub excerpt: Excerpt,
 }
 
 impl Tool for GetFileContent {
@@ -88,7 +95,7 @@ impl Tool for GetFileContent {
         }
 
         Ok(Content {
-            text: entry.content.clone(),
+            excerpt: page::truncate(&entry.content, args.max_bytes),
         })
     }
 }

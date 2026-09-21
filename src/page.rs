@@ -244,6 +244,79 @@ impl JsonSchema for Limit {
     }
 }
 
+/// The most of one blob a caller asked for.
+///
+/// The third of this module's wire types, and here for the reason ADR 0005
+/// gives for the other two: the rule a caller has to know is *this* module's,
+/// so this module writes the schema that carries it. A tool declaring
+/// `max_bytes: Option<u32>` with a sentence of its own would be naming
+/// [`PAYLOAD_CEILING`] again, in the copy no test compares against it — and
+/// it would be naming it once per blob-shaped tool, which is #12 and #15
+/// today.
+///
+/// Unlike [`Limit`] it has no default of its own to declare. Omitting it
+/// means the ceiling, because the ceiling is what [`truncate`] falls back to,
+/// and a "default" written into the schema would be a second answer to a
+/// question that already has one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct MaxBytes(u64);
+
+impl MaxBytes {
+    /// A cap a caller asked for, unclamped.
+    pub const fn new(asked: u64) -> Self {
+        Self(asked)
+    }
+
+    /// How many bytes this cap actually allows.
+    ///
+    /// Only the floor is applied here. The ceiling is not, because
+    /// [`truncate`] stops at [`PAYLOAD_CEILING`] whatever it was handed —
+    /// clamping to it here as well would be a second copy of the one number
+    /// this module exists to hold once.
+    fn bytes(self) -> usize {
+        usize::try_from(self.0).unwrap_or(usize::MAX).max(1)
+    }
+}
+
+/// The ceiling, where an agent reads it.
+///
+/// `maximum` is [`PAYLOAD_CEILING`] because that is the most any answer can
+/// carry, and a caller asking for more is narrowed rather than refused — the
+/// same shape as [`Limit`]'s clamp, and for the same reason: a file that is
+/// larger than a response is still a file worth reading the start of.
+impl JsonSchema for MaxBytes {
+    fn schema_name() -> Cow<'static, str> {
+        "MaxBytes".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::MaxBytes").into()
+    }
+
+    /// Inline rather than a `$ref`, for [`Limit`]'s reason: a bound a model
+    /// has to resolve a reference to learn is a bound it will guess at.
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "integer",
+            "minimum": 1,
+            "maximum": PAYLOAD_CEILING,
+            "description": format!(
+                "The most of this text to return, in bytes. Omit it to get as much as \
+                 fits. It can only ask for less: a value above {PAYLOAD_CEILING} is \
+                 narrowed to that rather than refused, because a larger response is one \
+                 the platform drops instead of shortening. Either way the answer says \
+                 whether it was cut and how many bytes the whole thing is, so a short \
+                 answer is never the whole story by omission.",
+            ),
+        })
+    }
+}
+
 /// Where a walk resumes.
 ///
 /// Opaque to a client: it is what the previous page handed back, passed in
@@ -374,16 +447,19 @@ const CURSOR_VERSION: &str = "p1";
 /// a function does not exist.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Excerpt {
-    /// The text, with the marker on the end if it was cut.
+    /// The text. When it was cut, the last line of it says so and says how
+    /// much you were given.
     pub text: String,
 
-    /// Whether `text` is the whole of it.
+    /// False when `text` is the whole thing, true when it was cut and there
+    /// is more you have not been shown.
     pub truncated: bool,
 
-    /// How many bytes the whole thing is, cut or not.
-    ///
-    /// The real total. A tool that reported the returned length here would be
-    /// telling an agent that a file it has seen a tenth of is a tenth long.
+    /// How many bytes the whole thing is, whether or not it was cut.
+    // The real total rather than the returned length. A tool reporting the
+    // latter would be telling an agent that a file it has seen a tenth of is
+    // a tenth long — and these three descriptions reach that agent, since a
+    // tool flattens this into its own output schema.
     pub bytes: usize,
 }
 
@@ -394,9 +470,9 @@ pub struct Excerpt {
 /// because the ceiling is not the caller's to raise. Omitting it means the
 /// ceiling alone — which is what makes "the server applies a default
 /// regardless" (#12) true without a tool having to remember to ask.
-pub fn truncate(text: &str, max_bytes: Option<usize>) -> Excerpt {
+pub fn truncate(text: &str, max_bytes: Option<MaxBytes>) -> Excerpt {
     let bytes = text.len();
-    let raw_cap = max_bytes.unwrap_or(usize::MAX);
+    let raw_cap = max_bytes.map_or(usize::MAX, MaxBytes::bytes);
 
     // The marker is part of what has to fit, and its own length depends on
     // where the cut lands, so the room for content is the ceiling less the
