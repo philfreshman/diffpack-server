@@ -56,11 +56,15 @@ vercel.json      The deployment shape: the catch-all rewrite, the function
 .githooks/       The pre-commit hook. Not active until install-hooks.sh.
 ```
 
-Two boundaries are enforced rather than documented:
+Three boundaries are enforced rather than documented:
 
 - **`src/engine.rs` is the only importer of `diffpack_engine`.** One seam means
   one file to change when the engine moves. `./scripts/checks.sh seams` fails
   the build otherwise.
+- **A tool module goes through the seams, not around them.** A module under
+  `src/tools/` reaches the network through `archive` and `registry`, and the
+  cache through `store`. `./scripts/checks.sh seams` fails the build when one
+  names an HTTP client or the blob store itself.
 - **`docs/cache-key.md` is normative, not descriptive.** The cache key is a
   contract with a TypeScript implementation that will never share a line of
   code with this one, so the document and
@@ -94,7 +98,7 @@ Run once per clone. It points `core.hooksPath` at `.githooks/` and installs
 
 | Check | Runs when the commit touches | What it is for |
 | --- | --- | --- |
-| `./scripts/checks.sh seams` | `*.rs`, `scripts/check-*seam*.sh` | The boundary the compiler cannot see: who may import the engine. A grep, no toolchain. |
+| `./scripts/checks.sh seams` | `*.rs`, `scripts/check-*seam*.sh` | The boundaries the compiler cannot see: who may import the engine, and what a tool module may reach. Two greps, no toolchain. |
 | `cargo fmt --all --check` | `*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | Formatting. It compiles nothing, so it costs a second and removes the one way a commit that passed here can still go red on the pull request. |
 | `cargo clippy --all-targets -- -D warnings` | `*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | Lints, as errors. |
 | `cargo deny --all-features check` | `Cargo.toml`, `Cargo.lock`, `deny.toml` | Advisories, licenses, banned crates, and where the code came from. See `deny.toml`. |

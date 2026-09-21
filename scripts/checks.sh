@@ -49,21 +49,25 @@ run_fmt() {
 }
 
 run_seams() {
-  # The boundaries this crate is held to that the compiler cannot see. One so
-  # far: `src/engine.rs` is the only importer of `diffpack_engine`.
+  # The two boundaries this crate is held to that the compiler cannot see: the
+  # engine import seam, and the rule that a tool module reaches the network
+  # and the store only through `archive`, `registry` and `store`.
   #
   # Second because, like `fmt`, it compiles nothing — a seam crossed is
   # reported in a second rather than after the dependency graph has been
-  # built.
+  # built. Both rules run even when the first one fails, for the same reason
+  # `main` runs every requested check: one attempt should name everything
+  # that is wrong.
   #
-  # The rule lives in a script of its own because it carries the paragraph
+  # The rules live in scripts of their own because each carries the paragraph
   # explaining why it exists, which is the part that stops a future reader
-  # deleting it. What matters here is that nothing invokes it directly any
-  # more: `.githooks/pre-commit` and CI both arrive through this script, so a
-  # rule added there is a rule a commit is held to. It used to be the one
-  # check CI called on its own, which made it the one check a commit could
-  # break without hearing about it until the pull request was open.
-  ./scripts/check-engine-seam.sh
+  # deleting it. What matters here is that nothing invokes them directly:
+  # `.githooks/pre-commit` and CI both arrive through this script, so a rule
+  # added to either file is a rule a commit is held to.
+  local failed=0
+  ./scripts/check-engine-seam.sh || failed=1
+  ./scripts/check-tool-seams.sh || failed=1
+  return "$failed"
 }
 
 run_clippy() {
