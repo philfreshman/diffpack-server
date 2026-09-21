@@ -8,6 +8,28 @@
 //! The documents below are `fixtures/versions/`, keyed by the URL
 //! `src/registry.rs` builds, so a fetch that built a URL of its own finds
 //! nothing.
+//!
+//! # What is deliberately not asserted here
+//!
+//! That this answer carries `ttlMs` and `cacheScope`. #18 asks for both, and
+//! a `tools/call` result has nowhere to put them: in the `2026-07-28` schema
+//! `CacheableResult` is extended by `DiscoverResult`, the four list results
+//! and `ReadResourceResult`, and `CallToolResult` extends plain `Result`. The
+//! freshness hint this tool wants is a resource's to carry, which is #16;
+//! what `tools/list` carries is `src/mcp.rs`'s and `tests/mcp.rs` holds it.
+//!
+//! That nothing here reaches the blob store. There is no store yet (#20,
+//! #21), and when there is one `scripts/check-tool-seams.sh` is what keeps a
+//! tool module from naming it — a rule held over every tool rather than a
+//! fact about this one. `src/catalogue/` has no store in it at all, which is
+//! the part that matters: registry metadata goes stale on its own and the
+//! 256 MB budget belongs to diff results.
+//!
+//! That a walk of a sequence is stable, that a page stays under the response
+//! ceiling, and that a cursor of a client's own invention is refused. Those
+//! are `src/page.rs`'s and `tests/page.rs` holds them against a generated
+//! sequence. What this suite asserts is that this tool goes *through* that
+//! module rather than around it.
 
 use axum::body::Body;
 use axum::http::Request;
@@ -216,6 +238,98 @@ async fn a_pypi_prerelease_is_flagged_and_a_post_release_is_not() {
         ],
         "PEP 440 needs no separator before its marker, and a post-release is \
          not a preview: got {result}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Reading it a page at a time
+// ---------------------------------------------------------------------------
+
+/// That a walk is stable — every version once, none missed, none repeated —
+/// is `src/page.rs`'s property and `tests/page.rs` proves it against a
+/// generated sequence. What is left for this tool is the part only it can be
+/// wrong about: that the sequence reaches that module at all, so `limit` is
+/// honoured and the cursor handed back is the one that resumes the walk.
+#[tokio::test]
+async fn a_walk_of_the_pages_is_the_whole_listing() {
+    let whole: Vec<String> =
+        versions(&call(json!({ "registry": "pypi", "package": "requests" })).await)
+            .iter()
+            .map(|version| version.to_string())
+            .collect();
+
+    let first = call(json!({
+        "registry": "pypi", "package": "requests", "limit": 2,
+    }))
+    .await;
+
+    assert_eq!(
+        versions(&first),
+        &whole[..2],
+        "a page of two is the first two, got {first}"
+    );
+    assert_eq!(
+        first["structuredContent"]["total"],
+        json!(5),
+        "the total is how many versions the package has and not how many are \
+         on this page — an agent told it received 2 of 2 has no reason to ask \
+         again: got {first}"
+    );
+
+    let cursor = first["structuredContent"]["nextCursor"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a page that ends early hands back a cursor, got {first}"))
+        .to_owned();
+
+    let rest = call(json!({
+        "registry": "pypi", "package": "requests", "cursor": cursor,
+    }))
+    .await;
+
+    assert_eq!(
+        versions(&rest),
+        &whole[2..],
+        "the cursor resumes where the page stopped, got {rest}"
+    );
+    assert!(
+        rest["structuredContent"]["nextCursor"].is_null(),
+        "the last page of a sequence does not hand out another cursor, got {rest}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// When there is nothing to list
+// ---------------------------------------------------------------------------
+
+/// A package the registry does not have is something the model can act on —
+/// it misspelled a name or picked the wrong registry — so it arrives as a
+/// tool error it reads rather than as a protocol error it never sees.
+///
+/// It is the *package* that is missing and not a version, which is the whole
+/// of what makes this seam's refusal different from the archive's: there is
+/// no version in the request to have got wrong, so the message does not
+/// suggest checking one.
+#[tokio::test]
+async fn a_package_the_registry_does_not_have_is_a_tool_error_naming_it() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "not-a-real-package",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(true),
+        "a package that is not there is the model's to act on, got {result}"
+    );
+
+    let message = result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a tool error carries text a model reads, got {result}"));
+
+    assert!(
+        message.contains("not-a-real-package") && message.contains("npm"),
+        "the message names what was asked for and where, got {message}"
     );
 }
 
