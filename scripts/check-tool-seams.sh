@@ -47,7 +47,14 @@ readonly TOOLS="src/tools"
 # what a tool's job needs. Adding to it is a decision about the shape of the
 # crate, which is why it is one line in a checked-in file rather than an
 # import someone adds on a Friday.
-readonly ALLOWED_ROOTS=(crate self super std core alloc rmcp serde serde_json schemars)
+#
+# `futures` is here for one thing: a tool comparing two versions waits on the
+# network twice and the two waits do not depend on each other. Joining them is
+# that tool's own business rather than a seam's, because `archive` fetches one
+# version and cannot know it is half of a pair. It is on the list rather than
+# written as a full path at a call site, which is the spelling this rule
+# cannot see.
+readonly ALLOWED_ROOTS=(crate self super std core alloc futures rmcp serde serde_json schemars)
 
 # The crate's own modules a tool may reach. The seams, plus `error` because
 # every handler ends in one, `handle` because minting one is how a diff-taking

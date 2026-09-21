@@ -37,10 +37,13 @@ base64 = "0.22"
 # option. `src/engine.rs` is the only module allowed to import it, and
 # `engine::VERSION` must agree with this tag — `tests/engine.rs` checks.
 diffpack-engine = { git = "https://github.com/philfreshman/diffpack-engine.git", tag = "v0.3.0" }
-# `FutureExt::catch_unwind`, and nothing else. It is what turns a panic in
-# a handler into a JSON-RPC error: rmcp runs handlers on a task of its
-# own, so a tower layer never sees that unwind and the request hangs
-# instead of failing. See `mcp::Guarded`.
+# Two things. `FutureExt::catch_unwind` turns a panic in a handler into a
+# JSON-RPC error: rmcp runs handlers on a task of its own, so a tower layer
+# never sees that unwind and the request hangs instead of failing. See
+# `mcp::Guarded`. And `try_join!`, for a tool comparing two versions: it
+# waits on the network twice and the two waits do not depend on each other.
+# That second use is why `scripts/check-tool-seams.sh` names this crate on
+# the list a tool may import.
 futures = { version = "0.3.34", default-features = false, features = ["std"] }
 # The HTTP client behind `src/http.rs`, and the only one in this crate: a
 # tool never names it, and `scripts/check-tool-seams.sh` fails the build if one

@@ -232,6 +232,28 @@ is the text's own, so for a file that did not decode it is the size of the
 readable rendering rather than of what the registry served.
 _Avoid_: snippet, preview, head
 
+**Summary**:
+What `diff_package_versions` answers with: the Totals for a whole Diff, and a
+bounded sample of the files that moved most. It is neither a Page nor an
+Excerpt — there is no cursor and nothing was cut short, because it was never
+the whole tree to begin with. The tree is `get_diff_tree`'s and is paginated;
+a Summary is what an agent reads to decide whether to ask for it.
+_Avoid_: overview, stats, report, result
+
+**Churn**:
+One file's lines added plus its lines removed, and the order a Summary's
+sample is in. It is a ranking and not a measurement — two files with the same
+churn are separated by path, so that the same Diff always samples the same
+files.
+_Avoid_: size, delta, weight, score
+
+**Totals**:
+How much changed across a whole Diff: one count per Status, and lines added
+and removed. The counts are files and never directories — the engine gives a
+directory the sum of what is under it, so counting both would report every
+change once per directory above it.
+_Avoid_: stats, summary (that is the whole answer), counts (unqualified)
+
 **Cursor**:
 Where a walk of a sequence resumes. One format across every paginating tool,
 minted by `src/page.rs` and opaque to a client: it is passed back unchanged or

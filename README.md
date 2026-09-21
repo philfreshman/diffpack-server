@@ -5,17 +5,19 @@ An MCP server in Rust, deployed to Vercel, exposing what
 tools an agent can call: resolve a package on npm, crates.io or PyPI, fetch and
 extract its archives, and diff one version against another.
 
-**Status: transport, and the tools that read a package.** The crate builds,
-tests and deploys, and `/mcp` speaks Streamable HTTP: a client connects,
-negotiates a protocol revision, lists tools and calls one. There are four.
-`resolve_archive_url` answers from its arguments and fetches nothing;
-`list_package_files` downloads a published version and lists what is inside
-it, a page at a time; `get_file_content` returns one of those files, cut
-short if it is longer than a response can carry; `search_packages` finds a
-package from a name half-remembered, which is where an agent with no exact
-name to start from starts. The tools that diff one version against another
-arrive with
-[#13](https://github.com/philfreshman/diffpack-server/issues/13) onward.
+**Status: transport, the tools that read a package, and the one that diffs
+two.** The crate builds, tests and deploys, and `/mcp` speaks Streamable
+HTTP: a client connects, negotiates a protocol revision, lists tools and
+calls one. There are five. `resolve_archive_url` answers from its arguments
+and fetches nothing; `list_package_files` downloads a published version and
+lists what is inside it, a page at a time; `get_file_content` returns one of
+those files, cut short if it is longer than a response can carry;
+`search_packages` finds a package from a name half-remembered, which is where
+an agent with no exact name to start from starts; and
+`diff_package_versions` compares two versions and answers with totals, a
+sample of the files that moved most, and a handle. The tools that read a
+diff back arrive with
+[#14](https://github.com/philfreshman/diffpack-server/issues/14) onward.
 `/health` is the other route and is what a monitor watches.
 
 Production serves whatever was last merged to `main`, so a branch merged into
@@ -279,17 +281,19 @@ which suits a serverless function that has no warm process to hold one in —
 and it answers clients back to `2025-11-25` as well. `POST` only: `GET` and
 `DELETE` are `405`, and no answer ever carries an `Mcp-Session-Id`.
 
-A client can connect, list tools and call any of the four there are:
+A client can connect, list tools and call any of the five there are:
 `resolve_archive_url`, which returns the URL a package version's archive is
 served from without fetching anything; `list_package_files`, which fetches
 that archive and lists the paths inside it with the top-level directory
-stripped; `get_file_content`, which returns one of those files, saying when it
-had to cut one short and when the bytes were not valid UTF-8; and
-`search_packages`, which answers a query with the packages a registry has that
-match it — npm and crates.io hits carry a version and a description, and PyPI
-hits carry a name alone, because the index PyPI publishes has nothing else in
-it. The tools that diff one version against another arrive with
-[#13](https://github.com/philfreshman/diffpack-server/issues/13) onward.
+stripped; `get_file_content`, which returns one of those files, saying when
+it had to cut one short and when the bytes were not valid UTF-8;
+`search_packages`, which answers a query with the packages a registry has
+that match it — npm and crates.io hits carry a version and a description, and
+PyPI hits carry a name alone, because the index PyPI publishes has nothing
+else in it; and `diff_package_versions`, which compares two versions and
+answers with how much changed, the files that changed most, and a handle the
+tools that read the diff back will take. Those reading tools arrive with
+[#14](https://github.com/philfreshman/diffpack-server/issues/14) onward.
 
 Claude Code:
 
