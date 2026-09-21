@@ -20,6 +20,7 @@ src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
 src/error.rs        Failure, the two channels, redaction
+src/log.rs          one line per tool call: what, how long, how it ended
 src/engine.rs       the only importer of diffpack_engine
 src/health.rs       the /health body
 ```
@@ -47,6 +48,13 @@ store}`. It may not name an HTTP client or the blob store: those are
 fetch is eight places to fix a timeout.
 [`scripts/check-tool-seams.sh`](../scripts/check-tool-seams.sh) fails the build
 otherwise, and its allow-list is the list above.
+
+`src/tools/mod.rs` is exempt from the import half of that rule, because it is
+the one file there that is not a tool: it is the collection, the `Ctx`, and
+the dispatch, and those need what a tool must not have — `crate::log`, so that
+the one line per call is written once by the dispatch rather than nineteen
+times by the tools that remembered. The name deny-list still covers it, so the
+exemption is from the list and not from the rule.
 
 **`docs/cache-key.md` is normative, not descriptive.** The cache key is a
 contract with a TypeScript implementation (#27) that will never share a line of
@@ -100,13 +108,19 @@ list of tools, and the generic call path where arguments are validated and
 `Failure` is put on its channel — which is why a handler returns
 `Result<Output, Failure>` and never names a result type of MCP's.
 
-`Ctx` is what a handler may reach, built once per request by the service
-factory `router::router_with` takes and cloned into every call. It carries
-`Archive` today and `DiffStore` (#20) beside it; `registry`, `page` and
-`handle` are not in it and do not need to be, because a pure module is named
-directly. That factory is also the seam the suite drives: a test builds a
-`Ctx` over the fixture archive adapter and reaches it through the path
-production takes, rather than around it.
+`Ctx` is what one request carries, built once by the service factory
+`router::router_with` takes and cloned into every call. For a handler that
+means the seams it may reach: `Archive` today and `DiffStore` (#20) beside it,
+while `registry`, `page` and `handle` are named directly because a pure module
+has nothing to hand over. Beside them it carries what the dispatch needs and a
+handler never touches — the log's `Sink`, and the `Spent` that the phases of
+one call add up in. `Ctx::archive()` hands back the archive seam with that
+stopwatch already on it, so a fetch cannot go uncounted and a handler's call
+is unchanged.
+
+That factory is also the seam the suite drives: a test builds a `Ctx` over the
+fixture archive adapter and a capturing sink, and reaches both through the
+path production takes rather than around it.
 
 ### `src/registry.rs` — what a registry is
 
@@ -256,6 +270,37 @@ model never sees, and a tool error that is a *successful* response carrying
 returns exactly a tool handler's type, so a handler that ends in
 `failure.respond()` cannot put a failure on the wrong channel by accident.
 Redaction over anything that leaves the process lives here too.
+
+### `src/log.rs` — one line per tool call
+
+What an incident is read from. The questions asked when this server has
+misbehaved are always the same — which tool ran, what was it asked for, where
+did its time go, how did it end — so the answer is one structured line per
+call rather than prose in whichever handler wanted it.
+
+The line is written by `tools::call`, not by a tool. A tool that emitted its
+own would not fail to compile, and the gap would be invisible until the call
+nobody logged was the one being looked for. That is also why `crate::log` is
+not on `check-tool-seams.sh`'s list: `src/tools/mod.rs` is exempt from the
+import rule because it is the collection rather than a tool, and a tool still
+cannot reach the module.
+
+A `Record` is built before it is written, which is what makes the line
+testable: `Sink` has a variant that keeps lines in memory, a `Ctx` carries
+one, and `tests/log.rs` reads back the line a real `tools/call` produced
+rather than one a test built.
+
+Redaction is `error::redact`'s, so what must not reach an operator and what
+must not reach a model are one definition. Argument values are redacted and
+*then* cut, in that order: a signed URL cut at a hundred characters loses its
+`?` and stops looking like one.
+
+Where a call's time goes is accumulated in `Spent`, which a `Ctx` holds for
+the length of one request and the seams write into. `Ctx::archive()` hands
+back the archive seam with the stopwatch already on it, so a handler is
+unchanged and there is no way to read an archive that goes uncounted. Two
+phases today; the download/extract/diff/store split arrives with #13 and #20,
+when those phases start existing separately.
 
 ### `src/engine.rs` — the one importer of `diffpack-engine`
 
