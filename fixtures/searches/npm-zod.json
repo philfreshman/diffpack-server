@@ -1,0 +1,26 @@
+{
+  "objects": [
+    {
+      "package": {
+        "name": "zod",
+        "version": "4.0.0",
+        "description": "TypeScript-first schema declaration and validation library with static type inference",
+        "keywords": ["typescript", "schema", "validation"],
+        "date": "2026-09-21T07:13:38.999Z"
+      },
+      "searchScore": 2323.8855
+    },
+    {
+      "package": {
+        "name": "zod-to-json-schema",
+        "version": "3.23.0",
+        "description": "Converts Zod schemas to JSON schemas",
+        "keywords": ["zod", "json-schema"],
+        "date": "2026-05-02T10:02:11.000Z"
+      },
+      "searchScore": 411.9021
+    }
+  ],
+  "total": 2,
+  "time": "2026-09-21T17:22:57.000Z"
+}

@@ -150,6 +150,19 @@ pub fn paginate<T: Serialize>(
     })
 }
 
+/// How many items `limit` allows, filled in when it is absent.
+///
+/// The same number [`paginate`] would take, for the caller that has to ask a
+/// source for that many *before* it has a sequence to paginate: a search is
+/// answered by somebody else's server, and asking it for two hundred hits to
+/// return ten would be spending their bandwidth to be polite with ours.
+///
+/// `u32` because what it is for is a number in a URL.
+pub fn wanted(limit: Option<Limit>) -> u32 {
+    let wanted = limit.map_or(DEFAULT_LIMIT, Limit::items);
+    u32::try_from(wanted).unwrap_or(u32::MAX)
+}
+
 /// How many bytes `item` occupies once serialised.
 ///
 /// The one definition of "too big" in this crate. It is the encoded length
