@@ -133,8 +133,14 @@ in each of them and its author answers for production and for the suite at
 once. There is deliberately no builder that supplies one seam and fills the
 rest, because filling them meant filling them live: a test naming the archive
 carried a live catalogue beside it, and the first tool to read a catalogue
-through such a context would have asked npm from CI. `tests/ctx.rs` is what
-holds this — it drives every seam a context carries rather than a tool.
+through such a context would have asked npm from CI.
+
+What the compiler checks there is that every field was answered for, not that
+the answer was a fixture one, so the second half is `Ctx::seams`. It names the
+seams by taking the struct apart, which is a compile error the moment a field
+is added, and `tests/ctx.rs` drives what it returns rather than a list of its
+own. Adding a seam is therefore three edits the compiler and the suite ask for
+in turn: both constructors, the name, and the shortest call that reaches it.
 
 `Ctx::logging_to` is not a third way and shows what a fourth would have to
 look like: it takes `self` and spreads `..self`, so it changes a context that

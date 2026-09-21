@@ -176,6 +176,12 @@ tools! {
 /// it spreads `..self`, so it changes a context that has already chosen its
 /// world. A spread of `..Self::new()` is what reopens this, whatever it is
 /// called.
+///
+/// What the compiler checks there is that every field was answered for, not
+/// that the answer was a fixture one. [`Ctx::seams`] is the half it cannot
+/// check: it names the seams by taking this struct apart, so a field added
+/// here has to be called a seam or not, and `tests/ctx.rs` holds its own list
+/// of calls to whatever that answer was.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Ctx {
@@ -232,6 +238,28 @@ impl Ctx {
     /// through the same factory and the same [`call`].
     pub fn logging_to(self, log: Sink) -> Self {
         Self { log, ..self }
+    }
+
+    /// The seams this carries, by name.
+    ///
+    /// Taking `Self` apart is the point of the first line. It names every
+    /// field and spreads nothing, so a seam added to this struct does not
+    /// compile until somebody has said whether it is one — and `tests/ctx.rs`
+    /// answers this rather than a list of its own, so a seam nobody wrote a
+    /// call for fails there instead of going unasserted until the day it is
+    /// live.
+    ///
+    /// The log and the tally are not seams. Nothing outside this process is
+    /// behind either of them, which is the whole of what a seam is here.
+    pub fn seams(&self) -> &'static [&'static str] {
+        let Self {
+            archive: _,
+            catalogue: _,
+            log: _,
+            spent: _,
+        } = self;
+
+        &["archive", "catalogue"]
     }
 
     /// A version's files.

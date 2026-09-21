@@ -8,10 +8,16 @@
 //! context built for a different one, and asks a registry from CI.
 //!
 //! So this suite drives the seams a context carries rather than a tool: one
-//! tool per seam, chosen because it is the shortest path to that seam and not
-//! because this is a suite about it. Both go over the wire, through the
-//! service factory `router_with` takes, because building a context is only
-//! interesting if it is the context a handler is actually handed.
+//! call per seam, chosen because it is the shortest path to that seam and not
+//! because this is a suite about the tool making it. Each goes over the wire,
+//! through the service factory `router_with` takes, because building a
+//! context is only interesting if it is the context a handler is handed.
+//!
+//! Which seams those are is `Ctx::seams`'s answer and not this file's list,
+//! so a seam added to a context with no call written for it fails here rather
+//! than waiting for the day it is live.
+
+use std::path::Path;
 
 use axum::body::Body;
 use axum::http::Request;
@@ -38,45 +44,99 @@ const NO_FIXTURES: &str = concat!(
     "/fixtures/no-set-is-checked-in-here"
 );
 
+/// One seam a context carries, and the shortest call that reaches it.
+struct Seam {
+    /// What [`Ctx::seams`] calls it.
+    name: &'static str,
+
+    tool: &'static str,
+    arguments: Value,
+
+    /// Where in that tool's answer to read, and what the fixture set says
+    /// there — a fact the registry this seam stands in for could not have
+    /// answered with.
+    reads: &'static str,
+    fixture_says: Value,
+
+    /// What the fixture adapter says it was doing when it could not find its
+    /// set, which is how a refusal is known to have come from disk.
+    doing: &'static str,
+}
+
+/// Every seam, in the order a context carries them.
+///
+/// Adding one here is the second half of adding one to `Ctx`: the first half
+/// is the compile error in both of its constructors.
+fn seams() -> Vec<Seam> {
+    vec![
+        Seam {
+            name: "archive",
+            tool: "get_file_content",
+            arguments: json!({
+                "registry": "crates",
+                "package": "serde",
+                "version": "1.0.0",
+                "path": "src/lib.rs",
+            }),
+            reads: "/text",
+            // The fixture `serde` carries a `src/lib.rs` of one line that the
+            // real crate does not.
+            fixture_says: json!("pub fn serialize() {}\n"),
+            doing: "reading the archive fixtures",
+        },
+        Seam {
+            name: "catalogue",
+            tool: "list_package_versions",
+            arguments: json!({ "registry": "npm", "package": "zod" }),
+            reads: "/total",
+            // The fixture `zod` has four versions where the real package has
+            // hundreds.
+            fixture_says: json!(4),
+            doing: "reading the version fixtures",
+        },
+    ]
+}
+
+/// Every seam a context carries has a call here.
+///
+/// The list above is held to `Ctx::seams`, which is the struct's own answer,
+/// so the next seam cannot arrive without one. Without this the two tests
+/// below would keep passing while saying nothing about it, which is the shape
+/// of the bug this suite exists for one level up.
+#[test]
+fn every_seam_a_context_carries_is_driven_here() {
+    let mut driven: Vec<&str> = seams().iter().map(|seam| seam.name).collect();
+    driven.sort_unstable();
+
+    let mut carried = Ctx::fixture(FIXTURES).seams().to_vec();
+    carried.sort_unstable();
+
+    assert_eq!(
+        driven, carried,
+        "a seam with no call here is a seam nothing holds to the fixture \
+         set: give it the shortest call that reaches it"
+    );
+}
+
 /// Every seam is the fixture set's, and the right part of it.
 ///
-/// One call per seam, each asserting something the registry it stands in for
-/// could not answer with: the fixture `serde` carries a `src/lib.rs` of one
-/// line that the real crate does not, and the fixture `zod` has four versions
-/// where the real package has hundreds. So this fails if a seam was wired to
-/// another seam's directory, and it fails if a seam was left live and the
-/// machine happened to have a network.
+/// Each call asserts something the registry it stands in for could not answer
+/// with. So this fails if a seam was wired to another seam's directory, and
+/// it fails if a seam was left live and the machine happened to have a
+/// network.
 #[tokio::test]
 async fn every_seam_a_context_carries_is_the_fixture_set() {
-    let file = call(
-        FIXTURES,
-        "get_file_content",
-        json!({
-            "registry": "crates",
-            "package": "serde",
-            "version": "1.0.0",
-            "path": "src/lib.rs",
-        }),
-    )
-    .await;
+    for seam in seams() {
+        let answer = call(FIXTURES, seam.tool, seam.arguments).await;
+        let read = answer["result"]["structuredContent"].pointer(seam.reads);
 
-    assert_eq!(
-        file["result"]["structuredContent"]["text"], "pub fn serialize() {}\n",
-        "the archive seam should read `fixtures/archives/`, got {file}"
-    );
-
-    let versions = call(
-        FIXTURES,
-        "list_package_versions",
-        json!({ "registry": "npm", "package": "zod" }),
-    )
-    .await;
-
-    assert_eq!(
-        versions["result"]["structuredContent"]["total"],
-        json!(4),
-        "the catalogue seam should read `fixtures/versions/`, got {versions}"
-    );
+        assert_eq!(
+            read,
+            Some(&seam.fixture_says),
+            "the `{}` seam should have read the fixture set, got {answer}",
+            seam.name
+        );
+    }
 }
 
 /// And none of them can reach a registry.
@@ -93,34 +153,27 @@ async fn every_seam_a_context_carries_is_the_fixture_set() {
 /// intermittently, and reported it as the registry being unreachable.
 #[tokio::test]
 async fn no_seam_a_context_carries_can_reach_a_registry() {
-    for (tool, arguments, doing) in [
-        (
-            "get_file_content",
-            json!({
-                "registry": "crates",
-                "package": "serde",
-                "version": "1.0.0",
-                "path": "src/lib.rs",
-            }),
-            "reading the archive fixtures",
-        ),
-        (
-            "list_package_versions",
-            json!({ "registry": "npm", "package": "zod" }),
-            "reading the version fixtures",
-        ),
-    ] {
-        let answer = call(NO_FIXTURES, tool, arguments).await;
+    assert!(
+        !Path::new(NO_FIXTURES).exists(),
+        "`{NO_FIXTURES}` has to hold nothing for this test to mean anything, \
+         and something is checked in there"
+    );
+
+    for seam in seams() {
+        let answer = call(NO_FIXTURES, seam.tool, seam.arguments).await;
 
         assert_eq!(
             answer["error"]["code"], -32000,
-            "`{tool}` should have failed reading a fixture set that is not \
-             there, got {answer}"
+            "the `{}` seam should have failed reading a fixture set that is \
+             not there, got {answer}",
+            seam.name
         );
         assert_eq!(
             answer["error"]["message"],
-            format!("diffpack failed while {doing}."),
-            "`{tool}` should have gone to the fixture adapter, got {answer}"
+            format!("diffpack failed while {}.", seam.doing),
+            "the `{}` seam should have gone to the fixture adapter, got \
+             {answer}",
+            seam.name
         );
     }
 }
