@@ -21,6 +21,7 @@ use axum::body::Body;
 use axum::http::Request;
 use diffpack_server::error::Failure;
 use diffpack_server::mcp::Diffpack;
+use diffpack_server::page;
 use diffpack_server::registry::Registry;
 use diffpack_server::router;
 use diffpack_server::tools::search_packages::{Args, SearchPackages};
@@ -54,6 +55,7 @@ async fn the_handler_returns_the_failure_that_says_the_source_is_unwell() {
         Args {
             registry: Registry::Npm,
             query: "outage".to_owned(),
+            cursor: None,
             limit: None,
         },
         &Ctx::fixture(FIXTURES),
@@ -310,6 +312,64 @@ async fn a_query_that_matches_nothing_is_an_empty_page() {
         result["isError"],
         json!(false),
         "finding nothing is an answer, got {result}"
+    );
+}
+
+/// The paging arguments say what binds, in `page`'s own words.
+///
+/// A `Page` can hand back a `nextCursor` — a page of long descriptions
+/// reaches the response ceiling before it reaches the limit — so the tool
+/// that returns one has to take one back. Without `cursor` in the schema a
+/// model is handed a resumption token and `deny_unknown_fields` refuses it.
+#[tokio::test]
+async fn the_paging_arguments_document_the_numbers_that_bind() {
+    let tool = listed(TOOL).await;
+    let limit = &tool["inputSchema"]["properties"]["limit"];
+
+    assert_eq!(limit["default"], json!(page::DEFAULT_LIMIT), "got {limit}");
+    assert_eq!(limit["maximum"], json!(page::MAX_LIMIT), "got {limit}");
+
+    let cursor = &tool["inputSchema"]["properties"]["cursor"];
+    assert_eq!(cursor["pattern"], "^p1:[0-9]+$", "got {cursor}");
+}
+
+/// A cursor resumes an answer rather than being refused.
+///
+/// `deny_unknown_fields` is what makes this worth a test: without `cursor`
+/// in `Args`, a model that passed a `nextCursor` back the way the schema
+/// tells it to would get a protocol error it cannot read.
+///
+/// What is resumed is a fresh answer to the same query rather than the page
+/// before it — the source is asked again — which is the whole of why this is
+/// the one tool here that is not idempotent.
+#[tokio::test]
+async fn a_cursor_resumes_the_answer_rather_than_being_refused() {
+    let whole = call(json!({ "registry": "npm", "query": "zod" })).await;
+    assert_eq!(
+        whole["structuredContent"]["total"], 2,
+        "the fixture answers this query with two, got {whole}"
+    );
+
+    let resumed = call(json!({
+        "registry": "npm",
+        "query": "zod",
+        "cursor": page::Cursor::at(1).encode(),
+    }))
+    .await;
+
+    let page = &resumed["structuredContent"];
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(1),
+        "resuming past the first hit leaves one, got {page}"
+    );
+    assert_eq!(
+        page["items"][0]["name"], "zod-to-json-schema",
+        "and it is the one after it, got {page}"
+    );
+    assert_eq!(
+        page["total"], 2,
+        "a total is the sequence's length and not the page's, got {page}"
     );
 }
 

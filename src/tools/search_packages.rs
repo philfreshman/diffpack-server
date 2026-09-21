@@ -20,6 +20,15 @@
 //! 0004), and a search that knew PyPI needed treating differently would be a
 //! second copy of that.
 //!
+//! # Where the descriptions come from
+//!
+//! Every doc comment on a field of [`Args`] becomes a `description` in a
+//! schema a model reads, so it is written for that reader and names nothing
+//! in this repository. `cursor` and `limit` have no doc comment on purpose:
+//! they are [`crate::page`]'s types and that module writes their
+//! descriptions, including the rule that an out-of-range `limit` is clamped
+//! rather than refused.
+//!
 //! The one asymmetry an agent does have to know about is in the answer rather
 //! than in the code — a PyPI hit carries a name and nothing else, because
 //! PyPI's index carries nothing else — so the description says so out loud.
@@ -50,9 +59,12 @@ pub struct Args {
     /// nothing — there is no way to ask a registry for everything it has.
     pub query: String,
 
-    // No doc comment, on purpose: `page` writes this one, and a sentence here
-    // would replace the one that carries the numbers that bind. See
-    // `list_package_files`, which does the same for the same reason.
+    // No doc comment on either, on purpose: `page` writes both, and a
+    // sentence here would replace the one that carries the numbers that bind.
+    // See `list_package_files`, which does the same for the same reason.
+    #[serde(default)]
+    pub cursor: Option<page::Cursor>,
+
     #[serde(default)]
     pub limit: Option<page::Limit>,
 }
@@ -96,7 +108,7 @@ impl Tool for SearchPackages {
         // makes it one thing on all three — and the honest one, since a
         // caller that asked for nothing has not named a package.
         if query.is_empty() {
-            return page::paginate(Vec::new(), args.limit, None);
+            return page::paginate(Vec::new(), args.limit, args.cursor);
         }
 
         // The limit is asked of the source rather than applied to what comes
@@ -113,6 +125,14 @@ impl Tool for SearchPackages {
         // read. Paginating it is about the response ceiling rather than
         // about order: a page is what fits, and `total` is what says there
         // was more.
-        page::paginate(hits, args.limit, None)
+        //
+        // The cursor is taken rather than refused because `paginate` can hand
+        // one back — a page of long descriptions reaches the ceiling before
+        // it reaches the limit — and a `nextCursor` a caller has nowhere to
+        // send is a sequence this tool claims to have and does not. What it
+        // resumes is this call's answer rather than the last one's: the
+        // source is asked again, and a ranking that moved in between is the
+        // idempotency hint above saying so.
+        page::paginate(hits, args.limit, args.cursor)
     }
 }
