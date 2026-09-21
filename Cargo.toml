@@ -66,11 +66,17 @@ futures = { version = "0.3.34", default-features = false, features = ["std"] }
 # Switching the feature on would have negotiated it for every request the
 # client makes, because that is what the feature does to a request that names
 # no encoding. So `src/fetch.rs` names one — `identity` — for every caller but
-# the one that asked, and the archive path is byte for byte the request it was.
-# The reason to keep it that way is the size cap: the running total is counted
-# on decoded chunks either way, but the cheap half, refusing a body on its
+# the one that asked: an archive request is the request it was apart from that
+# header, which is a header it did not send before. The reason to spell it out
+# rather than leave it off is the size cap: the running total is counted on
+# decoded chunks either way, but the cheap half, refusing a body on its
 # declared length before reading one, does not survive a body the client
 # decodes, and an archive is the body most worth refusing unread.
+#
+# `src/store/` builds a client of its own and says nothing, so its requests to
+# the blob store negotiate `gzip` too. Nothing there reads a declared length,
+# so there is no cap to lose — but those requests changed as well, and this is
+# the note that says which ones did.
 #
 # `rustls-no-provider` rather than `rustls`: the default provider is
 # `aws-lc-rs`, which wants a C toolchain at build time and carries the OpenSSL
