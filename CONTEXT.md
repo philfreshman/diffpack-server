@@ -277,6 +277,12 @@ One part of a call that is timed by itself. Two of them today: the whole
 call, and the part of it spent waiting for Archives. A Phase that did not
 happen is absent from a Line rather than zero, because zero is a measurement
 and a percentile taken over one describes neither population.
+
+Where two fetches overlap — a Diff asks for both versions at once — the
+Phase is the window they span and not the sum of their durations. It answers
+how much of the call went on waiting, which is the question it is next to the
+total to answer; how much Archive work the call caused is a different
+question and nothing asks it yet.
 _Avoid_: span, step, stage, timing
 
 **Cause**:

@@ -239,12 +239,12 @@ impl Timed<'_> {
         package: &str,
         version: &str,
     ) -> Result<FileMap, Failure> {
-        let started = Instant::now();
+        let began = Instant::now();
         let files = self.archive.fetch(registry, package, version).await;
 
         // Recorded whether or not it worked. A registry that times out is
         // exactly the call worth knowing the fetch time of.
-        self.spent.fetching(started.elapsed());
+        self.spent.fetching(began, Instant::now());
         files
     }
 }

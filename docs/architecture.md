@@ -298,9 +298,19 @@ must not reach a model are one definition. Argument values are redacted and
 Where a call's time goes is accumulated in `Spent`, which a `Ctx` holds for
 the length of one request and the seams write into. `Ctx::archive()` hands
 back the archive seam with the stopwatch already on it, so a handler is
-unchanged and there is no way to read an archive that goes uncounted. Two
-phases today; the download/extract/diff/store split arrives with #13 and #20,
-when those phases start existing separately.
+unchanged and there is no way to read an archive that goes uncounted.
+
+`Spent` keeps the *window* fetching spanned rather than the sum of each
+fetch's duration, because `diff_package_versions` asks for two versions
+through one `try_join!` and a sum reports a thousand milliseconds where the
+call waited five hundred — in the field directly beside `total`, which a
+reader compares it against and which it could then exceed. It is also the one
+thing about this module a call over the wire cannot show: the fixture
+archives answer in under a millisecond, so `tests/log.rs` builds two
+overlapping spans by hand against `Spent::starting_at`.
+
+Two phases today; the download/extract/store split arrives with #20 and with
+opening the archive seam, when those phases start existing separately.
 
 ### `src/engine.rs` — the one importer of `diffpack-engine`
 

@@ -10,10 +10,12 @@
 //! sink is handed to the [`Ctx`] the service factory builds, and the line
 //! asserted on is the one a real `tools/call` produced.
 
+use std::time::{Duration, Instant};
+
 use axum::body::Body;
 use axum::http::Request;
 use diffpack_server::archive::Archive;
-use diffpack_server::log::Capture;
+use diffpack_server::log::{Capture, Spent};
 use diffpack_server::mcp::Diffpack;
 use diffpack_server::router;
 use diffpack_server::tools::Ctx;
@@ -254,6 +256,91 @@ async fn the_fetch_is_timed_apart_from_the_rest_when_there_was_one() {
         line["ms"]["fetch"].is_null(),
         "a tool that fetched nothing should report no fetch rather than zero, got {line}"
     );
+}
+
+/// The tool that reads two archives still leaves one line, not two.
+///
+/// A guard rather than a cycle of its own: `diff_package_versions` is the
+/// first caller to ask the archive seam for two versions at once, and it is
+/// the shape that would catch emission wired to the seam instead of to the
+/// dispatch. One line per call is what every rate over these lines assumes.
+#[tokio::test]
+async fn a_tool_that_reads_two_archives_still_leaves_one_line() {
+    let log = Capture::new();
+
+    call(
+        &log,
+        "diff_package_versions",
+        json!({
+            "registry": "npm",
+            "package": "zod",
+            "from_version": "3.25.76",
+            "to_version": "4.0.0",
+        }),
+    )
+    .await;
+
+    let line = one(&log);
+    assert_eq!(
+        line["result"], "ok",
+        "the fixture set has this pair: {line}"
+    );
+
+    let fetch = line["ms"]["fetch"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("two archives were read, got {line}"));
+    let total = line["ms"]["total"].as_f64().expect("a call is timed");
+
+    assert!(
+        fetch <= total,
+        "two fetches at once cost the window they span, which is inside the \
+         call that spanned it: {fetch} of {total}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Where a call's time goes
+// ---------------------------------------------------------------------------
+
+/// Two archives fetched at once cost the call the window they span, not the
+/// sum of their two durations.
+///
+/// `diff_package_versions` asks for both versions through one `try_join!`, so
+/// a summed figure says 1000ms where the call waited 500 — and it says it in
+/// the field directly beside `total`, which a reader will compare it against
+/// and which it can then exceed. The question `fetch` is there to answer is
+/// "how much of this call was waiting on a registry", and for concurrent
+/// waits that is the window.
+///
+/// The one test here that does not go over the wire, and deliberately: the
+/// fixture archives answer in under a millisecond, so no call this suite can
+/// make has enough overlap in it for the two figures to differ. The spans are
+/// built by hand instead, which also makes the test exact rather than a
+/// tolerance around two sleeps.
+#[test]
+fn concurrent_fetches_cost_the_window_they_span_and_not_their_sum() {
+    let began = Instant::now();
+    let at = |ms| began + Duration::from_millis(ms);
+
+    let spent = Spent::starting_at(began);
+
+    // Two fetches that overlap, the way `try_join!` runs them. Fifty
+    // milliseconds each, ten apart: a hundred summed, sixty as a window.
+    spent.fetching(at(0), at(50));
+    spent.fetching(at(10), at(60));
+
+    assert_eq!(
+        spent.fetch(),
+        Some(Duration::from_millis(60)),
+        "the call waited from the first fetch starting to the last one ending"
+    );
+}
+
+/// Nothing fetched is nothing to report, rather than zero — the distinction
+/// the whole `Option` is for.
+#[test]
+fn a_request_that_fetched_nothing_reports_no_fetch() {
+    assert_eq!(Spent::starting_at(Instant::now()).fetch(), None);
 }
 
 // ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rmcp::model::JsonObject;
 use serde::Serialize;
@@ -120,32 +120,94 @@ pub struct Timings {
 /// that would then have to pass it back up. Atomics rather than a lock
 /// because nothing here ever reads a value it is about to write, so there is
 /// no invariant a lock would be protecting.
-#[derive(Debug, Default)]
+///
+/// # Why a window and not a sum
+///
+/// `diff_package_versions` asks for two versions through one `try_join!`, so
+/// two fetches overlap. Summing their durations reports a thousand
+/// milliseconds where the call waited five hundred, in the field directly
+/// beside [`Timings::total`] — which a reader compares it against, and which
+/// it can then exceed.
+///
+/// So what is kept is the window: the earliest a fetch began to the latest
+/// one ended. That is the question this number is next to `total` to answer —
+/// how much of the call went on waiting for a registry — and it makes
+/// `fetch <= total` true rather than usually true.
+///
+/// What it is not is how much archive work the call caused, which is the
+/// summed figure and is a different question. Nothing asks it yet; when
+/// something does it goes beside this rather than replacing it.
+#[derive(Debug)]
 pub struct Spent {
+    /// When the request started. Every offset below is from here, which is
+    /// what lets two of them be compared across threads without an `Instant`
+    /// in an atomic.
+    started: Instant,
+
     /// Whether any fetch happened at all, which is what tells "no archives
     /// were read" from "reading them was instant".
     fetched: AtomicBool,
 
-    /// Microseconds, summed. A diff reads two archives, so this is a total
-    /// and not a duration.
-    fetching: AtomicU64,
+    /// Microseconds from [`Self::started`] to the earliest fetch beginning.
+    first: AtomicU64,
+
+    /// Microseconds from [`Self::started`] to the latest fetch ending.
+    last: AtomicU64,
 }
 
 impl Spent {
-    /// Record `taken` spent waiting for an archive.
-    pub fn fetching(&self, taken: Duration) {
-        self.fetched.store(true, Ordering::Relaxed);
-        self.fetching.fetch_add(
-            u64::try_from(taken.as_micros()).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
+    /// A fresh tally for a request starting now.
+    pub fn new() -> Self {
+        Self::starting_at(Instant::now())
     }
 
-    /// How long was spent waiting for archives, or nothing if none were read.
-    fn fetch(&self) -> Option<Duration> {
-        self.fetched
-            .load(Ordering::Relaxed)
-            .then(|| Duration::from_micros(self.fetching.load(Ordering::Relaxed)))
+    /// The same, for a request that started at `started`.
+    ///
+    /// The seam `tests/log.rs` drives to put two overlapping fetches in by
+    /// hand. It is the one thing about this module a call over the wire
+    /// cannot show: the fixture archives answer in under a millisecond, so no
+    /// call the suite can make overlaps enough for a window and a sum to
+    /// differ.
+    pub fn starting_at(started: Instant) -> Self {
+        Self {
+            started,
+            fetched: AtomicBool::new(false),
+            first: AtomicU64::new(u64::MAX),
+            last: AtomicU64::new(0),
+        }
+    }
+
+    /// Record a fetch that ran from `began` to `ended`.
+    pub fn fetching(&self, began: Instant, ended: Instant) {
+        self.fetched.store(true, Ordering::Relaxed);
+        self.first.fetch_min(self.offset(began), Ordering::Relaxed);
+        self.last.fetch_max(self.offset(ended), Ordering::Relaxed);
+    }
+
+    /// How long the call spent waiting for archives, or nothing if it read
+    /// none.
+    pub fn fetch(&self) -> Option<Duration> {
+        self.fetched.load(Ordering::Relaxed).then(|| {
+            let first = self.first.load(Ordering::Relaxed);
+            let last = self.last.load(Ordering::Relaxed);
+            Duration::from_micros(last.saturating_sub(first))
+        })
+    }
+
+    /// `at`, as microseconds since this request started.
+    ///
+    /// Saturating rather than panicking on an instant before the start: a
+    /// clock question is not worth failing a request that otherwise worked,
+    /// and a zero here reads as "from the beginning", which is what it would
+    /// mean.
+    fn offset(&self, at: Instant) -> u64 {
+        u64::try_from(at.saturating_duration_since(self.started).as_micros()).unwrap_or(u64::MAX)
+    }
+}
+
+impl Default for Spent {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
