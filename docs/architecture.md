@@ -53,7 +53,9 @@ otherwise, and its allow-list is the list above.
 the one file there that is not a tool: it is the collection, the `Ctx`, and
 the dispatch, and those need what a tool must not have — `crate::log`, so that
 the one line per call is written once by the dispatch rather than nineteen
-times by the tools that remembered. The name deny-list still covers it, so the
+times by the tools that remembered. That exact path and no other: a tool is
+free to grow into a directory, and `src/tools/thing/mod.rs` is then a tool
+like any other. The name deny-list still covers the collection, so the
 exemption is from the list and not from the rule.
 
 **`docs/cache-key.md` is normative, not descriptive.** The cache key is a

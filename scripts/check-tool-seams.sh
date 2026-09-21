@@ -25,14 +25,20 @@
 #      Blob client) does not exist yet and will not be called what this script
 #      guesses.
 #
-#      `mod.rs` is exempt from this one, because it is the only file here that
-#      is not a tool: it is the collection, the `Ctx` every handler is given,
-#      and the dispatch that runs one. Those need things a tool must not have
+#      `src/tools/mod.rs` is exempt from this one, because it is the only file
+#      here that is not a tool: it is the collection, the `Ctx` every handler
+#      is given, and the dispatch that runs one. Those need things a tool must
+#      not have
 #      — `crate::log`, for one, because the single line per call is written by
 #      the dispatch and a tool that wrote its own would make "one line per
 #      call" false. Exempting the file is the honest version of that: the
 #      alternative is adding `log` to the list below, which would permit in
 #      nineteen tools the thing this paragraph exists to forbid.
+#
+#      That one path and no other. A tool is free to be a directory when it
+#      grows one, and `src/tools/thing/mod.rs` is then a tool like any other —
+#      so the exemption is written as the path it is about rather than as a
+#      file name, which would hand every such tool the collection's licence.
 #   2. A deny-list over the whole file, for the names that mean a seam was
 #      crossed even when there is no `use` to catch: `reqwest::get(..)` spelled
 #      out in full, a blob token read from the environment. This one covers
@@ -102,6 +108,10 @@ while IFS= read -r hit; do
   line=${rest#*:}
   where="${where}:${rest%%:*}"
 
+  # The collection is not a tool. See the header: this is the one path, and a
+  # tool that becomes a directory does not inherit it.
+  [[ "${where%%:*}" == "${TOOLS}/mod.rs" ]] && continue
+
   path=${line#*use }
   path=${path%%;*}
   path=${path%%\{*}
@@ -141,8 +151,7 @@ while IFS= read -r hit; do
       offenders+=("${where}: imports \`crate::${module}\`, which is not a seam a tool goes through")
     fi
   done
-done < <(grep -rnE '^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]' --include='*.rs' \
-  --exclude='mod.rs' "$TOOLS")
+done < <(grep -rnE '^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]' --include='*.rs' "$TOOLS")
 
 # Rule 2: the names, wherever they are written.
 while IFS= read -r hit; do
