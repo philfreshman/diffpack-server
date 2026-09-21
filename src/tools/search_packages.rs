@@ -109,7 +109,10 @@ impl Tool for SearchPackages {
         npm and crates.io hits also carry the current version and the \
         package's own description; PyPI hits carry a name alone, because the \
         index PyPI publishes has nothing else in it. A query that matches \
-        nothing is an empty list rather than an error.";
+        nothing is an empty list rather than an error. Each registry has its \
+        own ceiling on one answer, under what you can ask for here: npm \
+        gives at most 250 and crates.io at most 100, so the total is what \
+        this search found and not how many the registry has.";
 
     /// It reads a registry's index; it changes nothing anywhere.
     const READ_ONLY: bool = true;

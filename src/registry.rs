@@ -793,10 +793,14 @@ enum Rank {
 /// How well `name` answers `query`, or nothing if it does not.
 ///
 /// `query` arrives already lower-cased, because it is the same query for
-/// every one of nine hundred thousand names and lowering it once is the
-/// difference between a scan and a scan that allocates. Case is ignored
-/// because a half-remembered name is what a search is for; the name is
-/// answered with as the index spells it either way.
+/// every one of nine hundred thousand names and lowering it here would be
+/// lowering it nine hundred thousand times. The name is lowered per call and
+/// that is the cost this leaves standing: parsing PyPI's index and scanning
+/// every name in it measured at about 100 ms on a release build, which is
+/// what a PyPI search costs on a warm instance.
+///
+/// Case is ignored because a half-remembered name is what a search is for;
+/// the name is answered with as the index spells it either way.
 fn rank(name: &str, query: &str) -> Option<Rank> {
     let name = name.to_lowercase();
     if name == query {

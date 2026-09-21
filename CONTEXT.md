@@ -345,10 +345,9 @@ One part of a call that is timed by itself. Two of them today: the whole
 call, and the part of it spent waiting for a Registry. Every seam that leaves
 this process counts towards the second — an Archive, a Catalogue and a Search
 alike — because the question is the wait and not which document was waited
-for. A
-Phase that did not happen is absent from a Line rather than zero, because
-zero is a measurement and a percentile taken over one describes neither
-population.
+for. A Phase that did not happen is absent from a Line rather than zero,
+because zero is a measurement and a percentile taken over one describes
+neither population.
 
 Where two fetches overlap — a Diff asks for both versions at once — the
 Phase is the window they span and not the sum of their durations. It answers

@@ -172,6 +172,28 @@ async fn the_description_says_which_registry_answers_with_less() {
     );
 }
 
+/// The other asymmetry an agent cannot infer from the schema: `limit` says
+/// up to a thousand and no registry answers with that many.
+///
+/// It matters because of what `total` then is. A model asking for five
+/// hundred and reading a total of a hundred would take that as the number of
+/// packages crates.io has answering to its query, and decide on that basis
+/// that there is nothing else to look at.
+#[tokio::test]
+async fn the_description_says_no_registry_answers_with_as_many_as_limit_allows() {
+    let tool = listed(TOOL).await;
+    let said = tool["description"].as_str().unwrap_or_default();
+
+    assert!(
+        said.contains("250") && said.contains("100"),
+        "the description should say what each registry's ceiling is, got {said:?}"
+    );
+    assert!(
+        said.contains("total"),
+        "and what that makes the total, got {said:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // What it answers
 // ---------------------------------------------------------------------------

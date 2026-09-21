@@ -4,10 +4,11 @@
 #
 # Every module under `src/tools/` is one MCP tool: its definition and its
 # handler, together (ADR 0002). What it may reach for is deliberately small —
-# `archive` to get a package's files, `catalogue` to ask a registry what it
-# publishes, `registry` to know what a registry is, `store` to cache a result,
-# `page` to stay inside the response ceiling, `error` to fail on the right
-# channel. Everything else is somebody else's job.
+# `archive` to get a package's files, `catalogue` to ask what a package has
+# released, `search` to ask which packages a registry has, `registry` to know
+# what a registry is, `store` to cache a result, `page` to stay inside the
+# response ceiling, `error` to fail on the right channel. Everything else is
+# somebody else's job.
 #
 # The rule is worth enforcing rather than documenting because there will be
 # eight of these modules and they will be written months apart. The first one
@@ -180,11 +181,11 @@ if [[ ${#offenders[@]} -gt 0 ]]; then
   cat >&2 <<EOF
 
 A module under ${TOOLS}/ is one tool and nothing else. It gets a package's
-files from \`crate::archive\`, asks \`crate::catalogue\` what a registry
-publishes, asks \`crate::registry\` what a registry is,
-caches through \`crate::store\`, names a diff with \`crate::handle\`, stays
-inside the response ceiling with \`crate::page\`, and fails through
-\`crate::error\`. The HTTP client and the
+files from \`crate::archive\`, asks \`crate::catalogue\` what a package has
+released and \`crate::search\` which packages a registry has, asks
+\`crate::registry\` what a registry is, caches through \`crate::store\`, names
+a diff with \`crate::handle\`, stays inside the response ceiling with
+\`crate::page\`, and fails through \`crate::error\`. The HTTP client and the
 blob store are those modules' business, not a tool's: eight tools that each
 know how to fetch is eight places to fix a timeout, a retry or a user agent.
 
