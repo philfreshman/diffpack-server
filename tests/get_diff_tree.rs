@@ -69,7 +69,7 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 async fn the_definition_carries_everything_an_agent_needs() {
     let tool = listed(TOOL).await;
 
-    for field in ["handle", "path", "depth", "cursor", "limit"] {
+    for field in ["handle", "path", "depth", "status", "cursor", "limit"] {
         assert!(
             tool["inputSchema"]["properties"][field].is_object(),
             "the input schema should describe `{field}`, got {}",
@@ -485,6 +485,126 @@ async fn a_depth_below_one_is_read_as_one() {
 }
 
 // ---------------------------------------------------------------------------
+// Which statuses
+// ---------------------------------------------------------------------------
+
+/// The five an agent may ask for are the five a node can have.
+///
+/// A filter is only usable if the values in it are the values in the answer,
+/// and this is the one place the two could part company: the status a node
+/// carries and the status a caller passes are the same enumeration read in
+/// two directions.
+#[tokio::test]
+async fn the_statuses_an_agent_may_filter_by_are_the_ones_a_node_carries() {
+    let tool = listed(TOOL).await;
+    let schema = tool["inputSchema"].clone();
+
+    let asked = enumeration(&schema, &schema["properties"]["status"]["items"]);
+    assert_eq!(
+        asked,
+        Some(json!([
+            "added",
+            "removed",
+            "modified",
+            "renamed",
+            "unchanged"
+        ])),
+        "got {schema}"
+    );
+
+    let output = tool["outputSchema"].clone();
+    let carried = enumeration(&output, &output["$defs"]["Node"]["properties"]["status"]);
+    assert_eq!(carried, asked, "got {output}");
+}
+
+/// Asking for one status answers with exactly the nodes that have it.
+#[tokio::test]
+async fn filtering_by_status_returns_exactly_the_matching_nodes() {
+    let nodes = walk(json!({ "handle": diffable(), "status": ["added"] })).await;
+
+    assert_eq!(paths(&nodes), ["src/added.js"]);
+}
+
+/// And asking for several answers with all of them, still in tree order.
+///
+/// The combination is the case worth pinning: a filter implemented as a
+/// comparison rather than as a set would answer the first status and drop the
+/// rest, which reads as a comparison in which nothing was removed.
+#[tokio::test]
+async fn several_statuses_can_be_asked_for_at_once() {
+    let nodes = walk(json!({
+        "handle": diffable(),
+        "status": ["added", "removed", "renamed"],
+    }))
+    .await;
+
+    assert_eq!(
+        paths(&nodes),
+        ["src/added.js", "src/new-name.js", "src/removed.js"],
+        "three statuses, in the order the comparison is in rather than the \
+         order they were asked for"
+    );
+}
+
+/// A directory is kept or dropped on its own status, which is a summary of
+/// what is under it.
+///
+/// Worth its own test because it is the one part of this filter that can
+/// surprise: `src` is `modified` in a comparison where `src` itself did not
+/// move, because something inside it did. An agent that wants files alone has
+/// the `type` on every node to say so, and this is the behaviour that makes
+/// that necessary — so it is asserted rather than left to be discovered.
+#[tokio::test]
+async fn a_directory_is_filtered_on_the_status_that_summarises_it() {
+    let nodes = walk(json!({ "handle": diffable(), "status": ["modified"] })).await;
+
+    assert_eq!(
+        paths(&nodes),
+        ["src", "src/index.js"],
+        "one file changed and one directory reports that something under it \
+         did"
+    );
+}
+
+/// Naming no status narrows nothing.
+///
+/// An agent that built the argument from an empty list of interesting
+/// statuses has asked for the whole comparison, which is what it would have
+/// got by leaving the argument out. The alternative reading — nothing matches
+/// — is an empty page that looks like a comparison in which nothing happened.
+#[tokio::test]
+async fn an_empty_list_of_statuses_narrows_nothing() {
+    let filtered = walk(json!({ "handle": diffable(), "status": [] })).await;
+    let whole = walk(json!({ "handle": diffable() })).await;
+
+    assert_eq!(filtered, whole);
+}
+
+/// The description says what an agent should ask for, not only what it may.
+///
+/// `unchanged` is most of a version bump — the fixtures here are built to
+/// have one file of each status, and a real package has thousands of files
+/// that did not move — so an agent that does not know to exclude it spends
+/// its pages on the part of the comparison it is not reading.
+#[tokio::test]
+async fn the_description_says_unchanged_is_rarely_what_is_wanted() {
+    let tool = listed(TOOL).await;
+    let said = tool["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a described tool, got {tool}"));
+
+    assert!(
+        said.contains("status"),
+        "the filter is the difference between a page of what changed and a \
+         page of what did not: {said}"
+    );
+    assert!(
+        said.contains("unchanged"),
+        "and the status worth excluding is named: {said}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -509,6 +629,23 @@ fn handle(package: &str, from: &str, to: &str) -> String {
         ignore_whitespace: false,
     })
     .encode()
+}
+
+/// The values `field` allows, following a reference into `root`'s own
+/// definitions when that is how the schema is written.
+///
+/// Which of the two `schemars` produces is its business and can change with
+/// an upgrade; what the test is about is the list a reader ends up with.
+fn enumeration(root: &Value, field: &Value) -> Option<Value> {
+    let named = match field["$ref"].as_str() {
+        Some(reference) => {
+            let name = reference.rsplit('/').next()?;
+            root["$defs"][name].clone()
+        }
+        None => field.clone(),
+    };
+
+    named["enum"].as_array().cloned().map(Value::Array)
 }
 
 /// The paths of `nodes`, in the order they came back.

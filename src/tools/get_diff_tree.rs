@@ -97,6 +97,23 @@ pub struct Args {
     #[serde(default)]
     pub depth: Option<u32>,
 
+    /// Only entries with one of these statuses. Omit it for all of them.
+    ///
+    /// Most of a comparison is `unchanged`: a version bump moves a handful
+    /// of files in a package that ships thousands, and paging through the
+    /// rest is a call spent on what did not happen. Asking for `added`,
+    /// `removed`, `modified` and `renamed` is how you read what changed.
+    ///
+    /// A directory is kept or dropped on its own status, which summarises
+    /// what is under it — so a directory holding one changed file is
+    /// `modified` even though the directory itself did not move.
+    // A `Vec` rather than an `Option<Vec>`: absent and empty are the same
+    // question — "narrow this to nothing in particular" — and the second
+    // reading of an empty list, that nothing matches, is an empty page an
+    // agent reads as a comparison in which nothing happened.
+    #[serde(default)]
+    pub status: Vec<Status>,
+
     // No doc comment on these two either: `page` writes their descriptions,
     // and a sentence here would replace the one carrying the numbers that
     // bind.
@@ -221,14 +238,25 @@ impl From<&DiffStatus> for Status {
 ///
 /// `left` is how many levels below `parent` to take, so the recursion stops
 /// where the caller asked rather than where the tree ends.
-fn flatten(parent: &DiffFileEntry, left: u32, nodes: &mut Vec<Node>) {
+///
+/// `wanted` is the statuses to keep, or nothing to keep all of them. It
+/// decides what is *listed* and never what is descended into: a directory an
+/// agent did not ask for still has the files it holds walked, or asking for
+/// added files would answer with the ones at the top of a package and none
+/// of the ones inside a directory that was itself unchanged.
+fn flatten(parent: &DiffFileEntry, left: u32, wanted: &[Status], nodes: &mut Vec<Node>) {
     if left == 0 {
         return;
     }
 
     for child in parent.children.iter().flatten() {
-        nodes.push(Node::of(child));
-        flatten(child, left - 1, nodes);
+        // The status is compared before a node is built, so a filtered walk
+        // does not pay for the paths and the clones of what it is about to
+        // throw away — which is most of a real comparison.
+        if wanted.is_empty() || wanted.contains(&(&child.status).into()) {
+            nodes.push(Node::of(child));
+        }
+        flatten(child, left - 1, wanted, nodes);
     }
 }
 
@@ -261,13 +289,17 @@ impl Tool for GetDiffTree {
     const DESCRIPTION: &'static str = "\
         List the files and directories of a comparison you have already made, \
         a page at a time. Takes the handle `diff_package_versions` gave you, \
-        and `path` to look inside one directory instead of the whole thing, \
-        or `depth` to see how it is laid out before descending into it. \
-        Every entry carries its full path, whether it is a file or a \
-        directory, what happened to it, where it came from if it moved, and \
-        how many lines it gained and lost. A directory's line counts are the \
-        sum of everything under it, so counting both files and directories \
-        counts every change more than once.";
+        and three ways to ask for less than all of it: `path` for one \
+        directory's contents, `depth` for how far down to go, and `status` \
+        for which kinds of change you want. Ask for `added`, `removed`, \
+        `modified` and `renamed` to read what changed — most of a package is \
+        `unchanged` between two versions, and paging through that is a call \
+        spent on what did not happen. Every entry carries its full path, \
+        whether it is a file or a directory, what happened to it, where it \
+        came from if it moved, and how many lines it gained and lost. A \
+        directory's line counts are the sum of everything under it, so \
+        counting files and directories together counts every change more \
+        than once.";
 
     /// It downloads and compares; it changes nothing anywhere.
     const READ_ONLY: bool = true;
@@ -317,7 +349,7 @@ impl Tool for GetDiffTree {
 
         let mut nodes = Vec::new();
         if let Some(listing) = listing {
-            flatten(listing, depth, &mut nodes);
+            flatten(listing, depth, &args.status, &mut nodes);
         }
 
         page::paginate(nodes, args.limit, args.cursor)
