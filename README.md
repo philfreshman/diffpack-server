@@ -30,23 +30,18 @@ file under `api/`, and `vercel.json` rewrites all traffic to it. So this repo
 is one binary in front of a library:
 
 ```
-api/mcp.rs       The deployed function. Thin: it wraps the router in
-                 vercel_runtime's layer and hands it to the runtime.
-src/lib.rs       Everything with a decision in it, where a test can reach it
-                 without a runtime.
-src/router.rs    Every route this function serves, and the panic guard over
-                 the transport. vercel.json rewrites all traffic here, so
-                 routing is this crate's job rather than the platform's.
-src/mcp.rs       The MCP handler: identity, capabilities, the tool list, and
-                 the wrapper that turns a panic in a handler into an answer.
-src/error.rs     Which channel a failure reaches the client on, and the
-                 redaction rule over anything that leaves the process.
+api/mcp.rs       The deployed function: wraps the router, and nothing else.
+src/lib.rs       Everything with a decision in it.
+src/router.rs    Every route this function serves.
+src/mcp.rs       The MCP handler: identity, capabilities, the tool list.
+src/error.rs     Which channel a failure reaches the client on.
 src/health.rs    The /health body.
 src/cache_key.rs The deterministic diff cache key.
 src/engine.rs    The one module allowed to import diffpack-engine.
 tests/           The suite, driven at the seams: real requests through the
                  real router, and the vectors read from fixtures/.
-docs/            Normative specifications. docs/cache-key.md is one.
+docs/            The architecture, the decisions, and the specifications that
+                 are normative rather than descriptive.
 fixtures/        Golden vectors two languages are tested against.
 scripts/         The checks CI runs, and the hook installer that makes a
                  commit run them too.
@@ -56,20 +51,18 @@ vercel.json      The deployment shape: the catch-all rewrite, the function
 .githooks/       The pre-commit hook. Not active until install-hooks.sh.
 ```
 
-Three boundaries are enforced rather than documented:
+That is the file list. What each module is *for*, which modules phases 3 and 4
+add, and what any of them may import is in
+[`docs/architecture.md`](docs/architecture.md); the nouns they trade in are in
+[`CONTEXT.md`](CONTEXT.md), and the decisions behind both are in
+[`docs/adr/`](docs/adr/). Two copies of a module list is how the two start
+disagreeing, so this one names the files and stops.
 
-- **`src/engine.rs` is the only importer of `diffpack_engine`.** One seam means
-  one file to change when the engine moves. `./scripts/checks.sh seams` fails
-  the build otherwise.
-- **A tool module goes through the seams, not around them.** A module under
-  `src/tools/` reaches the network through `archive` and `registry`, and the
-  cache through `store`. `./scripts/checks.sh seams` fails the build when one
-  names an HTTP client or the blob store itself.
-- **`docs/cache-key.md` is normative, not descriptive.** The cache key is a
-  contract with a TypeScript implementation that will never share a line of
-  code with this one, so the document and
-  `fixtures/cache-key-vectors.json` are the source of truth and both
-  implementations are held to them.
+Three boundaries there are enforced rather than trusted: `src/engine.rs` is the
+only importer of `diffpack_engine`, a module under `src/tools/` reaches the
+network and the cache only through the seams, and `docs/cache-key.md` is the
+source of truth for the cache key rather than a description of it. The first
+two are `./scripts/checks.sh seams`; the third is `cargo test`.
 
 ## Commands
 
