@@ -82,6 +82,21 @@ pub struct Args {
     #[serde(default)]
     pub path: Option<String>,
 
+    /// How many levels to descend, counting from whatever the listing is
+    /// rooted at: `1` is that directory's own contents and nothing inside
+    /// them. Omit it to descend the whole way.
+    // Declared rather than enforced, the way `similarity_threshold` is on
+    // the tool that mints a handle — but the other way round, because this
+    // one has a safe reading below its range. A `0` is what counting from
+    // zero produces, and the answer it would otherwise get is an empty page
+    // that reads as "this directory is empty". So the minimum is in the
+    // schema an agent reads, and a value under it is narrowed into range
+    // rather than answered literally, which is what `page` does with a
+    // limit.
+    #[schemars(range(min = 1))]
+    #[serde(default)]
+    pub depth: Option<u32>,
+
     // No doc comment on these two either: `page` writes their descriptions,
     // and a sentence here would replace the one carrying the numbers that
     // bind.
@@ -203,10 +218,17 @@ impl From<&DiffStatus> for Status {
 ///
 /// `parent` itself is not in the result. See the module header: a directory
 /// is not inside its own subtree.
-fn flatten(parent: &DiffFileEntry, nodes: &mut Vec<Node>) {
+///
+/// `left` is how many levels below `parent` to take, so the recursion stops
+/// where the caller asked rather than where the tree ends.
+fn flatten(parent: &DiffFileEntry, left: u32, nodes: &mut Vec<Node>) {
+    if left == 0 {
+        return;
+    }
+
     for child in parent.children.iter().flatten() {
         nodes.push(Node::of(child));
-        flatten(child, nodes);
+        flatten(child, left - 1, nodes);
     }
 }
 
@@ -239,7 +261,8 @@ impl Tool for GetDiffTree {
     const DESCRIPTION: &'static str = "\
         List the files and directories of a comparison you have already made, \
         a page at a time. Takes the handle `diff_package_versions` gave you, \
-        and `path` to look inside one directory instead of the whole thing. \
+        and `path` to look inside one directory instead of the whole thing, \
+        or `depth` to see how it is laid out before descending into it. \
         Every entry carries its full path, whether it is a file or a \
         directory, what happened to it, where it came from if it moved, and \
         how many lines it gained and lost. A directory's line counts are the \
@@ -287,9 +310,14 @@ impl Tool for GetDiffTree {
             _ => Some(&tree),
         };
 
+        // An absent depth is as far as there is. A depth of zero is a caller
+        // counting from zero, and one level is the nearest thing it can have
+        // meant — see the argument's own note.
+        let depth = args.depth.map_or(u32::MAX, |asked| asked.max(1));
+
         let mut nodes = Vec::new();
         if let Some(listing) = listing {
-            flatten(listing, &mut nodes);
+            flatten(listing, depth, &mut nodes);
         }
 
         page::paginate(nodes, args.limit, args.cursor)

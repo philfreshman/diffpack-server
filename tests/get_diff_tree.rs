@@ -69,7 +69,7 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 async fn the_definition_carries_everything_an_agent_needs() {
     let tool = listed(TOOL).await;
 
-    for field in ["handle", "path", "cursor", "limit"] {
+    for field in ["handle", "path", "depth", "cursor", "limit"] {
         assert!(
             tool["inputSchema"]["properties"][field].is_object(),
             "the input schema should describe `{field}`, got {}",
@@ -396,6 +396,92 @@ async fn a_path_with_nothing_under_it_is_an_empty_page() {
             "and the total says so rather than the page being short: got {result}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// How far down
+// ---------------------------------------------------------------------------
+
+/// `depth: 1` is the top of the comparison and nothing under it.
+///
+/// What an agent does first: a package it has never seen, asked what it is
+/// made of before asking what changed inside any of it.
+#[tokio::test]
+async fn a_depth_of_one_returns_only_the_immediate_children() {
+    let nodes = walk(json!({ "handle": diffable(), "depth": 1 })).await;
+
+    assert_eq!(
+        paths(&nodes),
+        ["README.md", "src"],
+        "`src` is listed and what is inside it is not"
+    );
+}
+
+/// Depth is counted from wherever the listing is rooted, not from the
+/// comparison's root.
+///
+/// The two arguments have to compose: an agent that narrowed to `src` and
+/// asked for one level is asking about `src`'s children, and a depth counted
+/// from the top would answer with nothing at all for anything deeper than
+/// one.
+#[tokio::test]
+async fn depth_is_counted_from_the_path_the_listing_was_rooted_at() {
+    let nodes = walk(json!({
+        "handle": handle("many-files", "1.0.0", "1.0.0"),
+        "path": "src",
+        "depth": 1,
+    }))
+    .await;
+
+    assert_eq!(
+        nodes.len(),
+        26,
+        "the directories `src` holds, and none of the files inside them"
+    );
+    assert!(
+        nodes.iter().all(|node| node["type"] == "directory"),
+        "got {nodes:?}"
+    );
+}
+
+/// Each level down is one more.
+#[tokio::test]
+async fn a_deeper_depth_takes_in_one_more_level() {
+    let handle = handle("many-files", "1.0.0", "1.0.0");
+
+    let top = walk(json!({ "handle": handle, "depth": 1 })).await;
+    assert_eq!(paths(&top), ["src"], "one directory at the top");
+
+    let next = walk(json!({ "handle": handle, "depth": 2 })).await;
+    assert_eq!(
+        next.len(),
+        27,
+        "`src` and the twenty-six directories under it, still no files"
+    );
+}
+
+/// Omitting it descends as far as the comparison goes.
+#[tokio::test]
+async fn an_absent_depth_descends_the_whole_way() {
+    let nodes = walk(json!({ "handle": diffable() })).await;
+
+    assert!(
+        paths(&nodes).contains(&"src/index.js"),
+        "a file two levels down is in an answer nobody limited: got {nodes:?}"
+    );
+}
+
+/// A depth below one is read as one rather than as nothing.
+///
+/// `0` is the value an agent arrives at by counting from zero, and the
+/// answer it would otherwise get — an empty page — reads as "this directory
+/// is empty", which is a different fact about the comparison. The same shape
+/// as a limit being clamped into its range instead of refused.
+#[tokio::test]
+async fn a_depth_below_one_is_read_as_one() {
+    let nodes = walk(json!({ "handle": diffable(), "depth": 0 })).await;
+
+    assert_eq!(paths(&nodes), ["README.md", "src"]);
 }
 
 // ---------------------------------------------------------------------------
