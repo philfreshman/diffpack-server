@@ -112,8 +112,24 @@ pub enum Failure {
         limit: u64,
     },
 
+    /// A registry whose archive URL cannot be built from a package name and
+    /// a version.
+    ///
+    /// npm and crates.io serve an archive from a path anyone can construct.
+    /// PyPI lists a version's files in its own metadata and nowhere else, so
+    /// there is nothing to build — which is a property of that registry
+    /// rather than a gap here. #10 answers it by asking PyPI.
+    UnresolvableArchiveUrl { registry: String },
+
     /// The caller's parameters did not validate.
     InvalidParams { message: String },
+
+    /// A tool name that is not one of ours.
+    ///
+    /// A protocol error for the same reason [`Failure::NoSuchResource`] is:
+    /// there is no tool to have failed, so there is no tool error to report,
+    /// and the client — which was told the list — is who can fix the call.
+    NoSuchTool { name: String },
 
     /// A resource URI that does not resolve.
     ///
@@ -147,6 +163,10 @@ impl Failure {
             )),
             Self::NoSuchResource { ref uri } => Err(ErrorData::invalid_params(
                 format!("No resource at `{}`.", redact(uri)),
+                None,
+            )),
+            Self::NoSuchTool { ref name } => Err(ErrorData::invalid_params(
+                format!("No tool named `{}`.", redact(name)),
                 None,
             )),
             Self::Internal { doing } => Err(ErrorData::new(
@@ -235,12 +255,19 @@ impl Failure {
                 limit / 1_000_000,
             ),
 
-            // These three never reach a model — `respond` sends them down the
+            Self::UnresolvableArchiveUrl { registry } => format!(
+                "`{registry}` does not serve a version's archive from a path that can be \
+                 built out of a package name and a version, so there is no URL to resolve. \
+                 `npm` and `crates` do."
+            ),
+
+            // These four never reach a model — `respond` sends them down the
             // protocol channel — but a `message` that lied about them would
             // be a trap for the next person to add a variant.
             Self::InvalidParams { message } => redact(message),
             Self::NoSuchResource { uri } => format!("No resource at `{}`.", redact(uri)),
             Self::Internal { doing } => format!("diffpack failed while {doing}."),
+            Self::NoSuchTool { name } => format!("No tool named `{}`.", redact(name)),
         }
     }
 }

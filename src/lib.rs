@@ -9,3 +9,4 @@ pub mod error;
 pub mod health;
 pub mod mcp;
 pub mod router;
+pub mod tools;

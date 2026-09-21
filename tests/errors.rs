@@ -50,6 +50,11 @@ async fn an_unknown_method_is_not_found_and_minus_32601() {
 
 /// Naming a tool that does not exist is the same kind of mistake: there is no
 /// tool to have failed, so there is no tool error to report.
+///
+/// The call is well formed down to the SEP-2243 `Mcp-Name` header, so the
+/// name reaches the dispatch in `src/tools` and is refused there. Without the
+/// header the transport would refuse it first, with `-32020`, and this test
+/// would pass without ever reaching the code it is about.
 #[tokio::test]
 async fn calling_a_tool_that_does_not_exist_is_a_protocol_error() {
     let answer = post(json!({
@@ -60,9 +65,9 @@ async fn calling_a_tool_that_does_not_exist_is_a_protocol_error() {
     }))
     .await;
 
-    assert!(
-        answer.1["error"].is_object(),
-        "expected a JSON-RPC error, got {}",
+    assert_eq!(
+        answer.1["error"]["code"], -32602,
+        "a name that does not resolve is a parameter that does not validate, got {}",
         answer.1
     );
     assert!(
@@ -552,7 +557,17 @@ async fn post(body: Value) -> (StatusCode, Value) {
         .header("accept", "application/json, text/event-stream")
         .header("content-type", "application/json")
         .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", method)
+        .header("mcp-method", method);
+
+    // SEP-2243 repeats the thing a request names in a header as well as the
+    // body, and the transport refuses a `tools/call` that omits it. A helper
+    // that left it out would be testing a broken client.
+    let request = match body["params"]["name"].as_str() {
+        Some(name) => request.header("mcp-name", name),
+        None => request,
+    };
+
+    let request = request
         .body(Body::from(body.to_string()))
         .expect("the request should build");
 

@@ -42,6 +42,8 @@ use rmcp::service::{NotificationContext, RequestContext, SubscriptionContext};
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 
+use crate::tools::{self, Ctx};
+
 /// The name a client shows a user for this server.
 ///
 /// Not `diffpack-server`: the crate is the server, but what a user picked in
@@ -61,28 +63,21 @@ pub const TOOL_LIST_TTL_MS: u64 = 60 * 60 * 1000;
 ///
 /// Built by the service factory on every request, so it holds nothing that
 /// outlives one: shared state (the HTTP client, the Blob client of #20) is
-/// captured by the factory closure and cloned in, not stored here.
+/// captured by the factory closure and cloned into [`Ctx`], not stored here.
+///
+/// It describes no tool. A tool's definition lives with its handler in its
+/// own module under [`crate::tools`], and what is left here is identity,
+/// capabilities and handing a call to the collection — see ADR 0002.
 #[derive(Debug, Clone, Default)]
-pub struct Diffpack;
+pub struct Diffpack {
+    /// What a tool handler is allowed to reach, for the length of one
+    /// request.
+    ctx: Ctx,
+}
 
 impl Diffpack {
     pub fn new() -> Self {
-        Self
-    }
-
-    /// Every tool this server offers, in the order `tools/list` returns them.
-    ///
-    /// Sorted by name rather than listed in whatever order the tools were
-    /// written. The spec asks for a deterministic order so a client can cache
-    /// the list and compare it cheaply, and sorting is the only order that
-    /// stays deterministic when someone adds a tool in the middle of the file.
-    ///
-    /// Empty until #11. The sort is here now so that the first tool cannot
-    /// arrive without it.
-    fn tools() -> Vec<Tool> {
-        let mut tools: Vec<Tool> = Vec::new();
-        tools.sort_by(|a, b| a.name.cmp(&b.name));
-        tools
+        Self { ctx: Ctx::new() }
     }
 }
 
@@ -125,9 +120,34 @@ impl ServerHandler for Diffpack {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(Self::tools())
+        Ok(ListToolsResult::with_all_items(tools::definitions())
             .with_ttl_ms(TOOL_LIST_TTL_MS)
             .with_cache_scope(CacheScope::Public))
+    }
+
+    /// One tool's definition, which the transport reads to validate the
+    /// SEP-2243 `Mcp-Param-*` headers against the body. The same collection
+    /// answers it, so what a header is checked against is what `tools/list`
+    /// advertised.
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        tools::definition_of(name)
+    }
+
+    /// Hand the call to the module that owns that name.
+    ///
+    /// Every decision about the answer — whether the arguments validate,
+    /// which channel a failure takes, what `structuredContent` is built from
+    /// — is made once, in [`crate::tools`], for every tool. There is nothing
+    /// to add here, and a tool that needed something added here would be a
+    /// tool that had escaped the shape.
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        tools::call(&request.name, request.arguments, &self.ctx)
+            .await
+            .map(CallToolResponse::from)
     }
 }
 

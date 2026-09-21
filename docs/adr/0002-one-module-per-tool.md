@@ -27,5 +27,6 @@ reach. A schema changed in one list and not in the other is worse again —
 the call is accepted and the handler reads a field that is not there.
 
 The cost is one indirection: the tool list is assembled rather than written
-out. `Diffpack::tools()` already sorts by name, so the assembled list has a
-deterministic order regardless of which file was added last.
+out, by a macro over one line per tool. That line declares the module as well
+as registering it, so the sort is a property of the collection and there is no
+order to add a tool in wrongly.

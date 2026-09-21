@@ -5,12 +5,13 @@ An MCP server in Rust, deployed to Vercel, exposing what
 tools an agent can call: resolve a package on npm, crates.io or PyPI, fetch and
 extract its archives, and diff one version against another.
 
-**Status: transport, no tools.** The crate builds, tests and deploys, and
-`/mcp` speaks Streamable HTTP: a client connects, negotiates a protocol
-revision and calls `tools/list`. The list is empty — the first tool arrives
-with [#11](https://github.com/philfreshman/diffpack-server/issues/11), and the
-engine is wired in but nothing calls it yet. `/health` is the other route and
-is what a monitor watches.
+**Status: transport, and the first tool.** The crate builds, tests and
+deploys, and `/mcp` speaks Streamable HTTP: a client connects, negotiates a
+protocol revision, lists tools and calls one. `resolve_archive_url` is the one
+there is — it answers from its arguments and fetches nothing. The tools that
+fetch and diff archives arrive with
+[#11](https://github.com/philfreshman/diffpack-server/issues/11) onward.
+`/health` is the other route and is what a monitor watches.
 
 Production serves whatever was last merged to `main`, so a branch merged into
 `development` is not live until it is promoted. See
@@ -34,6 +35,7 @@ api/mcp.rs       The deployed function: wraps the router, and nothing else.
 src/lib.rs       Everything with a decision in it.
 src/router.rs    Every route this function serves.
 src/mcp.rs       The MCP handler: identity, capabilities, the tool list.
+src/tools/       One module per tool: its definition and its handler.
 src/error.rs     Which channel a failure reaches the client on.
 src/health.rs    The /health body.
 src/cache_key.rs The deterministic diff cache key.
@@ -188,8 +190,10 @@ which suits a serverless function that has no warm process to hold one in —
 and it answers clients back to `2025-11-25` as well. `POST` only: `GET` and
 `DELETE` are `405`, and no answer ever carries an `Mcp-Session-Id`.
 
-A client can connect and call `tools/list` today; the list is empty until
-[#11](https://github.com/philfreshman/diffpack-server/issues/11).
+A client can connect, list tools and call `resolve_archive_url`, which returns
+the URL a package version's archive is served from without fetching anything.
+The tools that fetch and diff arrive with
+[#11](https://github.com/philfreshman/diffpack-server/issues/11) onward.
 
 Claude Code:
 
