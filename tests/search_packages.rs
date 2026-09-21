@@ -313,6 +313,51 @@ async fn a_query_that_matches_nothing_is_an_empty_page() {
     );
 }
 
+/// A blank query finds nothing, and finds it without asking anybody.
+///
+/// It is the one query the three sources would each answer differently:
+/// every name in PyPI's index begins with nothing, so matching it there
+/// returns a page of whatever happens to be shortest, and npm and crates.io
+/// each have their own idea of a query-less query. None of those is an
+/// answer to "which packages are called this", so the tool gives the one
+/// that is.
+///
+/// Driven against the registry whose fixture set would have answered, so a
+/// pass is the short circuit rather than a URL the set happens not to carry.
+#[tokio::test]
+async fn a_blank_query_finds_nothing_rather_than_everything() {
+    for query in ["", "   "] {
+        let result = call(json!({ "registry": "pypi", "query": query })).await;
+
+        assert_eq!(
+            result["structuredContent"]["items"],
+            json!([]),
+            "a blank query is not a request for the whole index, got {result}"
+        );
+        assert_eq!(result["structuredContent"]["total"], 0, "got {result}");
+        assert_eq!(
+            result["isError"],
+            json!(false),
+            "asking for nothing is not an error, got {result}"
+        );
+    }
+}
+
+/// A query with spaces around it is the query without them.
+///
+/// A model that pasted a name out of a sentence should get the same answer
+/// as one that typed it, and the alternative is a percent-encoded space in
+/// the URL that npm matches nothing for.
+#[tokio::test]
+async fn a_query_is_trimmed_before_it_reaches_a_registry() {
+    let result = call(json!({ "registry": "npm", "query": "  zod  " })).await;
+
+    assert_eq!(
+        result["structuredContent"]["items"][0]["name"], "zod",
+        "the fixture set is keyed by the untrimmed URL's absence, got {result}"
+    );
+}
+
 /// A source that is not answering is a tool error the model reads, not a
 /// protocol error it never sees: the remedy is to try again or to search
 /// somewhere else, and only the model can choose. The message says which

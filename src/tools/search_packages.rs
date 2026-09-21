@@ -46,7 +46,8 @@ pub struct Args {
     pub registry: Registry,
 
     /// What to look for: a name, part of one, or a word that would appear in
-    /// a package's description. `http client`, `zod`, `yaml`.
+    /// a package's description. `http client`, `zod`, `yaml`. Blank finds
+    /// nothing — there is no way to ask a registry for everything it has.
     pub query: String,
 
     // No doc comment, on purpose: `page` writes this one, and a sentence here
@@ -86,6 +87,18 @@ impl Tool for SearchPackages {
     type Output = Page<Hit>;
 
     async fn call(args: Args, ctx: &Ctx) -> Result<Page<Hit>, Failure> {
+        let query = args.query.trim();
+
+        // A blank query is not a search, and the three sources disagree about
+        // what it is instead: PyPI's index matches every name it has, because
+        // every name begins with nothing, and npm and crates.io each answer
+        // with whatever a query-less query means to them. Answering it here
+        // makes it one thing on all three — and the honest one, since a
+        // caller that asked for nothing has not named a package.
+        if query.is_empty() {
+            return page::paginate(Vec::new(), args.limit, None);
+        }
+
         // The limit is asked of the source rather than applied to what comes
         // back: npm and crates.io each take one, and asking for two hundred
         // to answer with ten is somebody else's bandwidth. `page` is what
@@ -93,7 +106,7 @@ impl Tool for SearchPackages {
         // that travels.
         let wanted = page::wanted(args.limit);
 
-        let hits = ctx.search().hits(args.registry, &args.query, wanted).await?;
+        let hits = ctx.search().hits(args.registry, query, wanted).await?;
 
         // The sequence is already in the order it should be read in — each
         // source ranks its own answer, and PyPI's is ranked where it is
