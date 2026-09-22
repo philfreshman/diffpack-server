@@ -663,6 +663,18 @@ async fn the_definition_carries_everything_an_agent_needs() {
          be asking the question backwards: got {}",
         tool["inputSchema"]
     );
+
+    // `tests/tools.rs` requires every tool to state this one rather than
+    // fixing its value, because a search answers `false`. This tool answers
+    // `true`, and the sense it means is worth saying out loud: the same
+    // arguments give the same answer until somebody publishes, which is the
+    // window a client caches over — not a promise that the registry has
+    // stopped moving.
+    assert_eq!(
+        tool["annotations"]["idempotentHint"], true,
+        "a version list is the same answer until the next release, got {}",
+        tool["annotations"]
+    );
 }
 
 /// The one thing an agent cannot work out from a list of versions it is
