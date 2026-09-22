@@ -41,19 +41,26 @@ impl Live {
         Self
     }
 
+    /// What this instance already holds for `url`, where it holds anything
+    /// and the caller said a held body would do.
+    ///
+    /// Separate from [`fetch`](Self::fetch) rather than folded into it so
+    /// that [`super::Document`] can tell the two apart: a body that was
+    /// streamed has been weighed against the cap on the way in and a body
+    /// that was held has not, and which of those happened decides whether it
+    /// is weighed again.
+    pub fn held(&self, url: &str, about: &About<'_>) -> Option<Body> {
+        let fresh_for = about.remember_for?;
+        remembered(url, fresh_for).map(Body::Shared)
+    }
+
     /// Whatever `url` serves, refusing anything over `limit`.
     ///
-    /// The weighing is `fetch`'s here and is not repeated by the caller: it
+    /// The weighing here is `fetch`'s and is not repeated by the caller: it
     /// refuses a declared length before a byte of the body is read and stops
     /// the running total at the limit, which is a cap applied before the
     /// memory it is guarding has been spent rather than after.
-    pub async fn body(&self, url: &str, limit: u64, about: &About<'_>) -> Result<Body, Failure> {
-        if let Some(fresh_for) = about.remember_for {
-            if let Some(body) = remembered(url, fresh_for) {
-                return Ok(Body::Shared(body));
-            }
-        }
-
+    pub async fn fetch(&self, url: &str, limit: u64, about: &About<'_>) -> Result<Body, Failure> {
         let bytes = fetch::bytes(
             url,
             limit,

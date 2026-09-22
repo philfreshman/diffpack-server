@@ -45,15 +45,14 @@ impl Fixture {
         Self { dir, doing }
     }
 
-    /// Whatever the fixture set serves for `url`, refusing anything over
-    /// `limit`.
+    /// Whatever the fixture set serves for `url`.
     ///
-    /// The only place a fixture body is weighed, and the reason the cap is a
-    /// rule about what this server will read rather than about where bytes
-    /// came from: nothing streamed these, so a set that answered with
-    /// something the registries would have been refused for would otherwise
-    /// go through.
-    pub fn body(&self, url: &str, limit: u64, about: &About<'_>) -> Result<Body, Failure> {
+    /// Not weighed here. Nothing streamed these bytes, so the cap still
+    /// applies to them — a set that answered with something the registries
+    /// would have been refused for would otherwise go straight through — but
+    /// the comparison that applies it is [`super::Document`]'s, which is the
+    /// one place in this module that makes it.
+    pub fn body(&self, url: &str, about: &About<'_>) -> Result<Body, Failure> {
         let short = || Failure::Internal { doing: self.doing };
 
         let index = std::fs::read(self.dir.join("index.json")).map_err(|_| short())?;
@@ -66,12 +65,8 @@ impl Fixture {
             None => return Err(short()),
         };
 
-        let bytes = std::fs::read(self.dir.join(file)).map_err(|_| short())?;
-
-        let weight = bytes.len() as u64;
-        if weight > limit {
-            return Err((about.too_large)(weight));
-        }
-        Ok(Body::Owned(bytes))
+        std::fs::read(self.dir.join(file))
+            .map(Body::Owned)
+            .map_err(|_| short())
     }
 }

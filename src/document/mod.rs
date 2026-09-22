@@ -44,24 +44,27 @@
 //! What it does *not* take is a way to read the body. That half stays with
 //! the seam, and it is why there are still three of them.
 //!
-//! # The cap is weighed once
+//! # A body is weighed once
 //!
-//! A body is weighed against the limit on exactly one path through this
-//! module, and which path that is depends on where the bytes came from.
+//! There is one comparison against the cap in this module, in
+//! [`Document::weighed`], and every body that was not streamed goes through
+//! it exactly once.
 //!
-//! The live half never weighs a body here, because `fetch` already refused it
-//! twice over: once on a declared length before a byte was read, and then on
-//! a running total as the chunks arrived. Nothing that reaches this function
-//! from there can be over the limit, so the check that used to sit here was
-//! one that could not fire — three copies of a comparison that was already
-//! made, in the one place a reader would go looking for the rule.
+//! A body that *was* streamed does not, and that is the point rather than an
+//! omission. [`crate::fetch`] refuses one twice over on the way in — on a
+//! declared length before a byte is read, and on a running total as the
+//! chunks arrive — which is a cap applied before the memory it guards has
+//! been spent. Weighing the result again is a comparison that cannot fire.
+//! `archive`, `catalogue` and `search` each made it anyway, with the same
+//! number and the same constructor, in the one place a reader would go
+//! looking for the rule.
 //!
-//! The fixture half is the other way round: nothing streamed those bytes, so
-//! this is the only place they are weighed at all. That is what makes the cap
-//! a rule about what this server will read rather than about where bytes came
-//! from — a fixture set cannot answer with something the registries would
-//! have been refused for — and it is what the check would have lost if it had
-//! simply been deleted.
+//! Deleting it outright was not the fix. Nothing streams a fixture body and
+//! nothing streams one this instance is already holding, so that comparison
+//! was also the only thing making the cap a rule about what this server will
+//! read rather than about where bytes came from — a fixture set that answered
+//! with something the registries would have been refused for would otherwise
+//! go straight through. So it is kept, once, on the paths that need it.
 //!
 //! # Two adapters, as a variant each
 //!
@@ -231,15 +234,40 @@ impl Document {
         }
 
         match &self.source {
-            // Weighed as it arrived. See the module header: `fetch` refuses a
-            // declared length before a byte is read and stops the running
-            // total at the limit, so a body that reaches here is one that
-            // already passed.
-            Source::Live(live) => live.body(url, self.limit, about).await,
+            Source::Live(live) => match live.held(url, about) {
+                // Fetched for an earlier call and still current. Nothing
+                // streamed it *for this* call, so it is weighed here with
+                // everything else this module did not stream.
+                Some(body) => self.weighed(body, about),
 
-            // Nothing streamed these, so this is where they are weighed.
-            Source::Fixture(fixture) => fixture.body(url, self.limit, about),
+                // Weighed as it arrives, by `fetch`: a declared length is
+                // refused before a byte of the body is read and the running
+                // total is stopped at the limit, which is a cap applied
+                // before the memory it guards has been spent rather than
+                // after. A body that gets back here is one that already
+                // passed, so weighing it again could only agree.
+                None => live.fetch(url, self.limit, about).await,
+            },
+
+            // Nothing streamed these either.
+            Source::Fixture(fixture) => self.weighed(fixture.body(url, about)?, about),
         }
+    }
+
+    /// `body`, unless it is more than this server will hold.
+    ///
+    /// The one comparison against the cap in this module, and the reason the
+    /// three that used to sit in `archive`, `catalogue` and `search` are
+    /// gone: on the live path they restated a refusal `fetch` had already
+    /// made, and on every other path they were the only thing making the cap
+    /// a rule about what this server will read rather than about where bytes
+    /// came from.
+    fn weighed(&self, body: Body, about: &About<'_>) -> Result<Body, Failure> {
+        let weight = body.len() as u64;
+        if weight > self.limit {
+            return Err((about.too_large)(weight));
+        }
+        Ok(body)
     }
 }
 

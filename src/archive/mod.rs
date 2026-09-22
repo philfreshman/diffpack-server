@@ -17,16 +17,23 @@
 //! nothing else: resolution, the size cap, the host allowlist and extraction
 //! are the same code for both, so a test through the fixture adapter is a
 //! test of the path production takes.
-
-mod fixture;
-mod live;
+//!
+//! Neither adapter is written here any more. Both are
+//! [`crate::document`]'s — the four steps this module shares with
+//! [`crate::catalogue`] and [`crate::search`], written once — and what is
+//! left in this file is the two things that are only an archive's: which URL
+//! a version's bytes are at, including the hop PyPI needs, and what those
+//! bytes are once they arrive. The interface did not move and neither did any
+//! of the refusals; see [ADR
+//! 0015](../docs/adr/0015-one-implementation-beneath-three-registry-seams.md).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::document::{About, Document};
 use crate::engine;
 use crate::error::Failure;
-use crate::registry::{self, ArchiveSource, Registry};
+use crate::registry::{ArchiveSource, Registry};
 
 /// An archive after extraction: every file path in a version mapped to its
 /// entry, with the archive's top-level directory already stripped.
@@ -45,35 +52,25 @@ pub type FileMap = HashMap<String, engine::FileMapEntry>;
 /// from somebody else's server.
 pub const SIZE_LIMIT: u64 = 128 * 1024 * 1024;
 
+/// What a `404` stands in for in the archive fixture set: a version the
+/// registry does not have.
+///
+/// Which of the three statuses it was does not change what a model does about
+/// a version that is not there, so this is the commonest of them rather than
+/// a choice between them.
+const NO_SUCH_VERSION: u16 = 404;
+
 /// Where a version's files come from.
 #[derive(Debug)]
 pub struct Archive {
-    source: Source,
-    /// The most a body may weigh before this server refuses it. A field
-    /// rather than a constant read at the point of use, so that the refusal
-    /// can be exercised with a real archive and a small limit instead of with
-    /// a package nobody wants to download in a test.
-    limit: u64,
-}
-
-/// The two adapters, as a variant each rather than a trait.
-///
-/// Neither can arrive from outside this crate, so the extensibility a trait
-/// buys has no buyer — and two arms of one `match` are read in a screen
-/// where two types are read in two files. The same reasoning as [ADR
-/// 0004](../docs/adr/0004-one-registry-module.md).
-#[derive(Debug)]
-enum Source {
-    Live(live::Live),
-    Fixture(fixture::Fixture),
+    documents: Document,
 }
 
 impl Archive {
     /// Archives from the registries, which is what production runs.
     pub fn live() -> Self {
         Self {
-            source: Source::Live(live::Live::new()),
-            limit: SIZE_LIMIT,
+            documents: Document::live(SIZE_LIMIT),
         }
     }
 
@@ -85,14 +82,15 @@ impl Archive {
     /// [`crate::registry`] would find nothing here.
     pub fn fixture(dir: impl Into<PathBuf>) -> Self {
         Self {
-            source: Source::Fixture(fixture::Fixture::new(dir.into())),
-            limit: SIZE_LIMIT,
+            documents: Document::fixture(dir, "reading the archive fixtures", SIZE_LIMIT),
         }
     }
 
     /// The same archive source, refusing anything over `limit` bytes.
     pub fn with_limit(self, limit: u64) -> Self {
-        Self { limit, ..self }
+        Self {
+            documents: self.documents.with_limit(limit),
+        }
     }
 
     /// The files in `version` of `package`.
@@ -102,6 +100,35 @@ impl Archive {
         package: &str,
         version: &str,
     ) -> Result<FileMap, Failure> {
+        // What an archive request is, in the words its failures need. One
+        // `About` for both hops: a metadata document is a download too, and
+        // one that is somehow enormous or served from somewhere unexpected is
+        // the same problem arriving a hop earlier.
+        let limit = self.documents.limit();
+        let about = About {
+            registry,
+            // One representation at each of these URLs, so there is nothing
+            // to ask for by name.
+            accept: None,
+            // An archive is compressed already; negotiating it again would
+            // trade the cheap half of the cap for nothing.
+            compressed: false,
+            // Nothing here is worth holding between invocations: an archive
+            // is fetched for one comparison, and the thing worth keeping is
+            // the comparison, which is `crate::store`'s.
+            remember_for: None,
+            nothing_there: NO_SUCH_VERSION,
+            blocked: &|| {
+                unreadable(
+                    package,
+                    version,
+                    "it is served from a host this server does not fetch from",
+                )
+            },
+            missing: &|_| not_found(registry, package, version),
+            too_large: &|bytes| too_large(package, version, bytes, limit),
+        };
+
         let url = match registry.archive(package, version)? {
             ArchiveSource::Archive { url } => url,
 
@@ -110,11 +137,11 @@ impl Archive {
             // registry's answer to give, and a caller that had to know PyPI
             // needs asking would be carrying this module's job around.
             ArchiveSource::Listing { url } => {
-                let listing = self.bytes(&url, registry, package, version).await?;
-                let listing = String::from_utf8(listing)
+                let listing = self.documents.body(&url, &about).await?;
+                let listing = std::str::from_utf8(&listing)
                     .map_err(|_| unreadable(package, version, "its metadata is not text"))?;
 
-                registry.choose_archive(&listing).ok_or_else(|| {
+                registry.choose_archive(listing).ok_or_else(|| {
                     unreadable(
                         package,
                         version,
@@ -124,52 +151,8 @@ impl Archive {
             }
         };
 
-        let bytes = self.bytes(&url, registry, package, version).await?;
+        let bytes = self.documents.body(&url, &about).await?;
         extract(&bytes, package, version)
-    }
-
-    /// Whatever is served at `url`, as bytes, or a refusal if it is larger
-    /// than this server will hold.
-    ///
-    /// The cap covers every body and not only the archive: a metadata
-    /// document is a download too, and one that is somehow enormous is the
-    /// same problem arriving a hop earlier.
-    async fn bytes(
-        &self,
-        url: &str,
-        registry: Registry,
-        package: &str,
-        version: &str,
-    ) -> Result<Vec<u8>, Failure> {
-        // Every outbound request, checked against the hosts the registries
-        // between them name — not only the one that could plausibly be
-        // wrong. The URL of a first hop is built by `registry` and is
-        // allowed by construction; the URL of a second comes out of a
-        // document somebody else serves, and a registry that named another
-        // host would otherwise have turned a package name in a tool argument
-        // into a request wherever it liked. Checking both is one line and
-        // leaves nothing to keep in step.
-        if !registry::allows(url) {
-            return Err(unreadable(
-                package,
-                version,
-                "it is served from a host this server does not fetch from",
-            ));
-        }
-
-        let bytes = match &self.source {
-            Source::Live(live) => {
-                live.bytes(url, self.limit, registry, package, version)
-                    .await?
-            }
-            Source::Fixture(fixture) => fixture.bytes(url, registry, package, version)?,
-        };
-
-        let weight = bytes.len() as u64;
-        if weight > self.limit {
-            return Err(too_large(package, version, weight, self.limit));
-        }
-        Ok(bytes)
     }
 }
 
@@ -211,7 +194,7 @@ fn unreadable(package: &str, version: &str, reason: &str) -> Failure {
 ///
 /// One constructor for both adapters, so the fixture set cannot answer
 /// something the registries would not.
-pub(super) fn not_found(registry: Registry, package: &str, version: &str) -> Failure {
+fn not_found(registry: Registry, package: &str, version: &str) -> Failure {
     Failure::NoSuchVersion {
         registry: registry.name().to_owned(),
         package: package.to_owned(),
