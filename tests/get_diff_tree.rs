@@ -571,6 +571,58 @@ async fn a_directory_is_filtered_on_the_status_that_summarises_it() {
     );
 }
 
+/// A directory the second version added is `added`, whatever moved into it.
+///
+/// The half of the rule above that a summary reading of it gets wrong. A
+/// directory's status is the directory's own — the engine asks whether each
+/// version has it before it asks what happened underneath — so a directory
+/// only one of the two versions has is `added` or `removed` and never
+/// `modified`, however much moved in or out of it.
+///
+/// `moved` compared backwards is the smallest case: `src/reporter.js`
+/// becomes `src/legacy/reporter.js`, so `src/legacy` is a directory the
+/// second version has and the first does not, holding one `renamed` file and
+/// nothing else. It matters to a caller rather than only to a reader of the
+/// engine: an agent that asked for `modified` to find everywhere something
+/// happened is answered with `src` alone here, and neither the new directory
+/// nor the file that moved into it is in that answer.
+#[tokio::test]
+async fn a_directory_only_one_version_has_carries_that_rather_than_modified() {
+    let handle = handle("moved", "2.0.0", "1.0.0");
+    let nodes = walk(json!({ "handle": handle })).await;
+
+    let statuses: Vec<(&str, &str)> = nodes
+        .iter()
+        .map(|node| {
+            (
+                node["path"].as_str().expect("every node has a path"),
+                node["status"].as_str().expect("every node has a status"),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        statuses,
+        [
+            ("README.md", "unchanged"),
+            ("src", "modified"),
+            ("src/legacy", "added"),
+            ("src/legacy/reporter.js", "renamed"),
+        ],
+        "`src/legacy` is new in the second version and is `added`, not \
+         `modified`, although what is under it is a rename"
+    );
+
+    let modified = walk(json!({ "handle": handle, "status": ["modified"] })).await;
+    assert_eq!(
+        paths(&modified),
+        ["src"],
+        "so asking for `modified` alone leaves out the directory that \
+         appeared and everything in it, which is what the argument's \
+         description has to say rather than leave to be found"
+    );
+}
+
 /// Naming no status narrows nothing.
 ///
 /// An agent that built the argument from an empty list of interesting

@@ -105,9 +105,12 @@ pub struct Args {
     /// rest is a call spent on what did not happen. Asking for `added`,
     /// `removed`, `modified` and `renamed` is how you read what changed.
     ///
-    /// A directory is kept or dropped on its own status, which summarises
-    /// what is under it — so a directory holding one changed file is
-    /// `modified` even though the directory itself did not move.
+    /// A directory is kept or dropped on its own status, and a directory's
+    /// status is not the union of its children's — one holding a single
+    /// changed file is `modified` even though the directory itself did not
+    /// move, and one the second version added is `added` even when the only
+    /// thing inside it is a file that moved there. Asking for `modified`
+    /// alone is not a way to find every directory something happened under.
     // A `Vec` rather than an `Option<Vec>`: absent and empty are the same
     // question — "narrow this to nothing in particular" — and the second
     // reading of an empty list, that nothing matches, is an empty page an
@@ -142,9 +145,13 @@ pub struct Node {
 
     /// What happened to it between the two versions.
     ///
-    /// A directory's status summarises what is under it: it is `modified`
-    /// when anything beneath it changed, and `unchanged` only when nothing
-    /// did.
+    /// A directory's status is about the directory first and what is under
+    /// it second. One the second version does not have is `removed` and one
+    /// the first version did not have is `added`, whatever happened to the
+    /// files inside — a directory that is new is `added` even when the only
+    /// thing in it is a file that moved there. A directory both versions
+    /// have is `modified` when anything beneath it changed and `unchanged`
+    /// only when nothing did.
     pub status: Status,
 
     /// Lines added. For a directory, the sum of everything under it.
@@ -166,8 +173,12 @@ impl Node {
             path: entry.path.clone(),
             node_type: (&entry.file_type).into(),
             status: (&entry.status).into(),
-            // The engine leaves these unset on a node it did not compare,
-            // which is not the same as comparing one and finding nothing.
+            // Optional on the engine's type and set on every node of a tree
+            // it has built, files and directories alike. Reading an absent
+            // one as zero rather than unwrapping it is the fail-safe
+            // direction for a field a later engine could leave out: a node
+            // that says nothing moved is wrong in a way an agent can see
+            // against the totals, where a panic inside a request is not.
             lines_added: entry.added.unwrap_or(0),
             lines_removed: entry.removed.unwrap_or(0),
             old_path: entry.old_path.clone(),
