@@ -558,6 +558,23 @@ async fn a_comparison_too_large_to_serve_whole_says_so_and_says_what_to_call() {
             .is_some_and(|files| files > 0),
         "the totals are what fits and should still be here, got {document}"
     );
+
+    // The comparison has to be one. A tree of six thousand unchanged nodes is
+    // the right size to reach this branch and says nothing about whether the
+    // branch can carry one where something moved, so each status the fixture
+    // produces is named — and a fixture quietly turned back into a version
+    // against itself fails here.
+    for status in ["added", "modified", "removed"] {
+        assert!(
+            document["totals"][status]
+                .as_u64()
+                .is_some_and(|files| files > 0),
+            "the comparison that does not fit should have `{status}` files in \
+             it, got {}",
+            document["totals"]
+        );
+    }
+
     assert_eq!(too_large["read_with"], json!(TREE), "got {too_large}");
 
     // The pointer resolves. A tool named in a sentence is a sentence; one
@@ -924,11 +941,17 @@ const FILE_DIFF: &str = "get_file_diff";
 
 /// A handle for the comparison that does not fit in one answer.
 ///
-/// A version against itself: what makes this package large is the number and
-/// the length of its paths, and a second copy of it checked in would be a
-/// second copy of exactly that.
+/// What makes this package large is the number and the length of its paths,
+/// so 2.0.0 is three files rather than a second copy of six thousand:
+/// everything it leaves out is a `removed` node in the tree, which keeps the
+/// comparison over the ceiling and costs a kilobyte to check in.
+///
+/// It was a version against itself, and that was a tree of six thousand
+/// *unchanged* nodes — the right size to exercise the response ceiling and
+/// the wrong content to exercise anything else, since the branch that refuses
+/// a tree too large to serve had never seen a node that moved.
 fn enormous() -> String {
-    handle("enormous", "1.0.0", "1.0.0")
+    handle("enormous", "1.0.0", "2.0.0")
 }
 
 /// A handle for `diffable` 1.0.0 → 2.0.0, minted rather than fetched.
