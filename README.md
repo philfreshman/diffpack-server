@@ -48,7 +48,13 @@ src/mcp.rs       The MCP handler: identity, capabilities, the tool list.
 src/tools/       One module per tool: its definition and its handler.
 src/registry.rs  What a registry is: npm, crates.io, PyPI, described once.
 src/archive/     A version's files: fetch, size cap, extract, one interface.
+src/catalogue/   What a package has released, most recently published first.
+src/search/      A name half remembered, matched against what a registry has.
+src/fetch.rs     Every request to a registry: user agent, timeout, redirects.
+src/store/       Diff results kept between calls, over Vercel Blob.
 src/error.rs     Which channel a failure reaches the client on.
+src/log.rs       One structured line per tool call, which is what an incident
+                 is read back from.
 src/health.rs    The /health body.
 src/page.rs      The 4.5 MB response ceiling: pages, and cut blobs.
 src/handle.rs    The handle a diff is asked for again by.
