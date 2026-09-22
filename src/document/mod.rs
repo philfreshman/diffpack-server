@@ -10,9 +10,11 @@
 //! an archive, one reads a version list, one reads hits.
 //!
 //! This module is those four steps, once. What was three copies of them is
-//! now three calls to [`Document::body`], and the copies that had already
-//! started to drift — three fixture readers of one index format, in 73, 57
-//! and 67 lines — are one reader.
+//! now one, reached through [`Document::body`] — from four call sites rather
+//! than three, because `archive` asks twice and the metadata hop PyPI needs
+//! is a download like any other. The copies that had already started to
+//! drift — three fixture readers of one index format, in 73, 57 and 67
+//! lines — are one reader.
 //!
 //! # This is not a fourth seam
 //!
