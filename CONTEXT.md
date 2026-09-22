@@ -155,9 +155,21 @@ The Size cap's other half, and neither bounds this function's memory without
 it: one says how large a body may be, this says how many may be arriving, and
 what a package name in a tool argument can cost is the product. It belongs to
 the process rather than to a request, because a request is not what an
-instance serves several of. A call that finds none free waits rather than
-being refused.
+instance serves several of. A call that finds none free waits for one turn —
+the longest a holder can keep a slot — and is refused as Busy after that: up
+to there it is a caller that queued for a moment and got its answer, and past
+there it is a queue, whose length nothing else bounds.
 _Avoid_: permit, semaphore, concurrency limit, connection
+
+**Busy**:
+This instance having no Download slot to give inside the time one call waits
+for one. It is about this server's own capacity and is the only Failure that
+is — every other one is a registry's doing, a caller's, or a package's — so
+it names no registry: nothing was asked of one. Distinct from a Cause of
+`timed_out`, which is a registry that was asked and did not answer, and from
+`rate_limited`, which is a registry refusing this server rather than this
+server refusing a caller. All three are told to try again.
+_Avoid_: overloaded, throttled, rate limited, at capacity, timed out
 
 **Allowed host**:
 A host this server may send an outbound request to. The set is derived from
