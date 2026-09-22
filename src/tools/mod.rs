@@ -62,12 +62,13 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::archive::{Archive, FileMap};
+use crate::cache_key::DiffKey;
 use crate::catalogue::Catalogue;
 use crate::error::Failure;
-use crate::log::{Line, Sink, Spent};
+use crate::log::{Line, Lookup, Sink, Spent};
 use crate::registry::{Hit, Registry, Versions};
 use crate::search::Search;
-use crate::store::{DiffStore, Memory};
+use crate::store::{DiffStore, Entry, Memory};
 
 /// Declare the tools, and build the collection and the dispatch from one list.
 ///
@@ -202,6 +203,11 @@ pub struct Ctx {
     /// a `Ctx` is cloned into every handler and the phases they spend have
     /// to add up to one call's.
     spent: Arc<Spent>,
+
+    /// What this request found in the store. Behind an [`Arc`] for the same
+    /// reason: the lookup is made inside a handler and the line is written
+    /// outside it.
+    lookup: Arc<Lookup>,
 }
 
 impl Ctx {
@@ -214,6 +220,7 @@ impl Ctx {
             store: Arc::new(DiffStore::live()),
             log: Sink::default(),
             spent: Arc::new(Spent::default()),
+            lookup: Arc::new(Lookup::default()),
         }
     }
 
@@ -249,6 +256,7 @@ impl Ctx {
             store: Arc::new(Memory::new().store()),
             log: Sink::default(),
             spent: Arc::new(Spent::default()),
+            lookup: Arc::new(Lookup::default()),
         }
     }
 
@@ -284,8 +292,9 @@ impl Ctx {
     /// call for fails there instead of going unasserted until the day it is
     /// live.
     ///
-    /// The log and the tally are not seams. Nothing outside this process is
-    /// behind either of them, which is the whole of what a seam is here.
+    /// The log, the tally and the lookup are not seams. Nothing outside this
+    /// process is behind any of them, which is the whole of what a seam is
+    /// here.
     pub fn seams(&self) -> &'static [&'static str] {
         let Self {
             archive: _,
@@ -294,6 +303,7 @@ impl Ctx {
             store: _,
             log: _,
             spent: _,
+            lookup: _,
         } = self;
 
         &["archive", "catalogue", "search", "store"]
@@ -304,14 +314,20 @@ impl Ctx {
     /// Not timed, and that is the difference rather than an omission. The
     /// `fetch` phase answers how long a call waited on a *registry*, and a
     /// cache read that counted towards it would report the call that avoided
-    /// two downloads as the one that waited longest.
+    /// two downloads as the one that waited longest. What is recorded
+    /// instead is what the lookup found, which is the other question an
+    /// operator asks of a slow call.
     ///
-    /// The handle is cloned out rather than borrowed, because writing an
-    /// entry outlives the call that produced it: the work goes to the
-    /// runtime's `waitUntil` and the context it came from is gone by the
-    /// time it runs.
-    pub fn store(&self) -> Arc<DiffStore> {
-        Arc::clone(&self.store)
+    /// Returns the seam with that recording attached rather than the seam
+    /// itself, for the reason [`Ctx::archive`] does: a handler is unchanged
+    /// by it — `ctx.store().get(..)` is the same call it always was — and
+    /// there is no way left to read the store without the line saying what
+    /// came back.
+    pub fn store(&self) -> Recorded<'_> {
+        Recorded {
+            store: &self.store,
+            lookup: &self.lookup,
+        }
     }
 
     /// A version's files.
@@ -397,6 +413,39 @@ impl<S> Clone for Timed<'_, S> {
 }
 
 impl<S> Copy for Timed<'_, S> {}
+
+/// The store, with what a lookup found written on the request.
+///
+/// The same shape as [`Timed`] and for the same reason, but not the same
+/// wrapper: what is recorded here is not a duration. A cache read is
+/// deliberately outside the fetch phase, so a seam that shared `Timed` would
+/// have to be given a stopwatch it must not start.
+#[derive(Debug, Clone, Copy)]
+pub struct Recorded<'a> {
+    store: &'a Arc<DiffStore>,
+    lookup: &'a Lookup,
+}
+
+impl Recorded<'_> {
+    /// The entry for `key`, and what that lookup found on the request's
+    /// line.
+    pub async fn get(self, key: &DiffKey) -> Option<Entry> {
+        let entry = self.store.get(key).await;
+
+        self.lookup.looked(entry.is_some());
+        entry
+    }
+
+    /// Remember `entry`, after the answer has already gone.
+    ///
+    /// The handle is cloned here rather than by a caller, because writing an
+    /// entry outlives the call that produced it: the work goes to the
+    /// runtime's `waitUntil` and the context it came from is gone by the
+    /// time it runs.
+    pub fn put(self, entry: Entry) {
+        Arc::clone(self.store).put(entry);
+    }
+}
 
 impl Timed<'_, Archive> {
     /// The files in `version` of `package`, and the time it took on the
@@ -504,8 +553,12 @@ pub async fn call(
 
     let started = Instant::now();
     let answer = dispatch(name, arguments, ctx).await;
-    ctx.log
-        .write(&line.taking(started.elapsed(), &ctx.spent).ending(&answer));
+    ctx.log.write(
+        &line
+            .taking(started.elapsed(), &ctx.spent)
+            .cached(&ctx.lookup)
+            .ending(&answer),
+    );
 
     // The one place a `Failure` is put on its channel. Every path into this
     // function returns one, so there is no arm that can answer without

@@ -501,6 +501,17 @@ waited rather than which document it waited for — and a tool that only reads
 a catalogue reporting no wait at all is the reading an operator would take
 for "this one never left the process".
 
+What the call found in the store is recorded the same way and by the same
+kind of wrapper: `Ctx::store()` hands back the seam with the lookup already
+written down, so `ctx.store().get(..)` is the call it always was and there is
+no way left to answer out of the cache without the line saying so. It is not
+`Timed`, because a cache read is deliberately outside the fetch phase — that
+phase answers how long the call waited on a *registry*, and a lookup counted
+towards it would report the call that avoided two downloads as the one that
+waited longest. What the line carries instead is `hit` or `miss`, and nothing
+at all for a tool that never asked: the two are different populations under
+one tool name, and a percentile over both describes neither.
+
 A `Note` is the other thing this module writes, and it is deliberately not a
 `Line`. A seam that must not fail a call has nowhere else to put a failure: a
 `Failure` would reach the model, and a `Line` is the dispatch's — one per

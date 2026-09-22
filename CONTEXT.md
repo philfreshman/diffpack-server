@@ -403,6 +403,16 @@ total to answer; how much Registry work the call caused is a different
 question and nothing asks it yet.
 _Avoid_: span, step, stage, timing
 
+**Cache outcome**:
+Whether a call's answer was read back from the DiffStore or worked out, as a
+Line carries it: `hit` or `miss`. Absent from the Line of a tool that never
+asks the store, for the reason a Phase that did not happen is absent — a hit
+rate taken over a column where most rows are tools with no cache to hit
+describes neither the cache nor the tools. The word `hit` here is the store's
+and not a Search's Hit, which is a package; the field name is what tells them
+apart, so neither is ever written bare.
+_Avoid_: cached (that is the field an agent reads), warm, cache status
+
 **Note**:
 What a seam leaves behind when it could not do its job and that is not a
 Failure. The DiffStore is the only one there is and is one by design: a cache
