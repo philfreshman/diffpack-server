@@ -15,6 +15,7 @@ pub mod log;
 pub mod mcp;
 pub mod page;
 pub mod registry;
+pub mod resources;
 pub mod router;
 pub mod search;
 pub mod store;

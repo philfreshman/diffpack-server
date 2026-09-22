@@ -13,6 +13,7 @@ api/mcp.rs          entry point: wraps the router in VercelLayer
 src/router.rs       routes, panic guard over the transport, origin config
 src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
 src/tools/          one module per tool: definition and handler together
+src/resources/      one module per resource: URI and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
 src/catalogue/      versions(registry, package) -> Versions, newest first
@@ -42,26 +43,35 @@ release is one file to change and one file to read.
 [`scripts/check-engine-seam.sh`](../scripts/check-engine-seam.sh) fails the
 build otherwise. See [ADR 0007](adr/0007-one-importer-of-the-engine.md).
 
-**A tool module goes through the seams, not around them.** A module under
-`src/tools/` may import the standard library, the MCP and serialisation
-crates, `futures` for the one case where a tool waits on two fetches at once,
-and `crate::{archive, cache_key, catalogue, engine, error, handle, page,
-registry, search, store}`. It may not name an HTTP client or the blob store:
-those are `fetch`'s and `store`'s business, and eight tools that each know how
-to fetch is eight places to fix a timeout. Nothing checks that this paragraph
-and the script's list agree, so a module added to one is added to the other by
-hand.
+**A tool or a resource module goes through the seams, not around them.** A
+module under `src/tools/` or `src/resources/` may import the standard library,
+the MCP and serialisation crates, `futures` for the cases where one of them
+waits on two fetches at once, and `crate::{archive, cache_key, catalogue,
+engine, error, handle, page, registry, resources, search, store, tools}`. It
+may not name an HTTP client or the blob store: those are `fetch`'s and
+`store`'s business, and eight tools that each know how to fetch is eight
+places to fix a timeout. Nothing checks that this paragraph and the script's
+list agree, so a module added to one is added to the other by hand.
+
+`resources` and `tools` are on that list for each other, which is why the two
+directories name each other: a tool's answer carries a `resource_link` and so
+has to know that resource's URI, and a resource is built out of the walks the
+tools own. See [ADR 0014](adr/0014-a-resource-is-a-projection-of-the-tools.md).
 [`scripts/check-tool-seams.sh`](../scripts/check-tool-seams.sh) fails the build
 otherwise, and its allow-list is the list above.
 
 `src/tools/mod.rs` is exempt from the import half of that rule, because it is
-the one file there that is not a tool: it is the collection, the `Ctx`, and
+the one file under either directory that is not a tool or a resource: it is
+the collection, the `Ctx`, and
 the dispatch, and those need what a tool must not have — `crate::log`, so that
 the one line per call is written once by the dispatch rather than nineteen
 times by the tools that remembered. That exact path and no other: a tool is
 free to grow into a directory, and `src/tools/thing/mod.rs` is then a tool
 like any other. The name deny-list still covers the collection, so the
-exemption is from the list and not from the rule.
+exemption is from the list and not from the rule. `src/resources/mod.rs` is a
+collection too and deliberately does not get one: it needs nothing a resource
+may not have, and an exemption granted before it is needed is a rule weakened
+for free.
 
 **`docs/cache-key.md` is normative, not descriptive.** The cache key is a
 contract with a TypeScript implementation (#27) that will never share a line of
@@ -90,10 +100,13 @@ origin list as parameters, which is the seam the transport tests drive.
 
 ### `src/mcp.rs` — what this server says it is
 
-The `ServerHandler`: identity, capabilities, protocol revisions, and the sorted
-tool list. It collects tools; it does not describe them — a tool's definition
-lives with its handler under `src/tools/` ([ADR
-0002](adr/0002-one-module-per-tool.md)). `Guarded` is also here: the wrapper
+The `ServerHandler`: identity, capabilities, protocol revisions, the sorted
+tool list, and the two lists a client discovers this server's resources
+through. It collects; it does not describe — a tool's definition lives with
+its handler under `src/tools/` ([ADR 0002](adr/0002-one-module-per-tool.md))
+and a resource's URI lives with its handler under `src/resources/`. Which URI
+resolves to what is `resources::read`'s, the way which name runs what is
+`tools::call`'s. `Guarded` is also here: the wrapper
 that turns a panic inside a handler into a JSON-RPC error rather than a hung
 request, which has to be inside the handler because `rmcp` runs handlers on a
 task of their own.
@@ -160,6 +173,43 @@ in turn: both constructors, the name, and the shortest call that reaches it.
 look like: it takes `self` and spreads `..self`, so it changes a context that
 has already chosen its world rather than filling in the half it was not
 given. A spread of `..Self::new()` is the shape that reopens this.
+
+### `src/resources/` — what an agent reads rather than calls
+
+One module per resource, in the shape `src/tools/` has and for the reason [ADR
+0002](adr/0002-one-module-per-tool.md) gives: a URI, its description and the
+handler that answers it, together. `mod.rs` is the collection — the two lists
+a client discovers them through, and the dispatch that reads one.
+
+Each module matches its own URI rather than the collection holding a table, so
+there is nothing to keep in step with the templates it advertises. There is
+also no order to get wrong: a handle carries no `/`, so
+`diffpack://diff/{handle}` and `diffpack://diff/{handle}/file/{path}` are told
+apart by their own shapes rather than by which matcher is tried first.
+
+The two lists are two methods because the `2026-07-28` schema gives them two
+shapes. A `Resource` carries a `uri` a client can follow as it stands and a
+`ResourceTemplate` carries a `uriTemplate` with a field to fill in, so
+`diffpack://registries` answers `resources/list` and the two diffs answer
+`resources/templates/list`. A template listed as a resource would be a URI a
+client followed literally and got `-32602` for.
+
+**Nothing here computes an answer a tool already computes.** The catalogue is
+`registry` serialised, the totals are `diff_package_versions`'s walk, the tree
+is `get_diff_tree`'s, and one file's patch is `get_file_diff`'s renderer. See
+[ADR 0014](adr/0014-a-resource-is-a-projection-of-the-tools.md).
+
+A read has one channel. `ReadResourceResult` carries contents and nothing
+else, so there is no `isError` half to put a message in and every failure is a
+JSON-RPC error — `Failure::refuse`, beside `respond`, which keeps the message
+for the failures that have one rather than answering "no resource at this URI"
+to a version that does not exist.
+
+What a tool cannot carry, a resource can: `ttlMs` and `cacheScope` are
+`CacheableResult`'s fields, and `CallToolResult` extends plain `Result`. Each
+resource states its own freshness — the catalogue changes when a build deploys
+and a comparison cannot change at all, because a handle that would be answered
+differently is one this build refuses.
 
 ### `src/registry.rs` — what a registry is
 
@@ -379,13 +429,23 @@ cursor format and the "this is a page of N" shape, so that there is one
 implementation of staying under it rather than one per tool. See [ADR
 0005](adr/0005-one-module-owns-the-response-ceiling.md).
 
-Two interfaces, because a tool's answer comes in two shapes. `paginate` takes
-a sequence and returns a `Page`: the items that fit, the next cursor, and the
+Three interfaces, because an answer comes in three shapes. `paginate` takes a
+sequence and returns a `Page`: the items that fit, the next cursor, and the
 total. `truncate` takes one blob — a file's content, a file's diff — and
 returns an `Excerpt`: as much as fits, a marker saying it was cut, and the
 whole thing's real byte count. Truncation lives here rather than in a module
 of its own because what the two share is the subtle part and what they differ
 in is one field; ADR 0005 records the choice and its cost.
+
+`fits` is the third, and the one with no smaller version of itself. A
+sequence too long is paged and a blob too long is cut, because half a file is
+still a readable half; a comparison's tree is neither, since the first nine
+tenths of one reads exactly like all of it. So what does not fit is
+*replaced*, and `diffpack://diff/{handle}` writes the statement that stands in
+for it. `PAYLOAD_CEILING` is conservative there rather than exact — that
+number is a third of the platform's because a tool's answer crosses the wire
+twice and a resource read carries its document once — and the margin is left
+where it is deliberately.
 
 `limit`, `cursor` and `max_bytes` are types this module owns — `page::Limit`,
 `page::Cursor` and `page::MaxBytes` — rather than two numbers and a string a

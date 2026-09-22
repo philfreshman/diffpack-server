@@ -1,9 +1,13 @@
 //! What this server tells a client it is, and what it can do.
 //!
 //! [`Diffpack`] is the MCP handler: one value, built fresh for every request,
-//! answering `server/discover` and `tools/list` today and the nineteen tools
-//! of phases 3 and 4 as they land. [`transport_config`] is how that handler is
-//! exposed over Streamable HTTP; [`crate::router`] puts the two together.
+//! answering `server/discover`, the two lists a client discovers this server
+//! through, and the calls and reads that follow them. It describes neither a
+//! tool nor a resource — [`crate::tools`] and [`crate::resources`] each hold
+//! a definition beside the handler that answers it, and what is left here is
+//! identity, capabilities and handing a request to the collection that owns
+//! it. [`transport_config`] is how the handler is exposed over Streamable
+//! HTTP; [`crate::router`] puts the two together.
 //!
 //! # Why there is no session
 //!
@@ -42,6 +46,8 @@ use rmcp::service::{NotificationContext, RequestContext, SubscriptionContext};
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 
+use crate::error::Failure;
+use crate::resources;
 use crate::tools::{self, Ctx};
 
 /// The name a client shows a user for this server.
@@ -99,14 +105,27 @@ impl ServerHandler for Diffpack {
     /// [`Self::supported_protocol_versions`], so there is one place to change
     /// when either moves.
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new(NAME, env!("CARGO_PKG_VERSION")))
-            .with_instructions(
-                "Diff two versions of a published package and read the result. \
-                 Works with npm, crates.io and PyPI. Start with `tools/list`: \
-                 every tool takes a registry, a package name and a version, and \
-                 names the registry the way that registry does.",
-            )
+        // Resources are advertised as well as served. The list answers
+        // whichever way this reads, so a server that offered them and said
+        // nothing here would reach a client as a server that has none —
+        // `server/discover` replaced the handshake, and this is the only
+        // place a client is told which requests are worth sending.
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+        .with_server_info(Implementation::new(NAME, env!("CARGO_PKG_VERSION")))
+        .with_instructions(
+            "Diff two versions of a published package and read the result. \
+             Works with npm, crates.io and PyPI. Start with `tools/list`: \
+             every tool takes a registry, a package name and a version, and \
+             names the registry the way that registry does. `resources/list` \
+             has the registries described in one document, and a comparison \
+             you have already made can be read back by URI as well as by \
+             tool.",
+        )
     }
 
     /// Every revision the SDK knows, oldest first.
@@ -141,6 +160,52 @@ impl ServerHandler for Diffpack {
     /// advertised.
     fn get_tool(&self, name: &str) -> Option<Tool> {
         tools::definition_of(name)
+    }
+
+    /// The resources a client can read by name, with the same freshness hint
+    /// the tool list carries and for the same reason: the catalogue changes
+    /// only when a build deploys.
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        Ok(ListResourcesResult::with_all_items(resources::catalogue())
+            .with_ttl_ms(TOOL_LIST_TTL_MS)
+            .with_cache_scope(CacheScope::Public))
+    }
+
+    /// The resources a client reads by filling a URI in.
+    ///
+    /// A separate method from [`Self::list_resources`] because they are
+    /// separate shapes — see [`crate::resources`] — and not because the
+    /// collection is split.
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        Ok(
+            ListResourceTemplatesResult::with_all_items(resources::templates())
+                .with_ttl_ms(TOOL_LIST_TTL_MS)
+                .with_cache_scope(CacheScope::Public),
+        )
+    }
+
+    /// Hand the read to the module that owns that URI.
+    ///
+    /// The same shape as [`Self::call_tool`] and for the same reason: which
+    /// URI resolves to what, and which channel a refusal takes, is decided
+    /// once in [`crate::resources`] rather than here.
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        resources::read(&request.uri, &self.ctx)
+            .await
+            .map(ReadResourceResponse::from)
+            .map_err(Failure::refuse)
     }
 
     /// Hand the call to the module that owns that name.

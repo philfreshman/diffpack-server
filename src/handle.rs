@@ -25,7 +25,16 @@ const HANDLE_VERSION: &str = "d1";
 
 /// What a caller asked for: the half of a [`DiffKey`] that comes from a tool's
 /// arguments rather than from this build.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Serialize` for one reader: `diffpack://diff/{handle}` (#16) answers with
+/// what was compared beside the comparison, because a URI carries an opaque
+/// handle and a document read out of a client's resource browser has no call
+/// beside it saying what was asked for. It is derived rather than written out
+/// there, so the field names an agent reads are these ones and there is no
+/// second list to keep in step. Distinct from [`DiffHandle`]'s own
+/// `Serialize`, which is the opaque string: that is how a handle *travels*
+/// and this is what it says.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Inputs {
     /// The registry that publishes the package.
     pub registry: Registry,

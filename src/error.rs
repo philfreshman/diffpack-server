@@ -310,6 +310,32 @@ impl Failure {
         }
     }
 
+    /// The same failure, on the one channel a resource read has.
+    ///
+    /// A read has no `isError` half to put anything in: `ReadResourceResult`
+    /// carries contents and nothing else, so a failure either is a JSON-RPC
+    /// error or is not reported. That is why this exists beside
+    /// [`Self::respond`] rather than being folded into it — the two channels
+    /// are a real choice for a tool call and not a choice at all here, and a
+    /// read that reused `respond` would have an `Ok(CallToolResult)` arm with
+    /// nowhere to send it.
+    ///
+    /// What a model loses by that is the message, which is why the message is
+    /// carried anyway for the failures that have one. A read of a comparison
+    /// can fail the way the tool that computes it fails — a version the
+    /// registry does not have — and "no resource at this URI" would be a
+    /// worse answer to that than the sentence naming the version.
+    pub fn refuse(self) -> ErrorData {
+        let message = self.message();
+        match self.respond() {
+            Err(error) => error,
+            // A tool error, arriving where there is no tool. Its message is
+            // the part worth keeping; `invalid_params` is the code, because
+            // what the client can act on is the URI it sent.
+            Ok(_) => ErrorData::invalid_params(redact(&message), None),
+        }
+    }
+
     /// Which failure this is, in one word, for the line [`crate::log`]
     /// writes.
     ///

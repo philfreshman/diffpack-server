@@ -36,6 +36,7 @@
 use std::collections::BTreeMap;
 
 use futures::try_join;
+use rmcp::model::Resource;
 use serde::{Deserialize, Serialize};
 
 use crate::archive::FileMap;
@@ -43,6 +44,7 @@ use crate::engine::{self, DiffFileEntry, DiffStatus, FileType, Patch};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
 use crate::registry::Registry;
+use crate::resources;
 use crate::store::Entry;
 use crate::tools::{Ctx, Tool};
 
@@ -253,6 +255,24 @@ impl Totals {
     }
 }
 
+/// How much changed across a whole comparison.
+///
+/// The one place a tree is counted, and public because there are two callers:
+/// this tool's summary, and the `diffpack://diff/{handle}` resource (#16),
+/// which answers with the same totals by the same walk rather than by a
+/// second one. Two walks that disagreed would give an agent two answers to
+/// one question with nothing to say which was wrong — the drift ADR 0013
+/// records for the patch renderer, in a second place.
+///
+/// The sample is built and dropped, which is the cost of having one walk
+/// rather than two. It is bounded by the number of files that *changed*,
+/// which is a handful of a package that ships thousands.
+pub fn totals(tree: &DiffFileEntry) -> Totals {
+    let mut totals = Totals::default();
+    walk(tree, &mut totals, &mut Vec::new());
+    totals
+}
+
 /// Add every file under `node` to `totals`, collecting the ones that changed.
 ///
 /// Directories are walked and not counted. The engine gives a directory the
@@ -374,6 +394,18 @@ impl Tool for DiffPackageVersions {
 
     type Args = Args;
     type Output = Output;
+
+    /// The one tool here whose answer names something a client has no URI
+    /// for yet. Every other tool either takes the handle this one minted or
+    /// is not about a comparison at all, so a link on those would be the same
+    /// URI repeated back at a caller already holding it.
+    ///
+    /// The URI is `crate::resources::diff`'s to spell. A tool that built one
+    /// out of a handle would be the second place the format is written, and
+    /// the first to be wrong when it moves.
+    fn links(output: &Output) -> Vec<Resource> {
+        vec![resources::diff::link(&output.handle)]
+    }
 
     async fn call(args: Args, ctx: &Ctx) -> Result<Output, Failure> {
         let handle = DiffHandle::mint(Inputs {
