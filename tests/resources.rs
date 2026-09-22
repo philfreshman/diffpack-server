@@ -468,6 +468,40 @@ async fn a_uri_this_server_does_not_serve_is_invalid_params() {
     }
 }
 
+/// A failure the comparison really had is not that same answer.
+///
+/// The collapse #85 is about. "This version does not exist" and "this URI is
+/// not ours" used to come back as one code, so a client reading the envelope
+/// — which is all a read gives it, since `ReadResourceResult` has no
+/// `isError` half — could not tell a mistyped version from a URI it built
+/// wrongly. Everything about the URI below is ours and well formed; what is
+/// missing is the version, which is the registry's answer and not the
+/// caller's to fix by rereading the template.
+///
+/// The codes are spelled out rather than imported. They are a wire contract,
+/// and a test that took them from the crate would agree with whatever the
+/// crate said.
+#[tokio::test]
+async fn a_version_the_registry_does_not_have_is_not_a_uri_that_is_not_ours() {
+    let failed = reading(&diff_uri(&unpublished())).await;
+    let stranger = reading("diffpack://nothing-here").await;
+
+    assert_eq!(
+        failed["error"]["code"], -32001,
+        "a version the registry does not have is a failure of the comparison, \
+         not a URI this server does not serve: got {failed}"
+    );
+    assert_eq!(
+        stranger["error"]["code"], -32602,
+        "a URI that resolves to nothing is the caller's to fix: got {stranger}"
+    );
+    assert_ne!(
+        failed["error"]["code"], stranger["error"]["code"],
+        "a read has one channel, so the code is the whole of what a client has \
+         to tell these two apart"
+    );
+}
+
 /// Nor does a handle that is not one, or one whose halves disagree.
 ///
 /// The two ways #16 says a URI is refused, and neither is checked here:
@@ -782,22 +816,20 @@ async fn an_encoded_traversal_is_a_missing_file_and_nothing_else() {
 /// directory has no content, so the engine reads one as absent on both sides
 /// and renders the sentence saying it is in neither version. That is false
 /// about a path the package ships.
+///
+/// `-32001` and not `-32602`, which is the code doing what this test used to
+/// need a sentence for. A path that never reached the comparison is a URI
+/// this server does not serve and gets `-32602`; a path that reached it and
+/// turned out to be a directory is the comparison's own answer. The two were
+/// one code and are not now, so there is nothing left here to read prose for.
 #[tokio::test]
 async fn a_directory_is_refused_rather_than_called_absent() {
     let answer = reading(&file_uri(&diffable(), "src")).await;
 
     assert_eq!(
-        answer["error"]["code"], -32602,
-        "a directory has no diff to read, got {answer}"
-    );
-    // The message and not only the code: "no resource at this URI" is what a
-    // path that never reached the comparison gets, and it would let this test
-    // pass against a server that had not implemented the template at all.
-    assert!(
-        answer["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("`src`") && message.contains("directory")),
-        "the refusal should say the path is a directory, got {answer}"
+        answer["error"]["code"], -32001,
+        "a directory has no diff to read, and that is the comparison's answer \
+         rather than a URI this server does not serve: got {answer}"
     );
 }
 
@@ -958,6 +990,16 @@ fn enormous() -> String {
 /// `tests/get_diff_tree.rs` has, for the same reason.
 fn diffable() -> String {
     handle("diffable", "1.0.0", "2.0.0")
+}
+
+/// A handle for a comparison against a version nothing published.
+///
+/// `diffable` 9.9.9 is `null` in the fixture index, which is the registry
+/// serving nothing at that URL rather than a hole in the fixture set — so the
+/// refusal that comes back is the live adapter's own and not one this suite
+/// invented.
+fn unpublished() -> String {
+    handle("diffable", "1.0.0", "9.9.9")
 }
 
 /// A handle for one npm comparison, at the defaults `diff_package_versions`
