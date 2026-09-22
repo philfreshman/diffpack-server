@@ -149,6 +149,16 @@ answer on the way out, and from the Budget, which is cumulative and the blob
 store's.
 _Avoid_: size limit, max size, quota, ceiling
 
+**Download slot**:
+One of the four permissions to be reading a body into this process at all.
+The Size cap's other half, and neither bounds this function's memory without
+it: one says how large a body may be, this says how many may be arriving, and
+what a package name in a tool argument can cost is the product. It belongs to
+the process rather than to a request, because a request is not what an
+instance serves several of. A call that finds none free waits rather than
+being refused.
+_Avoid_: permit, semaphore, concurrency limit, connection
+
 **Allowed host**:
 A host this server may send an outbound request to. The set is derived from
 the URLs the registry module builds, so it grows when a Registry is added and

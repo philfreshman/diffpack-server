@@ -17,7 +17,7 @@ src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
 src/catalogue/      versions(registry, package) -> Versions, newest first
 src/search/         hits(registry, query, limit) -> Vec<Hit>, best match first
-src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, cap
+src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, caps
 src/store/          DiffStore: get(&DiffKey) / put(entry)                      #22
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
@@ -291,6 +291,26 @@ somebody else's servers — which hosts may be reached, where a redirect may
 lead, what a `404` means to the seam that asked — and none of them is a rule
 about this project's own blob store, which is why `src/store/` has a client of
 its own and this module has no verb but `GET`.
+
+Two caps rather than one, and they are halves of the same guard. The size cap
+is the most one body may weigh; `DOWNLOADS_AT_ONCE` is the most bodies this
+process may be reading at all, taken as a slot before a request is sent and
+held until the body is in memory. What a package name in a tool argument can
+cost is the product of the two, so a cap on either alone bounds nothing: four
+128 MB bodies are the worst this function holds at once, and without the
+second number the worst is however many requests the platform sent this
+instance.
+
+The slots are the process's and not a request's, which is the point — a `Ctx`
+is built per request, so a cap held there would bound one caller against
+itself and leave an instance serving several of them unbounded. Four because
+two is the floor: `diff_package_versions` asks for both versions through one
+`try_join!`, and a cap below two would serialise the only call this server
+makes concurrently. A fifth body waits rather than being refused, and the
+wait is bounded by what a slot's holder can do with one — `UPSTREAM_TIMEOUT`
+covers the request and the body alike, so no slot is held past it however
+badly a registry behaves. The wait counts towards the call's fetch phase,
+because it is the same thing to whoever is waiting for the answer.
 
 A caller passes the refusals that differ between seams rather than this module
 guessing them, and the one header that differs. A `404` is a missing *version*
