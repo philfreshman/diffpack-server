@@ -673,6 +673,96 @@ async fn a_renamed_file_is_diffed_from_where_it_was() {
     );
 }
 
+/// A path encoded the way a URI template expands it reads the same file.
+///
+/// `{path}` is simple expansion under RFC 6570, which percent-encodes the
+/// reserved characters — `/` among them. The values this template is for are
+/// file paths, so very nearly every real expansion has a `/` in it, and a
+/// client that follows the spec asks for `src%2Findex.js`. Read as it stands
+/// that is a key no comparison has, so a conforming client would have been
+/// told every file it asked about was in neither version.
+///
+/// Held against the unencoded form rather than against a literal patch: the
+/// two spellings are one request, and what this is about is that they answer
+/// alike.
+#[tokio::test]
+async fn a_path_encoded_the_way_a_uri_template_expands_it_reads_the_same_file() {
+    let handle = diffable();
+
+    let encoded = contents(&file_uri(&handle, "src%2Findex.js")).await;
+    let plain = contents(&file_uri(&handle, "src/index.js")).await;
+
+    assert_eq!(
+        encoded[0]["text"], plain[0]["text"],
+        "the two spellings of one path are one request, got {encoded:?} against {plain:?}"
+    );
+    assert_eq!(
+        encoded[0]["mimeType"], plain[0]["mimeType"],
+        "and the same answer about whether it is a patch, got {encoded:?}"
+    );
+}
+
+/// An escape that is not one is refused rather than looked up.
+///
+/// A malformed URI and a file that is not there are different answers and a
+/// client can tell them apart: this is `-32602` on the protocol channel,
+/// where a path the comparison does not have is a successful read carrying
+/// the sentence that says so. Decoding that quietly fell through to the
+/// lookup would report the client's own broken URI as a missing file.
+///
+/// `%FF` is the other half: two hex digits that decode to a byte no UTF-8
+/// string can hold. A path is text here, so that is malformed too rather
+/// than something to render lossily.
+#[tokio::test]
+async fn a_path_whose_escapes_are_malformed_is_refused() {
+    for path in ["src%2", "src%zz.js", "src/%FF.js"] {
+        let answer = reading(&file_uri(&diffable(), path)).await;
+
+        assert_eq!(
+            answer["error"]["code"], -32602,
+            "`{path}` is not a path this server can decode: got {answer}"
+        );
+        // Not "no resource at this URI": the URI is one of ours and the
+        // client's own escape is what is wrong with it.
+        assert!(
+            answer["error"]["message"]
+                .as_str()
+                .is_some_and(|message| !message.contains("No resource at")),
+            "the refusal should say what is wrong with the path, got {answer}"
+        );
+    }
+}
+
+/// A decoded path is a key in the comparison and never a path on a disk.
+///
+/// Decoding is what makes `%2F` a `/`, which is the one character that could
+/// turn a lookup into a traversal if anything downstream ever opened a file
+/// with it. Nothing does — the value is a `FileMap` key — and this is here so
+/// that it stays that way: an encoded `../../etc/passwd` resolves to the
+/// sentence a path no version has gets, the same as any other absent file.
+///
+/// Green before the decoding landed as well as after, which is the point: it
+/// pins a property rather than proving a change.
+#[tokio::test]
+async fn an_encoded_traversal_is_a_missing_file_and_nothing_else() {
+    let handle = diffable();
+
+    let absent = contents(&file_uri(&handle, "nowhere/at/all.js")).await;
+
+    for path in ["..%2F..%2Fetc%2Fpasswd", "%2Fetc%2Fpasswd"] {
+        let traversal = contents(&file_uri(&handle, path)).await;
+
+        assert_eq!(
+            traversal[0]["text"], absent[0]["text"],
+            "`{path}` is a key no comparison has, got {traversal:?}"
+        );
+        assert_eq!(
+            traversal[0]["mimeType"], "text/plain",
+            "and it is a sentence rather than a patch, got {traversal:?}"
+        );
+    }
+}
+
 /// A directory is refused rather than called absent.
 ///
 /// The departure `get_file_diff` makes from the engine, inherited here: a

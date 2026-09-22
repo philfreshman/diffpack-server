@@ -16,6 +16,13 @@
 //! had to check a field first would eventually parse `@@` out of a file that
 //! has none.
 //!
+//! # Why the path is decoded
+//!
+//! `{path}` is simple expansion under RFC 6570, so a client that follows the
+//! spec percent-encodes the reserved characters — including the `/` that
+//! nearly every file path has. [`decoded`] resolves those escapes before the
+//! lookup, and an escape that is not one is a refusal rather than a miss.
+//!
 //! # Why the old path is looked up rather than asked for
 //!
 //! A renamed file needs both of its paths, and the tool's own description
@@ -26,6 +33,8 @@
 //! ships and which a reader has nothing in the answer to doubt with. It is
 //! the same departure `get_file_diff` makes for a directory, and for the same
 //! reason.
+
+use std::borrow::Cow;
 
 use rmcp::model::{CacheScope, ReadResourceResult, ResourceContents, ResourceTemplate};
 
@@ -45,9 +54,11 @@ pub fn uri_template() -> String {
 
 /// The handle and the path `uri` names, if this is a URI of ours at all.
 ///
-/// The path is taken as it stands, separators and all: it is the last thing
-/// in the URI, so there is nothing after it to be confused with. A handle
-/// carries no `/`, which is what tells this apart from the whole
+/// The path is taken to the end of the URI, separators and all: it is the
+/// last thing there, so there is nothing after it to be confused with. Its
+/// escapes are still in it — [`decoded`] resolves those, and doing it here
+/// would mean matching on a string this function had already changed. A
+/// handle carries no `/`, which is what tells this apart from the whole
 /// comparison's URI without either matcher having to be tried first.
 pub fn parts_in(uri: &str) -> Option<(&str, &str)> {
     let rest = uri.strip_prefix(super::diff::PREFIX)?;
@@ -84,18 +95,23 @@ pub async fn read(
     path: &str,
     ctx: &Ctx,
 ) -> Result<ReadResourceResult, Failure> {
+    // Before the comparison rather than after it: a URI the client cannot
+    // have meant is refused without two archives being downloaded to find
+    // out.
+    let wanted = decoded(path)?;
+
     let comparison = super::diff::compare(handle, ctx).await?;
 
     // Bound rather than written into the struct below, where it would be a
     // temporary living exactly as long as the statement that reads it.
-    let moved = moved_from(&comparison, path);
+    let moved = moved_from(&comparison, &wanted);
 
     let patch = get_file_diff::render(
         &comparison.from_files,
         &comparison.to_files,
         handle.inputs(),
         OneFile {
-            path,
+            path: &wanted,
             old_path: moved.as_deref(),
             // The defaults a caller gets by passing nothing but a handle and
             // a path, which is all a URI has room for.
@@ -104,6 +120,9 @@ pub async fn read(
         },
     )?;
 
+    // The segment as it arrived rather than as it decoded, so a client that
+    // encoded its path is answered at the URI it asked about. The two are
+    // the same string for a path that had nothing to escape.
     let contents = ResourceContents::text(
         patch.excerpt.text,
         format!("{}{SEPARATOR}{path}", super::diff::uri_of(handle)),
@@ -117,6 +136,97 @@ pub async fn read(
     Ok(ReadResourceResult::new(vec![contents])
         .with_ttl_ms(TTL_MS)
         .with_cache_scope(CacheScope::Public))
+}
+
+/// The `{path}` segment, with its percent-escapes resolved.
+///
+/// `{path}` is simple expansion under RFC 6570, which percent-encodes the
+/// reserved characters — `/` among them. Very nearly every value this
+/// template is for has a `/` in it, so a client that expands the template the
+/// way the spec says asks for `src%2Findex.js`, and a lookup of that string
+/// finds nothing: the resource would have told a conforming client that every
+/// file it asked about was in neither version.
+///
+/// Only this segment. The handle before it is decoded by
+/// [`DiffHandle::decode`] out of an alphabet with nothing to escape, and it
+/// is matched before this runs — so there is one segment here whose spelling
+/// is the caller's, and it is the only one taken apart this way.
+///
+/// The decoded value is a key in a [`FileMap`](crate::archive::FileMap) and
+/// never a path on a disk, which is what makes `%2F` ordinary rather than
+/// something to defend against: `..%2F..%2Fetc%2Fpasswd` becomes a key no
+/// comparison has, and gets the sentence any other absent path gets.
+///
+/// Written here on `std` rather than taken from a crate because a resource
+/// module may import the standard library, `futures` and the protocol crates
+/// and nothing else — `scripts/check-tool-seams.sh` holds it to that — and
+/// twenty lines is a smaller thing to answer for than a hole in that list.
+fn decoded(segment: &str) -> Result<Cow<'_, str>, Failure> {
+    // The common case and the one that must not allocate: a path with
+    // nothing to escape is already what it decodes to.
+    if !segment.contains('%') {
+        return Ok(Cow::Borrowed(segment));
+    }
+
+    let raw = segment.as_bytes();
+    let mut bytes = Vec::with_capacity(raw.len());
+    let mut at = 0;
+
+    while at < raw.len() {
+        let byte = raw[at];
+
+        if byte != b'%' {
+            bytes.push(byte);
+            at += 1;
+            continue;
+        }
+
+        // Two digits, both hexadecimal. `to_digit` and not `from_str_radix`,
+        // which accepts a leading sign and would read `%+f` as an escape.
+        let (Some(high), Some(low)) = (
+            raw.get(at + 1).and_then(|&digit| hex(digit)),
+            raw.get(at + 2).and_then(|&digit| hex(digit)),
+        ) else {
+            return Err(malformed(segment));
+        };
+
+        bytes.push(high * 16 + low);
+        at += 3;
+    }
+
+    // A path is text here — a `FileMap` is keyed by one — so bytes that spell
+    // no string are malformed rather than something to render lossily. That
+    // is the opposite of what extraction does to a file's *content*, and for
+    // the opposite reason: there the bytes are the answer, and here they are
+    // what names it.
+    String::from_utf8(bytes)
+        .map(Cow::Owned)
+        .map_err(|_| malformed(segment))
+}
+
+/// One hexadecimal digit's value, or nothing if it is not one.
+fn hex(digit: u8) -> Option<u8> {
+    char::from(digit)
+        .to_digit(16)
+        .and_then(|value| u8::try_from(value).ok())
+}
+
+/// A path whose escapes decode to nothing, as a refusal.
+///
+/// [`Failure::InvalidParams`] and not [`Failure::NoSuchResource`]: the URI is
+/// one of ours and the client's own escape is what is wrong with it. Both are
+/// `-32602`, but a read that fell through to the lookup instead would answer
+/// a broken URI with "File not present in either version." — the sentence a
+/// path the package really does not ship gets, which is a client told its
+/// typo is a fact about the package.
+fn malformed(segment: &str) -> Failure {
+    Failure::InvalidParams {
+        message: format!(
+            "`{segment}` is not a path this server can read: a `%` in a URI introduces \
+             two hexadecimal digits standing for one byte, and these spell no text. Pass \
+             the path as the comparison's tree gives it, percent-encoded or not."
+        ),
+    }
 }
 
 /// Where the file at `path` was in the first version, if it moved.
