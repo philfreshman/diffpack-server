@@ -1,10 +1,14 @@
 {
   "https://registry.npmjs.org/zod": "npm-zod.json",
   "https://crates.io/api/v1/crates/tokio": "crates-tokio.json",
+  "https://crates.io/api/v1/crates/leptos": "crates-leptos.json",
   "https://api.deps.dev/v3/systems/pypi/packages/requests": "pypi-requests.json",
+  "https://api.deps.dev/v3/systems/pypi/packages/jupyterlab": "pypi-jupyterlab.json",
   "https://registry.npmjs.org/%40types%2Fnode": "npm-types-node.json",
   "https://registry.npmjs.org/prereleases": "npm-prereleases.json",
   "https://api.deps.dev/v3/systems/pypi/packages/prereleases": "pypi-prereleases.json",
   "https://registry.npmjs.org/unreadable": "npm-unreadable.json",
+  "https://registry.npmjs.org/untagged": "npm-untagged.json",
+  "https://registry.npmjs.org/unpublished-latest": "npm-unpublished-latest.json",
   "https://registry.npmjs.org/not-a-real-package": null
 }

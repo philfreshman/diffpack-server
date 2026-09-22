@@ -65,7 +65,7 @@ use crate::archive::{Archive, FileMap};
 use crate::catalogue::Catalogue;
 use crate::error::Failure;
 use crate::log::{Line, Sink, Spent};
-use crate::registry::{Hit, Registry, Version};
+use crate::registry::{Hit, Registry, Versions};
 use crate::search::Search;
 use crate::store::{DiffStore, Memory};
 
@@ -132,6 +132,7 @@ tools! {
     diff_package_versions::DiffPackageVersions,
     get_diff_tree::GetDiffTree,
     get_file_content::GetFileContent,
+    get_file_diff::GetFileDiff,
     list_package_files::ListPackageFiles,
     list_package_versions::ListPackageVersions,
     resolve_archive_url::ResolveArchiveUrl,
@@ -413,13 +414,9 @@ impl Timed<'_, Archive> {
 }
 
 impl Timed<'_, Catalogue> {
-    /// Every published version of `package`, newest first, and the time it
-    /// took on the request's tally.
-    pub async fn versions(
-        self,
-        registry: Registry,
-        package: &str,
-    ) -> Result<Vec<Version>, Failure> {
+    /// Every published version of `package`, newest first, the one the
+    /// registry points at, and the time it took on the request's tally.
+    pub async fn versions(self, registry: Registry, package: &str) -> Result<Versions, Failure> {
         self.spent
             .while_fetching(self.seam.versions(registry, package))
             .await

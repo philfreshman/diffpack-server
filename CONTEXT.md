@@ -49,11 +49,28 @@ _Avoid_: metadata, index, manifest, JSON
 
 **Catalogue**:
 What a registry says a package's versions are: every published version, with
-the date the registry says it was published and whether it is a preview. It is
-about a Package where a FileMap is about one Version of one, it is read rather
-than extracted, and it is never cached — registry metadata goes stale when
-somebody publishes, and the Budget belongs to Diffs.
+the date the registry says it was published and whether it is a preview, and
+the Current version. It is about a Package where a FileMap is about one
+Version of one, it is read rather than extracted, and it is never cached —
+registry metadata goes stale when somebody publishes, and the Budget belongs
+to Diffs.
 _Avoid_: version list, releases, index, metadata
+
+**Current version**:
+The one release a registry itself points at: what it installs for somebody who
+names no version. Every registry carries one and each spells it its own way —
+npm's `dist-tags.latest`, crates.io's `default_version`, the `isDefault` flag
+deps.dev puts on a PyPI version. It is a third answer and not either of the
+other two: on `@types/node` the Newest first entry is a 24.x patch, 26.6.2 is
+the Current version, and neither is a Preview. It is read out of the Catalogue
+document and never looked up in the versions beside it, so a registry pointing
+at a version this server did not receive is reported as the registry spelled
+it rather than as no current version at all. It is the same fact a Hit's
+version is, read out of a different document: a Search answer carries it for
+npm and crates.io, and PyPI's Index carries no version at all.
+_Avoid_: latest as a name for it — the word is ambiguous between this and
+Newest first, so it appears here only in quotes, as the question an agent
+arrives with; default, stable, `dist-tag`
 
 **Newest first**:
 The order a Catalogue is answered in: most recently published first. Not the
