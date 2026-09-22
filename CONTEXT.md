@@ -132,6 +132,20 @@ answer on the way out, and from the Budget, which is cumulative and the blob
 store's.
 _Avoid_: size limit, max size, quota, ceiling
 
+**Bytes in flight**:
+The most this server may have downloading at once, added up across every body
+on the way to it. It is the Size cap's cumulative half: that one says what a
+single body may weigh, this one says what everything arriving together may
+weigh between them, because two archives that are each an ordinary thing to
+diff are twice that at the same moment and four of them are this function's
+memory. A download there is no room for waits for one already in flight to
+land — nothing about arriving at a busy moment is the caller's mistake, so
+the answer is the same answer, slightly later. Distinct from the Budget,
+which is the blob store's and is cumulative over time rather than over what
+is happening at once, and from the Response ceiling, which bounds one answer
+on the way out.
+_Avoid_: concurrency limit, semaphore, throttle, rate limit
+
 **Allowed host**:
 A host this server may send an outbound request to. The set is derived from
 the URLs the registry module builds, so it grows when a Registry is added and

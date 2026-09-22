@@ -23,6 +23,7 @@ directory was created (#40).
 | [0010](0010-newest-first-is-a-date.md) | Newest first is a date, not a direction | done, #18 |
 | [0011](0011-what-a-registry-publishes-is-its-own-seam.md) | What a registry publishes is its own seam | done, #19 |
 | [0012](0012-a-tree-is-paged-as-a-flat-sequence.md) | A tree is paged as a flat sequence | done, #14 |
+| [0013](0013-the-archive-seam-bounds-bytes-in-flight.md) | The archive seam bounds bytes in flight, not downloads | done, #26 |
 
 A new one goes in at the next number. The bar is the usual three: hard to
 reverse, surprising without the context, and the result of a real trade-off. A

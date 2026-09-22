@@ -188,10 +188,10 @@ reading `fixtures/archives/`, which is what lets the suite assert what a
 version's files are with no network and what lets the conformance suite (#24)
 run offline. See [ADR 0001](adr/0001-the-archive-seam-is-a-filemap.md).
 
-Three things are the same code for both adapters rather than the live one's
+Four things are the same code for both adapters rather than the live one's
 alone, because each is a rule about what this server does rather than about
 where bytes come from: the host allowlist `registry` derives, the size cap,
-and extraction. The fixture index is keyed by URL for the same reason — a
+the budget on what may be arriving at once, and extraction. The fixture index is keyed by URL for the same reason — a
 fetch path that built a URL of its own instead of asking `registry` finds
 nothing there, so `tests/archive.rs` is a test of resolution as well as of
 extraction.
@@ -201,6 +201,18 @@ in the set": `null`, meaning the registry serves nothing there. It is the
 offline suite's way of reaching the path a `404` takes, and the refusal it
 produces is built by the same constructor the live adapter uses, so the two
 cannot disagree about what a missing version reads like.
+
+The size cap bounds one body; `in_flight` bounds every body arriving at once.
+A fetch reserves what it may weigh before its first request and holds it until
+the bytes have become a `FileMap`, so the second call to ask for a version
+pair on a warm instance waits for the first one's archives to land rather than
+adding its two to them. The budget is the process's rather than a request's —
+a `Ctx` is built per request, so a budget one owned would be one budget per
+request — and it is stated in bytes rather than as a count of downloads,
+because a count of two would have bounded nothing: two is what one call asks
+for and nothing here asks for three. See [ADR
+0013](adr/0013-the-archive-seam-bounds-bytes-in-flight.md), which also records
+what it does not bound.
 
 Redirects are followed only while they stay on allowed hosts. A `302` is a
 request to wherever it points, so the alternative is an allowlist whose holes
@@ -255,6 +267,14 @@ back off each answer, so a `max-age` PyPI changed is a change made here. That
 is a document, not an answer — every
 query is matched against it afresh — so no search result is cached anywhere
 and nothing here goes near the blob store.
+
+Holding it is half of that policy and fetching it once is the other. A cold
+instance has nothing to hold, so a caller that finds the memo empty takes a
+turn before fetching and looks again once it has one: eight searches arriving
+together on a new instance cost one fetch of a 44 MB document rather than
+eight of them, each one held in full. The turn is the one lock in this module
+held across an `await` and is `tokio`'s for that reason; the two around the
+memo are `std`'s, held for an assignment and a clone.
 
 ### `src/fetch.rs` — the registries' HTTP client
 
