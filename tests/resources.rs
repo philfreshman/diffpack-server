@@ -162,6 +162,34 @@ async fn the_catalogue_is_not_a_template() {
     );
 }
 
+/// Every description a client is shown reads as a sentence.
+///
+/// These are the prose a model picks a resource on, and they are written as
+/// Rust string literals continued across lines with a trailing `\`. Drop one
+/// continuation and the literal keeps the source's indentation instead: the
+/// sentence still compiles, still says the right words, and reaches a model
+/// with a dozen spaces in the middle of it. Nothing else here would notice,
+/// because every other assertion in this file is about a URI or a field.
+///
+/// Over the whole of what a client is told rather than one description: the
+/// one that loses its continuation next is in a resource nobody has written
+/// yet.
+#[tokio::test]
+async fn no_description_a_client_reads_has_lost_a_line_continuation() {
+    let mut ragged = Vec::new();
+
+    for (where_from, description) in advertised().await {
+        if description.contains("  ") {
+            ragged.push(format!("{where_from}: {description}"));
+        }
+    }
+
+    assert!(
+        ragged.is_empty(),
+        "these reach a model with the source's indentation in them: {ragged:#?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The registry catalogue
 // ---------------------------------------------------------------------------
@@ -1046,6 +1074,59 @@ async fn templates() -> Vec<Value> {
             panic!("resources/templates/list should answer with an array, got {answer}")
         })
         .clone()
+}
+
+/// Every description a client is shown, and where it came from.
+///
+/// The two lists, and the link a tool's answer carries — which is the third
+/// place a resource describes itself and the one no listing would reach.
+async fn advertised() -> Vec<(String, String)> {
+    let mut said = Vec::new();
+
+    let listed = resources().await.into_iter().map(|resource| {
+        let uri = resource["uri"].as_str().unwrap_or("<no uri>").to_owned();
+        (uri, resource)
+    });
+    let templated = templates().await.into_iter().map(|template| {
+        let uri = template["uriTemplate"]
+            .as_str()
+            .unwrap_or("<no uri>")
+            .to_owned();
+        (uri, template)
+    });
+
+    let summary = call(
+        SUMMARY,
+        json!({
+            "registry": "npm",
+            "package": "diffable",
+            "from_version": "1.0.0",
+            "to_version": "2.0.0",
+        }),
+    )
+    .await;
+    let linked = summary["content"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a result carries content, got {summary}"))
+        .iter()
+        .filter(|block| block["type"] == "resource_link")
+        .map(|link| (format!("`{SUMMARY}`'s link"), link.clone()))
+        .collect::<Vec<_>>();
+
+    for (where_from, described) in listed.chain(templated).chain(linked) {
+        for field in ["title", "description"] {
+            if let Some(text) = described[field].as_str() {
+                said.push((format!("{where_from} {field}"), text.to_owned()));
+            }
+        }
+    }
+
+    assert!(
+        !said.is_empty(),
+        "this file's other tests would all have to be failing for there to be nothing here"
+    );
+
+    said
 }
 
 /// The per-request `_meta` a `2026-07-28` client attaches. See `tests/mcp.rs`.
