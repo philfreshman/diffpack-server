@@ -471,9 +471,12 @@ async fn an_entry_that_is_already_there_is_not_written_again() {
 /// the worst failure this cache has, because it is a confident wrong answer
 /// rather than a slow one.
 ///
-/// Only the fields a caller can send are varied. The schema number and the
-/// engine version are this build's and cannot be reached from the wire;
-/// `tests/cache_key.rs` holds those against the golden vectors.
+/// Every field a caller can send is varied but `registry`, which cannot be
+/// varied on its own: the fixture set publishes `diffable` on npm and nowhere
+/// else, so changing it alone is a package that is not there rather than a
+/// second comparison. The schema number and the engine version are this
+/// build's and cannot be reached from the wire at all. All three are held
+/// against the golden vectors by `tests/cache_key.rs`.
 #[tokio::test]
 async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
     let store = Memory::new();
@@ -487,6 +490,7 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
     // versions, so a different `from` or `to` is one of them compared with
     // itself — a real comparison, and not the baseline's.
     let variations = [
+        ("package", json!({ "package": "churny" })),
         ("from_version", json!({ "from_version": "2.0.0" })),
         ("to_version", json!({ "to_version": "1.0.0" })),
         (
