@@ -811,13 +811,14 @@ async fn the_paging_arguments_document_the_numbers_that_bind() {
 // The second seam, and a narrow one on purpose. Everything above goes over
 // the wire because that is where a definition and a handler can disagree.
 // What is left for these two is the part JSON cannot show: which `Failure`
-// the handler returned, and that the answer is a `Page<Version>` of typed
-// values rather than a shape that happens to serialise to the right JSON.
+// the handler returned, and that the answer carries a `Page<Version>` of
+// typed values rather than a shape that happens to serialise to the right
+// JSON.
 
 /// The handler answers in the crate's own types.
 #[tokio::test]
 async fn the_handler_answers_with_typed_versions() {
-    let page = ListPackageVersions::call(
+    let answer = ListPackageVersions::call(
         Args {
             registry: Registry::Crates,
             package: "tokio".to_owned(),
@@ -830,7 +831,7 @@ async fn the_handler_answers_with_typed_versions() {
     .expect("the fixture set has this crate");
 
     assert_eq!(
-        page.versions.items.first(),
+        answer.versions.items.first(),
         Some(&Version {
             version: "1.53.1".to_owned(),
             published_at: Some("2026-07-20T17:06:09.996426Z".to_owned()),
@@ -840,8 +841,8 @@ async fn the_handler_answers_with_typed_versions() {
          number — would pass every test above and fail a client validating \
          against the schema"
     );
-    assert_eq!(page.versions.total, 5);
-    assert_eq!(page.versions.next_cursor, None);
+    assert_eq!(answer.versions.total, 5);
+    assert_eq!(answer.versions.next_cursor, None);
 }
 
 /// Which failure it is, rather than which words it produced.
