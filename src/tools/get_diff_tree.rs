@@ -241,6 +241,21 @@ impl From<&DiffStatus> for Status {
     }
 }
 
+/// Every node of a comparison, in the order this tool walks them.
+///
+/// The whole tree: no subtree, no depth, no status filter — which is what
+/// "equivalent to `get_diff_tree` over the whole tree" means for the
+/// `diffpack://diff/{handle}` resource (#16), the second caller and the
+/// reason this is public. The resource answers with the nodes this tool would
+/// page through rather than with a second walk of the same tree, so a reader
+/// that followed the URI and a reader that followed the cursors see one
+/// comparison.
+pub fn nodes(tree: &DiffFileEntry) -> Vec<Node> {
+    let mut nodes = Vec::new();
+    flatten(tree, u32::MAX, &[], &mut nodes);
+    nodes
+}
+
 /// Every node under `parent`, depth first, in the comparison's own order.
 ///
 /// A directory comes before what is under it, and siblings are in the order

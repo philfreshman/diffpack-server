@@ -253,6 +253,24 @@ impl Totals {
     }
 }
 
+/// How much changed across a whole comparison.
+///
+/// The one place a tree is counted, and public because there are two callers:
+/// this tool's summary, and the `diffpack://diff/{handle}` resource (#16),
+/// which answers with the same totals by the same walk rather than by a
+/// second one. Two walks that disagreed would give an agent two answers to
+/// one question with nothing to say which was wrong — the drift ADR 0013
+/// records for the patch renderer, in a second place.
+///
+/// The sample is built and dropped, which is the cost of having one walk
+/// rather than two. It is bounded by the number of files that *changed*,
+/// which is a handful of a package that ships thousands.
+pub fn totals(tree: &DiffFileEntry) -> Totals {
+    let mut totals = Totals::default();
+    walk(tree, &mut totals, &mut Vec::new());
+    totals
+}
+
 /// Add every file under `node` to `totals`, collecting the ones that changed.
 ///
 /// Directories are walked and not counted. The engine gives a directory the

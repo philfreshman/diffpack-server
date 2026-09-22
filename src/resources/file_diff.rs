@@ -12,11 +12,16 @@
 use rmcp::model::ResourceTemplate;
 
 /// The URI a client fills in to read one file's diff.
-pub const TEMPLATE: &str = "diffpack://diff/{handle}/file/{path}";
+pub fn uri_template() -> String {
+    format!("{}{{handle}}{SEPARATOR}{{path}}", super::diff::PREFIX)
+}
+
+/// What stands between the handle and the path.
+const SEPARATOR: &str = "/file/";
 
 /// The template, as `resources/templates/list` shows it.
 pub fn template() -> ResourceTemplate {
-    ResourceTemplate::new(TEMPLATE, "file-diff")
+    ResourceTemplate::new(uri_template(), "file-diff")
         .with_title("File diff")
         .with_description(
             "One file's diff out of a comparison, with three lines of unchanged context \

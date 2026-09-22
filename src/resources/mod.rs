@@ -25,6 +25,8 @@ pub mod registries;
 use rmcp::model::{ReadResourceResult, Resource, ResourceTemplate};
 
 use crate::error::Failure;
+use crate::handle::DiffHandle;
+use crate::tools::Ctx;
 
 /// Every resource a client can read by name, in a fixed order.
 pub fn catalogue() -> Vec<Resource> {
@@ -42,14 +44,28 @@ pub fn templates() -> Vec<ResourceTemplate> {
 
 /// Read the resource `uri` names, or refuse a URI that is not one of ours.
 ///
+/// Each module matches its own URI, so there is no table here to keep in step
+/// with the templates above — and no order to get wrong: a handle is base64url
+/// behind a version prefix and carries no `/`, so the URI with a path in it
+/// and the URI without one are told apart by their own shapes rather than by
+/// which matcher was tried first.
+///
 /// A [`Failure::NoSuchResource`] is `-32602` on the protocol channel: a URI
 /// that resolves to nothing is something a client built, and there is no
-/// resource to have failed.
-pub fn read(uri: &str) -> Result<ReadResourceResult, Failure> {
-    match uri {
-        registries::URI => Ok(registries::read()),
-        unknown => Err(Failure::NoSuchResource {
-            uri: unknown.to_owned(),
-        }),
+/// resource to have failed. A handle that does not decode is the same code by
+/// a different route — [`DiffHandle::decode`] refuses it — which is what
+/// keeps the refusal in one module rather than in each resource that takes
+/// one.
+pub async fn read(uri: &str, ctx: &Ctx) -> Result<ReadResourceResult, Failure> {
+    if uri == registries::URI {
+        return Ok(registries::read());
     }
+
+    if let Some(handle) = diff::handle_in(uri) {
+        return diff::read(&DiffHandle::decode(handle)?, ctx).await;
+    }
+
+    Err(Failure::NoSuchResource {
+        uri: uri.to_owned(),
+    })
 }

@@ -9,6 +9,9 @@
 
 use axum::body::Body;
 use axum::http::Request;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
+use diffpack_server::handle::{DiffHandle, Inputs};
 use diffpack_server::mcp::Diffpack;
 use diffpack_server::registry::{ArchiveSource, Registry, VERSION_RULE};
 use diffpack_server::router;
@@ -298,6 +301,144 @@ async fn the_catalogue_is_the_registry_module_rather_than_a_copy_of_it() {
 }
 
 // ---------------------------------------------------------------------------
+// One comparison
+// ---------------------------------------------------------------------------
+
+/// Reading a comparison answers what the two tools answer.
+///
+/// The whole of what this resource is for: the same comparison, reachable by
+/// URI instead of by two calls. A reader that got different totals from the
+/// resource and the tool would have two answers to one question and nothing
+/// to say which was wrong — so both halves are held against the tools that
+/// own them, the totals against `diff_package_versions` and the tree against
+/// a full walk of `get_diff_tree`.
+#[tokio::test]
+async fn reading_a_comparison_answers_what_the_tools_answer() {
+    let summary = call(
+        SUMMARY,
+        json!({
+            "registry": "npm",
+            "package": "diffable",
+            "from_version": "1.0.0",
+            "to_version": "2.0.0",
+        }),
+    )
+    .await;
+
+    let handle = summary["structuredContent"]["handle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the summary carries a handle, got {summary}"))
+        .to_owned();
+
+    let document = read(&diff_uri(&handle)).await;
+
+    assert_eq!(
+        document["totals"], summary["structuredContent"]["totals"],
+        "the resource and the summary should count one comparison the same way, \
+         got {document} against {summary}"
+    );
+    assert_eq!(
+        document["tree"],
+        json!(walk(&handle).await),
+        "the resource's tree should be the tree the paginating tool walks to"
+    );
+}
+
+/// And it says what was compared.
+///
+/// A document read out of a client's resource browser has no call beside it
+/// saying what was asked for, and the handle in the URI is opaque. Without
+/// the inputs the totals are a comparison of something.
+#[tokio::test]
+async fn reading_a_comparison_says_what_was_compared() {
+    let document = read(&diff_uri(&diffable())).await;
+
+    assert_eq!(
+        document["inputs"],
+        json!({
+            "registry": "npm",
+            "package": "diffable",
+            "from_version": "1.0.0",
+            "to_version": "2.0.0",
+            "similarity_threshold": 0.75,
+            "ignore_whitespace": false,
+        }),
+        "a comparison should name everything it was made from, got {document}"
+    );
+}
+
+/// A comparison nothing has computed is read anyway.
+///
+/// The eviction case, and the only case there is here: each request is served
+/// by a server built for it, with no cache behind it and nothing kept between
+/// calls, so the handle below names a comparison this process has never made.
+/// ADR 0006 is why it can be answered at all — the inputs travel in the URI
+/// beside the `diff_id`, so a miss costs a recomputation instead of a URI
+/// that has quietly stopped resolving. A `diff_id` in this segment could only
+/// ever have been read out of the cache.
+#[tokio::test]
+async fn a_comparison_nothing_has_computed_is_recomputed_rather_than_refused() {
+    let document = read(&diff_uri(&diffable())).await;
+
+    assert_eq!(
+        document["totals"]["modified"],
+        json!(1),
+        "a comparison nobody has made yet is one this server can make: got {document}"
+    );
+}
+
+/// A URI that is not one of ours resolves to nothing, and says so.
+///
+/// `-32602`, which is where the `2026-07-28` revision moved resource-not-found
+/// from `-32002` — the code it always described. The protocol channel, because
+/// there is no resource to have failed and the client, which was told the list,
+/// is who can fix the call.
+#[tokio::test]
+async fn a_uri_this_server_does_not_serve_is_invalid_params() {
+    for uri in [
+        "diffpack://nothing-here",
+        "https://example.invalid/diff",
+        // The templates as they are listed, followed literally.
+        DIFF_TEMPLATE,
+        FILE_TEMPLATE,
+    ] {
+        let answer = reading(uri).await;
+
+        assert_eq!(
+            answer["error"]["code"], -32602,
+            "`{uri}` resolves to nothing: got {answer}"
+        );
+    }
+}
+
+/// Nor does a handle that is not one, or one whose halves disagree.
+///
+/// The two ways #16 says a URI is refused, and neither is checked here:
+/// `src/handle.rs` decodes the segment and verifies it, so this resource
+/// writes no parsing of its own. The edited handle below names one comparison
+/// and describes another, which is what a client does when it changes the
+/// package in a URI and leaves the identifier because the identifier looks
+/// like the opaque part.
+#[tokio::test]
+async fn a_segment_that_is_not_a_handle_is_invalid_params() {
+    for handle in [
+        "not-a-handle".to_owned(),
+        // The right prefix and a payload that is not base64.
+        "d1:not-base64!".to_owned(),
+        edited(&diffable(), "package", json!("elsewhere")),
+        edited(&diffable(), "diff_id", json!("0".repeat(64))),
+    ] {
+        let uri = diff_uri(&handle);
+        let answer = reading(&uri).await;
+
+        assert_eq!(
+            answer["error"]["code"], -32602,
+            "`{handle}` is not a handle this server minted: got {answer}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // What a client may hold on to
 // ---------------------------------------------------------------------------
 
@@ -335,10 +476,89 @@ async fn every_read_says_how_fresh_it_is_and_who_may_cache_it() {
 /// Every URI this server will read, filled in where it is a template.
 ///
 /// One list, so that a resource added without a freshness hint or without a
-/// refusal of its own fails rather than going unasserted. It grows as the
-/// templates become fillable.
+/// refusal of its own fails rather than going unasserted.
 async fn readable() -> Vec<String> {
-    vec![REGISTRIES.to_owned()]
+    vec![REGISTRIES.to_owned(), diff_uri(&diffable())]
+}
+
+/// The URI one whole comparison is read at.
+fn diff_uri(handle: &str) -> String {
+    DIFF_TEMPLATE.replace("{handle}", handle)
+}
+
+/// A handle for `diffable` 1.0.0 → 2.0.0, minted rather than fetched.
+///
+/// The tool that mints one is called where the *agreement* between the two is
+/// what is being asserted. Everywhere else a handle is just the segment, and
+/// minting it here is no calls rather than one. The same helper
+/// `tests/get_diff_tree.rs` has, for the same reason.
+fn diffable() -> String {
+    DiffHandle::mint(Inputs {
+        registry: Registry::Npm,
+        package: "diffable".to_owned(),
+        from_version: "1.0.0".to_owned(),
+        to_version: "2.0.0".to_owned(),
+        similarity_threshold: 0.75,
+        ignore_whitespace: false,
+    })
+    .encode()
+}
+
+/// The tool that mints what the diff resources take.
+const SUMMARY: &str = "diff_package_versions";
+
+/// The tool that walks a comparison's tree.
+const TREE: &str = "get_diff_tree";
+
+/// Every node of `handle`'s comparison, by following `get_diff_tree`'s
+/// cursors to the end.
+///
+/// The tool rather than a second walk of the same tree: what is being
+/// asserted is that the resource and the tool agree, which a tree this test
+/// built itself could not show.
+async fn walk(handle: &str) -> Vec<Value> {
+    let mut nodes = Vec::new();
+    let mut cursor: Option<String> = None;
+
+    loop {
+        let mut arguments = json!({ "handle": handle });
+        if let Some(cursor) = &cursor {
+            arguments["cursor"] = json!(cursor);
+        }
+
+        let page = call(TREE, arguments).await;
+        let page = &page["structuredContent"];
+
+        nodes.extend(
+            page["items"]
+                .as_array()
+                .unwrap_or_else(|| panic!("a page carries items, got {page}"))
+                .iter()
+                .cloned(),
+        );
+
+        match page["nextCursor"].as_str() {
+            Some(next) => cursor = Some(next.to_owned()),
+            None => return nodes,
+        }
+    }
+}
+
+/// Call `tool` with `arguments`, returning the `result` — or panicking with
+/// the JSON-RPC error, so a failure says what the server objected to.
+async fn call(tool: &str, arguments: Value) -> Value {
+    let answer = post(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": tool, "arguments": arguments, "_meta": meta() },
+    }))
+    .await;
+
+    if let Some(error) = answer.get("error") {
+        panic!("expected a result, got JSON-RPC error {error}");
+    }
+    answer["result"].clone()
 }
 
 /// The values a filled-in pattern is compared against the module at.
@@ -419,19 +639,46 @@ async fn contents(uri: &str) -> Vec<Value> {
 /// The whole `result` of a read — or a panic naming the JSON-RPC error, so a
 /// failure says what the server objected to.
 async fn result_of(uri: &str) -> Value {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "resources/read",
-        "params": { "uri": uri, "_meta": meta() },
-    }))
-    .await;
+    let answer = reading(uri).await;
 
     if let Some(error) = answer.get("error") {
         panic!("expected to read `{uri}`, got JSON-RPC error {error}");
     }
 
     answer["result"].clone()
+}
+
+/// The whole JSON-RPC answer to a read, error and all.
+async fn reading(uri: &str) -> Value {
+    post(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "resources/read",
+        "params": { "uri": uri, "_meta": meta() },
+    }))
+    .await
+}
+
+/// `handle` with one field of its payload replaced.
+///
+/// What a client does to a handle it can read part of: change the thing it is
+/// asking about and leave the identifier, which looks like an internal
+/// detail. The result is a handle whose `diff_id` no longer names the inputs
+/// beside it — and the encoding is spelled out here rather than taken from
+/// the crate, so this is a forgery a client could send rather than one this
+/// server helped build. The same helper `tests/get_diff_tree.rs` has.
+fn edited(handle: &str, field: &str, value: Value) -> String {
+    let encoded = handle
+        .strip_prefix("d1:")
+        .expect("a handle this server minted");
+    let payload = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .expect("a handle's payload is base64url");
+    let mut payload: Value = serde_json::from_slice(&payload).expect("a handle's payload is JSON");
+
+    payload[field] = value;
+
+    format!("d1:{}", URL_SAFE_NO_PAD.encode(payload.to_string()))
 }
 
 /// Everything `resources/list` answers with.

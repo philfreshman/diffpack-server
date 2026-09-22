@@ -202,7 +202,8 @@ impl ServerHandler for Diffpack {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        resources::read(&request.uri)
+        resources::read(&request.uri, &self.ctx)
+            .await
             .map(ReadResourceResponse::from)
             .map_err(Failure::refuse)
     }
