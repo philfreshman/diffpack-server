@@ -472,7 +472,7 @@ is built per request, so a cap held there would bound one caller against
 itself and leave an instance serving several of them unbounded. Four because
 two is the floor: `diff_package_versions::compare` asks for both archives of
 a comparison through one `try_join!`, and a cap below two would serialise the
-only shape of call this server makes concurrently. There used to be three
+only shape of call this server makes concurrently. There used to be four
 copies of that call and the number did not depend on which of them was
 running: each `bytes()` takes one slot and gives it back before returning, so
 no caller holds a slot while waiting on another, and there is no hold-and-wait
