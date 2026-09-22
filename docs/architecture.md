@@ -434,6 +434,26 @@ disagree about; the entries a sweep takes are the oldest by `uploadedAt`, whole
 entries at a time, and an entry larger than the whole budget is refused before
 anything is listed rather than emptying the cache to no purpose.
 
+**The head comes before the room is asked for, and the order is load-bearing.**
+A write skips a blob that is already there, so room asked for first is room a
+write can decline to use — and an entry put a second time would evict other
+comparisons to make space it never puts anything in. Sharper than wasteful,
+because the entry being written is in the listing the sweep reads and may be
+the oldest thing in it: the room it asks for can be freed by deleting the very
+blobs the write is about to skip, and a delete that has not propagated yet is
+a head that still sees one on its way out. Skip, delete, and the entry is
+gone. Bounded rather than silent — `get` reads half an entry as a miss and the
+miss rewrites it — but a sweep spent for nothing either way. So an entry
+already there is not admitted at all, and what makes a second `put` happen is
+a lookup that missed when it should not have: a transient failure, or two
+invocations computing one comparison at once.
+
+That is a head per blob on a write that does go ahead, and the write is
+backgrounded, so no caller waits on it. The head inside the write is still
+there and is not the first one repeated: a sweep happens between the two, and
+it is long enough for another invocation to land the blob this one is about to
+write.
+
 Two numbers rather than one, and the 16 MB between them is the point. Two
 invocations can admit at the same moment, each against a total that did not
 include the other's entry, and a delete takes up to a minute to propagate — so

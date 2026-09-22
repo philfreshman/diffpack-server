@@ -170,6 +170,30 @@ pub struct DiffStore {
     log: Sink,
 }
 
+/// What a store says about a blob at a pathname.
+///
+/// Three answers rather than a `bool`, because a store that could not say is
+/// not a store that said no, and a write turns on the difference: a blob
+/// that is there is one to skip, and a question that went unanswered is a
+/// write to abandon. The entry may well be there, and the cost of skipping a
+/// write that was needed is one more recomputed diff — where the cost of
+/// making one that was not is an `uploaded_at` reset on an entry eviction
+/// orders by.
+///
+/// Named for the question rather than for [`Held`], which is one blob a
+/// [`Memory`] is keeping. This is an answer about a blob and not a blob.
+enum Presence {
+    /// The blob is there, so there is nothing to write and no room to ask
+    /// for.
+    There,
+
+    /// The blob is not there.
+    Missing,
+
+    /// The store did not say, and has already left a note saying so.
+    Unknown,
+}
+
 /// Where a store's blobs actually live.
 ///
 /// Variants rather than a trait, for the reason [ADR
@@ -388,23 +412,82 @@ impl DiffStore {
                 return;
             };
 
-            if !self.admitting(bytes.len() as u64).await {
-                return;
+            self.writing_whatever_is_missing(vec![(meta.key.meta_path(), bytes)])
+                .await;
+            return;
+        }
+
+        // Both blobs together: they are one entry, and an entry admitted by
+        // halves is the thing the budget is measured in arriving in a shape
+        // the budget cannot see.
+        self.writing_whatever_is_missing(vec![
+            (meta.key.meta_path(), bytes),
+            (meta.key.patches_path(), patches),
+        ])
+        .await;
+    }
+
+    /// Write every one of `blobs` this store does not already hold, inside
+    /// the budget.
+    ///
+    /// # Why the store is asked what it holds before it is asked for room
+    ///
+    /// A write skips a blob that is already at its pathname — see
+    /// [`DiffStore::write`] — so room asked for before that is known is room
+    /// a write can decline to use. An entry put a second time would then
+    /// evict other comparisons to make space it never puts anything in: the
+    /// cache ends up smaller and holding what it would have held anyway.
+    ///
+    /// Sharper than wasteful, because the entry being written is in the
+    /// listing the sweep reads and may be the oldest thing in it. The room
+    /// it asks for can be freed by deleting the very blobs the write is
+    /// about to skip — and a delete this store has not finished propagating
+    /// is a head that still sees a blob on its way out, so the write skips,
+    /// the delete lands, and the entry is gone. Bounded rather than silent:
+    /// [`DiffStore::get`] reads half an entry as a miss and the miss rewrites
+    /// it, so the cost is a recomputed diff. It is still a sweep spent for
+    /// nothing.
+    ///
+    /// So the heads come first, and an entry already there is not admitted
+    /// at all — there is no room to ask for, because nothing is going to be
+    /// written. What that costs is a head per blob on a write that does go
+    /// ahead, on work the runtime drains after the answer has gone and that
+    /// no caller is waiting on. What it saves on a write that does not is
+    /// the listing and every delete a sweep would have made.
+    ///
+    /// The second head, inside [`DiffStore::write`], is not the first one
+    /// repeated. A sweep happens between them, and it is long enough for
+    /// another invocation to land the blob this one is about to write; the
+    /// head immediately before the put is what keeps that from resetting the
+    /// moment a blob was uploaded, which is the order eviction runs in.
+    ///
+    /// Blobs whose pathname this store cannot answer for abandon the whole
+    /// write rather than their own half of it. A head that failed is not a
+    /// blob that is missing, and writing the rest of the entry around it is
+    /// how a `patches.json` ends up without the `meta.json` that names it —
+    /// an orphan nothing ever reads and the budget counts forever.
+    async fn writing_whatever_is_missing(&self, blobs: Vec<(String, Vec<u8>)>) {
+        let mut missing = Vec::with_capacity(blobs.len());
+        for (pathname, bytes) in blobs {
+            match self.holds(&pathname).await {
+                Presence::There => {}
+                Presence::Missing => missing.push((pathname, bytes)),
+                Presence::Unknown => return,
             }
+        }
 
-            self.write(&meta.key.meta_path(), bytes).await;
+        let incoming: u64 = missing.iter().map(|(_, bytes)| bytes.len() as u64).sum();
+        if incoming == 0 {
             return;
         }
 
-        // Room for both blobs, asked for once: they are one entry, and an
-        // entry admitted by halves is the thing the budget is measured in
-        // arriving in a shape the budget cannot see.
-        if !self.admitting((bytes.len() + patches.len()) as u64).await {
+        if !self.admitting(incoming).await {
             return;
         }
 
-        self.write(&meta.key.meta_path(), bytes).await;
-        self.write(&meta.key.patches_path(), patches).await;
+        for (pathname, bytes) in missing {
+            self.write(&pathname, bytes).await;
+        }
     }
 
     /// Make room for an entry of `incoming` bytes, and say whether there is
@@ -498,6 +581,32 @@ impl DiffStore {
             Source::Unavailable(why) => {
                 self.gave_up::<()>(why);
                 false
+            }
+        }
+    }
+
+    /// Whether this store holds a blob at `pathname`.
+    ///
+    /// Not [`DiffStore::read`], and the difference is what a head is for: the
+    /// question is whether a blob is there, and downloading one to find out
+    /// would be paying for an entry's bytes to decide not to write them.
+    async fn holds(&self, pathname: &str) -> Presence {
+        match &self.source {
+            Source::Live(api) => match api.head(pathname).await {
+                Ok(Some(_)) => Presence::There,
+                Ok(None) => Presence::Missing,
+                Err(_) => {
+                    self.gave_up::<()>(WRITING);
+                    Presence::Unknown
+                }
+            },
+            Source::Memory(memory) => match memory.holds(pathname) {
+                true => Presence::There,
+                false => Presence::Missing,
+            },
+            Source::Unavailable(why) => {
+                self.gave_up::<()>(why);
+                Presence::Unknown
             }
         }
     }

@@ -669,6 +669,121 @@ async fn a_sweep_takes_the_oldest_entries_whole_and_the_newest_survive() {
     );
 }
 
+/// A put of an entry the store already holds evicts nothing.
+///
+/// Room is asked for before the write knows whether it has anything to
+/// write, and a write skips a blob that is already at its pathname — so an
+/// entry put a second time can sweep other comparisons out of a store to
+/// make room it then never puts anything in. The cache is smaller afterwards
+/// and holds the same entries it would have held anyway.
+///
+/// What makes a second put happen at all is a read that missed although it
+/// should not have: a transient failure on the lookup, or two invocations
+/// computing the same comparison at once. A store whose reads are lost is
+/// both of those, staged rather than raced — the same seam
+/// `an_entry_that_is_already_there_is_not_written_again` drives, under a
+/// budget tight enough that a sweep would run.
+#[tokio::test]
+async fn a_put_of_an_entry_already_there_makes_no_room_it_will_not_use() {
+    let store = Memory::new();
+
+    let first = call(|| store.store(), at(0)).await;
+    lands(&store, &first).await;
+    let entry = held(&store);
+
+    let second = call(|| store.store(), at(1)).await;
+    lands(&store, &second).await;
+
+    // Room for the two that are there and nothing more, so admitting
+    // anything at all has to evict.
+    let missed = Memory::losing_reads(&store);
+    let budgeted = || missed.store().budgeting(2 * entry + entry / 16, 2 * entry);
+
+    let again = call(budgeted, at(1)).await;
+    assert_eq!(
+        again["structuredContent"]["cached"],
+        json!(false),
+        "the call has to have missed, or there is no second put to make: got {again}"
+    );
+
+    // Long enough that a sweep would have finished: this store keeps its
+    // blobs in a map, so a listing and a delete are microseconds away.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mut expected: Vec<String> = [&first, &second]
+        .into_iter()
+        .flat_map(|answer| [meta_of(answer), patches_of(answer)])
+        .collect();
+    expected.sort();
+
+    assert_eq!(
+        store.written(),
+        expected,
+        "putting an entry that is already there asked for room the write then \
+         skipped, and the older comparison paid for it"
+    );
+}
+
+/// A put of the oldest entry does not sweep its own blobs away.
+///
+/// The sharp end of the same defect. The entry being put is in the listing a
+/// sweep reads and may be the oldest thing in it, so the room it asks for
+/// can be freed by deleting the very blobs the write is about to skip.
+///
+/// Against a store that forgets a blob the moment it is told to, the two
+/// halves cancel: the delete lands, the write's head then misses, and both
+/// blobs are written again. Against a real one they do not — Vercel Blob
+/// takes up to a minute to propagate a delete, so the head can still see a
+/// blob that is on its way out, skip the write, and leave the entry gone
+/// once the delete arrives.
+///
+/// What is asserted here is the half this store can state, and it is the
+/// half that decides the other: the entry's blobs were never touched. A
+/// sweep that did not delete them has nothing to propagate and no window to
+/// do it in. `uploaded_at` is what says so, and it is also the field
+/// eviction orders on — rewriting the entry would move a comparison asked
+/// for often to the back of that queue.
+#[tokio::test]
+async fn a_put_of_the_oldest_entry_does_not_sweep_itself_away() {
+    let store = Memory::new();
+
+    let oldest = call(|| store.store(), at(0)).await;
+    lands(&store, &oldest).await;
+    let entry = held(&store);
+
+    let newer = call(|| store.store(), at(1)).await;
+    lands(&store, &newer).await;
+
+    let uploaded = |at: &str| {
+        store
+            .uploaded_at(at)
+            .unwrap_or_else(|| panic!("`{at}` should be there, {:?} is", store.written()))
+    };
+    let (meta, patches) = (meta_of(&oldest), patches_of(&oldest));
+    let before = (uploaded(&meta), uploaded(&patches));
+
+    // Room for the two that are there and nothing more, and the entry put
+    // again is the one a sweep would take first.
+    let missed = Memory::losing_reads(&store);
+    let budgeted = || missed.store().budgeting(2 * entry + entry / 16, 2 * entry);
+
+    let again = call(budgeted, at(0)).await;
+    assert_eq!(
+        again["structuredContent"]["cached"],
+        json!(false),
+        "the call has to have missed, or there is no second put to make: got {again}"
+    );
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    assert_eq!(
+        (uploaded(&meta), uploaded(&patches)),
+        before,
+        "the sweep deleted the entry being put and the write put it back, which \
+         against a store whose deletes propagate later is the entry lost"
+    );
+}
+
 /// An entry that could never fit is refused before anything is deleted.
 ///
 /// The sharpest way to lose a cache: an entry larger than the whole budget
