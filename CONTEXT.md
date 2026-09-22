@@ -441,13 +441,21 @@ _Avoid_: span, step, stage, timing
 
 **Cache outcome**:
 Whether a call's answer was read back from the DiffStore or worked out, as a
-Line carries it: `hit` or `miss`. Absent from the Line of a tool that never
-asks the store, for the reason a Phase that did not happen is absent — a hit
-rate taken over a column where most rows are tools with no cache to hit
-describes neither the cache nor the tools. The word `hit` here is the store's
-and not a Search's Hit, which is a package; the field name is what tells them
-apart, so neither is ever written bare.
-_Avoid_: cached (that is the field an agent reads), warm, cache status
+Line carries it: `hit`, `miss` or `no_store`. Absent from the Line of a tool
+that never asks the store, for the reason a Phase that did not happen is
+absent — a hit rate taken over a column where most rows are tools with no
+cache to hit describes neither the cache nor the tools. `no_store` is that
+same rule one level down and is a value rather than a second kind of
+absence: a deployment with no credentials has no DiffStore to hit, so every
+one of its calls would read `miss` and its hit rate would be the flat
+hundred percent miss a working cold cache is — while an absent field there
+would instead read as the tool having stopped asking. It is the deployment's
+own state and not a lookup's, so it is the same answer for every call an
+instance serves. The word `hit` here is the store's and not a Search's Hit,
+which is a package; the field name is what tells them apart, so neither is
+ever written bare.
+_Avoid_: cached (that is the field an agent reads), warm, cache status,
+unavailable (that is a Cause, and it is a registry)
 
 **Note**:
 What a seam leaves behind when it could not do its job and that is not a
