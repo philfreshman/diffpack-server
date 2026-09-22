@@ -190,6 +190,67 @@ async fn every_changed_file_is_remembered_with_its_patch_already_rendered() {
     );
 }
 
+/// A comparison is named by every argument, not by the package and the pair.
+///
+/// Each variation below changes one field of the cache key and nothing else,
+/// and each has to be a miss with an entry of its own. A field left out of
+/// the key would show here as a warm answer to a question nobody had asked —
+/// the worst failure this cache has, because it is a confident wrong answer
+/// rather than a slow one.
+///
+/// Only the fields a caller can send are varied. The schema number and the
+/// engine version are this build's and cannot be reached from the wire;
+/// `tests/cache_key.rs` holds those against the golden vectors.
+#[tokio::test]
+async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
+    let store = Memory::new();
+
+    let first = call(&store, diffable()).await;
+    let named = |answer: &Value| answer["structuredContent"]["diff_id"].clone();
+
+    // One field each, against the same baseline. `diffable` publishes two
+    // versions, so a different `from` or `to` is one of them compared with
+    // itself — a real comparison, and not the baseline's.
+    let variations = [
+        ("from_version", json!({ "from_version": "2.0.0" })),
+        ("to_version", json!({ "to_version": "1.0.0" })),
+        (
+            "similarity_threshold",
+            json!({ "similarity_threshold": 0.5 }),
+        ),
+        ("ignore_whitespace", json!({ "ignore_whitespace": true })),
+    ];
+
+    let compared = 1 + variations.len();
+
+    for (field, change) in variations {
+        let mut arguments = diffable();
+        for (key, value) in change.as_object().expect("an object of changes") {
+            arguments[key] = value.clone();
+        }
+
+        let answer = call(&store, arguments).await;
+
+        assert_eq!(
+            answer["structuredContent"]["cached"],
+            json!(false),
+            "a different `{field}` is a different comparison, got {answer}"
+        );
+        assert_ne!(
+            named(&answer),
+            named(&first),
+            "a different `{field}` is named differently, got {answer}"
+        );
+    }
+
+    assert_eq!(
+        store.written().len(),
+        2 * compared,
+        "one entry per comparison, and an entry is two blobs: {:?}",
+        store.written()
+    );
+}
+
 /// The blob at `pathname`, as the JSON it is.
 fn blob(store: &Memory, pathname: &str) -> Value {
     let bytes = store
