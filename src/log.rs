@@ -43,7 +43,7 @@ pub struct Line {
     pub result: &'static str,
 
     /// Whether the answer was remembered or worked out, where the call asked
-    /// the store at all.
+    /// the store at all — or that there was no store to ask.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache: Option<&'static str>,
 
@@ -285,6 +285,17 @@ pub struct Lookup {
 
     /// Whether any lookup found its entry.
     found: AtomicBool,
+
+    /// Whether the store a lookup was made in is a store at all.
+    ///
+    /// A deployment fact and not a lookup's: it is settled when the store is
+    /// built, by whether there were credentials to build a client from, and
+    /// is the same answer for every call this instance serves. Kept here
+    /// rather than read off the store when the line is written because the
+    /// line is written by the dispatch, which has a `Ctx` and not a store —
+    /// and putting it where the other two are keeps one rule for how this
+    /// field is filled in.
+    storeless: AtomicBool,
 }
 
 impl Lookup {
@@ -294,18 +305,48 @@ impl Lookup {
         self.found.fetch_or(found, Ordering::Relaxed);
     }
 
-    /// `hit`, `miss`, or nothing where the call never asked the store.
+    /// Record a lookup that had no store to make.
+    ///
+    /// Beside [`Lookup::looked`] rather than a third argument to it, because
+    /// it is not a third thing a lookup found: nothing was looked in. A
+    /// store that is not there answers `None` to every `get`, so a call that
+    /// went through `looked` would be indistinguishable from a cold cache —
+    /// which is the whole of what this records.
+    pub fn found_no_store(&self) {
+        self.asked.store(true, Ordering::Relaxed);
+        self.storeless.store(true, Ordering::Relaxed);
+    }
+
+    /// `hit`, `miss`, `no_store`, or nothing where the call never asked the
+    /// store.
     ///
     /// Absent rather than `miss` for the reason [`Phases::fetch`] is absent
     /// rather than zero: a hit rate taken over a column where most rows are
     /// tools with no cache to hit describes neither the cache nor the tools.
+    ///
+    /// `no_store` is the same rule one level down, and is a value rather
+    /// than a second kind of absence. A deployment with no credentials
+    /// answers every lookup with nothing, so counted as a miss its hit rate
+    /// is a flat hundred percent miss — which is what a cache that is
+    /// working and cold reads as. Left absent instead it would be
+    /// indistinguishable from a tool that never asks, so the field says
+    /// which of the two it is looking at.
+    ///
+    /// A hit is checked first and cannot be reached storelessly: a store
+    /// that is not there has nothing to serve.
     pub fn outcome(&self) -> Option<&'static str> {
-        self.asked
-            .load(Ordering::Relaxed)
-            .then(|| match self.found.load(Ordering::Relaxed) {
-                true => "hit",
-                false => "miss",
-            })
+        if !self.asked.load(Ordering::Relaxed) {
+            return None;
+        }
+
+        if self.found.load(Ordering::Relaxed) {
+            return Some("hit");
+        }
+
+        Some(match self.storeless.load(Ordering::Relaxed) {
+            true => "no_store",
+            false => "miss",
+        })
     }
 }
 
