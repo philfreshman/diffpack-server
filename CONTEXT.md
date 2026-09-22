@@ -47,6 +47,20 @@ fact and not a caller's, so a tool asks where a version's archive is and is
 given either.
 _Avoid_: metadata, index, manifest, JSON
 
+**Registry document**:
+Whatever a registry serves at one URL, before anything has been read out of
+it. It is the whole word for the four things this server fetches — an
+Archive, a Listing, the document a Catalogue is read from, an Index — and it
+names what they have in common and nothing else: each is one URL this server
+is allowed to ask, one body it will hold up to the Size cap, and one answer
+that is either bytes or a Failure. What is *in* one is never this word's
+business; that is what the four names above are for, and a message to a model
+uses those. So it appears in this crate's own prose and never in a tool name,
+a parameter or a field.
+_Avoid_: body (that is what one weighs, not what it is), payload, response,
+Resource — that word points the other way, at something this server serves
+rather than something it fetches
+
 **Catalogue**:
 What a registry says a package's versions are: every published version, with
 the date the registry says it was published and whether it is a preview, and

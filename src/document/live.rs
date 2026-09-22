@@ -56,10 +56,10 @@ impl Live {
 
     /// Whatever `url` serves, refusing anything over `limit`.
     ///
-    /// The weighing here is `fetch`'s and is not repeated by the caller: it
-    /// refuses a declared length before a byte of the body is read and stops
-    /// the running total at the limit, which is a cap applied before the
-    /// memory it is guarding has been spent rather than after.
+    /// The weighing here is [`crate::fetch`]'s and is not repeated by the
+    /// caller: it refuses a declared length before a byte of the body is read
+    /// and stops the running total at the limit, which is a cap applied
+    /// before the memory it is guarding has been spent rather than after.
     pub async fn fetch(&self, url: &str, limit: u64, about: &About<'_>) -> Result<Body, Failure> {
         let bytes = fetch::bytes(
             url,
