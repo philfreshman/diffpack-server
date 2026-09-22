@@ -65,7 +65,9 @@ other two: on `@types/node` the Newest first entry is a 24.x patch, 26.6.2 is
 the Current version, and neither is a Preview. It is read out of the Catalogue
 document and never looked up in the versions beside it, so a registry pointing
 at a version this server did not receive is reported as the registry spelled
-it rather than as no current version at all.
+it rather than as no current version at all. It is the same fact a Hit's
+version is, read out of a different document: a Search answer carries it for
+npm and crates.io, and PyPI's Index carries no version at all.
 _Avoid_: latest as a name for it — the word is ambiguous between this and
 Newest first, so it appears here only in quotes, as the question an agent
 arrives with; default, stable, `dist-tag`
