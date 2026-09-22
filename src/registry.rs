@@ -241,10 +241,44 @@ impl Registry {
                 (listed, document.dist_tags.latest)
             }
 
+            // crates.io carries **four** pointers, and on a crate mid-release
+            // cycle they disagree:
+            //
+            //     leptos:  default=0.8.20  max=0.9.0-beta
+            //              newest=0.9.0-beta  max_stable=0.8.20
+            //     bevy:    default=0.19.1  max=0.20.0-rc.1
+            //              newest=0.20.0-rc.1  max_stable=0.19.1
+            //     serde:   default=1.0.229 max=1.0.229
+            //              newest=1.0.229  max_stable=1.0.229
+            //
+            // `default_version` is the one read, and the other three are
+            // named here so that the next reader knows they were considered
+            // rather than missed.
+            //
+            // `max_version` and `newest_version` include prereleases, so on
+            // any crate with a beta out they answer "the latest version" with
+            // the beta. That is the answer this field exists to stop giving.
+            //
+            // `max_stable_version` agrees with `default_version` on every
+            // crate checked, and it is still not the one: it is derived from
+            // version numbers, where `default_version` is the pointer
+            // crates.io's own page defaults to and `cargo add` resolves. That
+            // is what makes it the same *question* npm's `dist-tags.latest`
+            // and PyPI's `isDefault` answer, rather than three registries
+            // that happen to agree today. A maintainer who yanks the newest
+            // stable release moves `default_version` and leaves a derivation
+            // of the version numbers behind.
             Self::Crates => {
                 #[derive(Deserialize)]
                 struct Document {
                     versions: Vec<Release>,
+                    #[serde(rename = "crate")]
+                    package: Package,
+                }
+                #[derive(Deserialize)]
+                struct Package {
+                    #[serde(default)]
+                    default_version: Option<String>,
                 }
                 #[derive(Deserialize)]
                 struct Release {
@@ -262,7 +296,7 @@ impl Registry {
                         published_at: release.created_at,
                     })
                     .collect::<Vec<_>>();
-                (listed, None)
+                (listed, document.package.default_version)
             }
 
             // deps.dev sorts these lexically by version string, which is

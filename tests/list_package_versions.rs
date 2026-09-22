@@ -360,6 +360,46 @@ async fn an_npm_packages_current_version_is_the_tag_and_not_the_newest_publish()
     );
 }
 
+/// crates.io carries four pointers and on a crate mid-release-cycle they
+/// disagree. `leptos`'s document says all four:
+///
+/// ```text
+/// default=0.8.20  max=0.9.0-beta  newest=0.9.0-beta  max_stable=0.8.20
+/// ```
+///
+/// `max_version` and `newest_version` include prereleases, so reading either
+/// of them answers "the latest version of `leptos`" with a beta — which is
+/// the answer that makes this field worse than not having it. The fixture
+/// carries all four so that reading the wrong one produces a wrong version
+/// rather than nothing, and `0.9.0-beta` is also the most recently published
+/// release, so the entry below cannot be reached by reading the list either.
+///
+/// `max_stable_version` agrees with `default_version` here and on every crate
+/// checked; which of *those* two is read is a choice no fixture can force,
+/// and `src/registry.rs` is where it is argued.
+#[tokio::test]
+async fn a_crates_io_crates_current_version_is_stable_when_the_newest_release_is_a_preview() {
+    let result = call(json!({
+        "registry": "crates",
+        "package": "leptos",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["currentVersion"],
+        json!("0.8.20"),
+        "`cargo add leptos` resolves 0.8.20, which is what crates.io's own \
+         page defaults to: got {result}"
+    );
+
+    assert_eq!(
+        versions(&result).first(),
+        Some(&"0.9.0-beta"),
+        "the most recently published release is the preview, which is the \
+         answer the other two pointers would have given: got {result}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Reading it a page at a time
 // ---------------------------------------------------------------------------
