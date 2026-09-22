@@ -14,6 +14,17 @@
 //! have to decide what to do about it, and the only correct answer is the
 //! one this module gives, which is to recompute.
 //!
+//! The exception is the entry that says a patch is missing from it, and it
+//! is the flag's rather than a gap in the rule. An entry over `entry_cap` is
+//! whole without a `patches.json` at all, so a reader that recomputed on the
+//! absence that entry declares would never serve one — and since #84 an
+//! entry the per-patch cap trimmed says the same thing while having the
+//! blob. Losing *that* blob is served as a hit with no patches in it. What
+//! it costs is the patches that did fit, until the entry is evicted; what it
+//! cannot cost is an answer, because what reads patches back asks for one
+//! file's and renders that file when the entry has none. See
+//! [`DiffStore::get`].
+//!
 //! # A cache failure is never a diff failure
 //!
 //! Every way this module can fail ends in a miss. The store being down costs
@@ -57,6 +68,13 @@ pub struct Entry {
     /// Written now because the extraction has already happened: rendering
     /// every changed file at this moment costs almost nothing, where doing it
     /// later costs two archive downloads (#15).
+    ///
+    /// And read back for exactly that: this is the only half of an entry that
+    /// can answer `get_file_diff` and the file-diff resource, because a tree
+    /// holds statuses, paths and line counts and never a file's contents. A
+    /// reader asks for the one file it is about and renders that file when
+    /// there is nothing here for it — see `patches_omitted` below for the two
+    /// ways there can be nothing.
     pub patches: BTreeMap<String, Patch>,
 }
 
@@ -75,14 +93,26 @@ struct Meta {
     #[serde(flatten)]
     key: DiffKey,
 
-    /// Whether this entry was written without its patches.
+    /// Whether any patch this entry should have is not in it.
     ///
     /// The difference between a comparison whose patches were dropped and
-    /// one with nothing to patch, which is otherwise the same absent blob.
+    /// one with nothing to patch, which is otherwise the same absence.
     /// Whatever comes to read an entry back has to tell them apart: one
     /// means render it on demand, the other means there is nothing to
-    /// render. `get_file_diff` renders on demand every time today and will
-    /// want this the moment it looks in the store first.
+    /// render.
+    ///
+    /// Patches go missing two ways and this is true of both. An entry over
+    /// `entry_cap` is written without any of them, which is the absent
+    /// `patches.json` [`DiffStore::get`] reads below; a patch over
+    /// `patch_cap` is left out of a `patches.json` that is written and holds
+    /// the rest. The second is the one this was silent about, and a file
+    /// absent from an entry declaring nothing was dropped is byte for byte a
+    /// file that did not change.
+    ///
+    /// It is the entry's own record of what is in it and not the thing a
+    /// reader turns one file on. What answers for a file is whether this
+    /// entry holds that file's patch, and rendering it when the entry does
+    /// not is right whichever of the two ways it went missing (#84).
     ///
     /// Defaulted rather than required, because a blob written before this
     /// field existed is an entry whose patches are where they should be.
@@ -346,6 +376,16 @@ impl DiffStore {
         // whose every patch is silently missing. So it is a miss, and the
         // miss is what repairs it: recomputing heads past the `meta.json`
         // that is there and writes the blob that is not.
+        //
+        // The flag is true of an entry the per-patch cap took one file from
+        // as well, and that one does have a `patches.json` — so the arm
+        // below is reached for it only when the blob was lost rather than
+        // never written, and such an entry is then served without the
+        // patches that did fit instead of being rewritten. What that costs
+        // is those patches, until the entry is evicted. What it cannot cost
+        // is a wrong answer: a reader asks this entry for one file's patch
+        // and renders the file when there is none, which is what it does for
+        // every patch either cap took.
         let patches = match self.read(&key.patches_path()).await {
             Some(bytes) => serde_json::from_slice(&bytes).ok()?,
             None if meta.patches_omitted => BTreeMap::new(),
@@ -380,6 +420,8 @@ impl DiffStore {
     /// that cannot be written whole is not written at all rather than left
     /// as a `meta.json` whose patches never arrived.
     async fn writing(&self, entry: Entry) {
+        let rendered = entry.patches.len();
+
         // Measured on the patch's own text rather than on the JSON it
         // becomes. The two differ by a couple of dozen bytes of punctuation
         // and escaping against a quarter of a megabyte, and the text is the
@@ -392,7 +434,12 @@ impl DiffStore {
 
         let mut meta = Meta {
             key: entry.key,
-            patches_omitted: false,
+            // Counted rather than left `false` for the branch below to set.
+            // The cap above is the other way patches go missing, and an entry
+            // that lost one to it and said nothing was describing itself the
+            // way a comparison with nothing to patch does — which is the one
+            // distinction this field exists to draw.
+            patches_omitted: patches.len() < rendered,
             tree: entry.tree,
         };
 

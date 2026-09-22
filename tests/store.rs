@@ -71,6 +71,22 @@ fn diffable() -> Value {
     })
 }
 
+/// The same package compared with itself: a real comparison in which nothing
+/// changed.
+///
+/// What a comparison with nothing to patch is, without a second fixture set
+/// to hold one. Every file is `unchanged`, so no patch is rendered and none
+/// goes missing — which is the side of `patches_omitted` that has to stay
+/// `false`.
+fn unchanged() -> Value {
+    json!({
+        "registry": "npm",
+        "package": "diffable",
+        "from_version": "1.0.0",
+        "to_version": "1.0.0",
+    })
+}
+
 /// The whole point of the cache, as an agent sees it.
 ///
 /// The first call downloads two archives and compares them; the second is
@@ -240,6 +256,68 @@ async fn a_patch_over_the_cap_is_left_out_and_the_others_are_kept() {
     );
 }
 
+/// An entry that left one patch out says a patch was left out.
+///
+/// The other way patches go missing, and the one the flag used to be silent
+/// about. A file whose patch was over the per-patch cap is absent from
+/// `patches.json` — byte for byte what a file that did not change looks
+/// like — so an entry declaring that nothing was dropped says the same thing
+/// about the one file it cannot answer for as it says about the one there was
+/// never anything to answer.
+///
+/// Read off the blob rather than off the wire, and not for convenience: a
+/// reader that finds no patch for a file the tree says changed renders it
+/// instead, whichever way the patch went missing, so no answer this server
+/// gives differs on this flag. It is the entry's own record of what is in it,
+/// and the entry is where it can be read.
+#[tokio::test]
+async fn an_entry_that_left_one_patch_out_says_a_patch_was_left_out() {
+    let store = Memory::new();
+
+    let answer = call(|| store.store().capping_patches_at(100), diffable()).await;
+    settles(&store, 2).await;
+
+    assert_eq!(
+        blob(&store, &meta_of(&answer))["patches_omitted"],
+        json!(true),
+        "one file's patch was dropped for its size, and the entry has to say \
+         so"
+    );
+
+    let kept = blob(&store, &patches_of(&answer));
+    assert!(
+        kept.as_object().is_some_and(|kept| !kept.is_empty()),
+        "and the patches that fit are still beside it, which is what makes \
+         this a different entry from one that dropped all of them: got {kept}"
+    );
+}
+
+/// A comparison with nothing to patch is not one whose patches were dropped.
+///
+/// The distinction the flag exists to draw, from the side that has to stay
+/// `false`: a version compared with itself changes no file, so there is no
+/// patch to render and none missing. An entry that said otherwise would send
+/// a reader looking for something that was never there — and a flag that is
+/// true whenever it is easier to say true says nothing at all.
+#[tokio::test]
+async fn a_comparison_with_nothing_to_patch_says_nothing_was_dropped() {
+    let store = Memory::new();
+
+    let answer = call(|| store.store(), unchanged()).await;
+    settles(&store, 2).await;
+
+    assert_eq!(
+        blob(&store, &patches_of(&answer)),
+        json!({}),
+        "a version against itself changes no file, so nothing is rendered"
+    );
+    assert_eq!(
+        blob(&store, &meta_of(&answer))["patches_omitted"],
+        json!(false),
+        "and an entry with nothing to patch has dropped nothing"
+    );
+}
+
 /// An entry too big to keep whole keeps its tree and says its patches are gone.
 ///
 /// The tree is the expensive half to recompute and the small half to store,
@@ -309,11 +387,11 @@ async fn an_entry_that_dropped_its_patches_is_still_remembered() {
 /// The two blobs are written one after the other, so a write that fails
 /// between them leaves a `meta.json` whose `patches.json` never arrived. That
 /// is not the absence above: this one says nothing was dropped, so answering
-/// with it would serve a comparison whose every patch is silently missing —
-/// a changed file that a reader of the entry would take for one with nothing
-/// to render. Nothing reads an entry's *patches* back yet; `get_file_diff`
-/// renders on demand every time (#84), so this is a wrong answer waiting
-/// rather than one being given.
+/// with it would serve a comparison whose every patch is silently missing.
+/// What that costs is not a wrong answer — a reader asks the comparison for
+/// one file's patch and renders the file when there is none — but every one
+/// of them: the two downloads this entry exists to save, on every call, for
+/// as long as the half-written entry is there.
 ///
 /// So it is a miss, and the miss is what repairs it: the recomputed entry
 /// heads past the `meta.json` that is there and writes the blob that is not.
@@ -339,6 +417,68 @@ async fn half_an_entry_is_not_a_cache_hit() {
         store.written(),
         vec![meta_of(&answer), patches_of(&answer)],
         "and the miss writes back the blob that was gone"
+    );
+}
+
+/// An entry that lost the patches it kept still answers for every file.
+///
+/// The one state the flag's correction moved out of the rule above, held
+/// where it can be seen. An entry the per-patch cap trimmed says a patch is
+/// missing from it *and* has a `patches.json`, so a lost one is read as the
+/// absence the entry declared rather than as the half it is, and the entry is
+/// served without the patches that did fit rather than being rewritten.
+///
+/// What that costs is those patches, until eviction takes the entry — the
+/// two downloads this entry exists to save, on every call for one file's
+/// diff, for as long as it is there. What it cannot cost is a wrong answer,
+/// and that is the half worth pinning: a file absent from an entry is a file
+/// to render, never a file reported unchanged, so the warm answer is the cold
+/// one whichever way the patch went missing.
+#[tokio::test]
+async fn an_entry_that_lost_the_patches_it_kept_still_answers_for_every_file() {
+    let store = Memory::new();
+    let capped = || store.store().capping_patches_at(100);
+
+    let answer = call(capped, diffable()).await;
+    settles(&store, 2).await;
+
+    store.forget(&patches_of(&answer));
+
+    let again = call(capped, diffable()).await;
+    assert_eq!(
+        again["structuredContent"]["cached"],
+        json!(true),
+        "an entry that says a patch was dropped is whole without a \
+         `patches.json`, and says the same thing when the cap took one: got \
+         {again}"
+    );
+
+    let asked = json!({
+        "handle": answer["structuredContent"]["handle"].clone(),
+        "path": "src/added.js",
+    });
+
+    let cold = Memory::new();
+    assert_eq!(
+        call_tool(capped, "get_file_diff", asked.clone()).await,
+        call_tool(|| cold.store(), "get_file_diff", asked.clone()).await,
+        "and a file whose patch went with the blob is rendered, which is the \
+         same answer it has always given"
+    );
+
+    let missed = one_sided(capped, "get_file_diff", asked).await;
+    assert_eq!(
+        missed["isError"],
+        json!(true),
+        "rendered rather than served, because the patches that did fit are \
+         gone with the blob: got {missed}"
+    );
+
+    assert_eq!(
+        store.written(),
+        vec![meta_of(&answer)],
+        "and nothing rewrites them, which is what this costs until the entry \
+         is evicted"
     );
 }
 
@@ -634,6 +774,188 @@ async fn a_read_of_the_whole_comparison_is_served_the_stored_tree_too() {
     assert!(
         missed.get("error").is_some(),
         "with nothing to be served the same read has to fetch: got {missed}"
+    );
+}
+
+/// One file's patch comes out of the entry too, archives and all.
+///
+/// The half of a cache hit `get_file_diff` could not spend. A tree holds
+/// statuses, paths and line counts and never a file's contents, so an entry's
+/// own patches are the only thing in it that can answer this tool — and they
+/// have been rendered into every entry since #21 and read by nothing.
+///
+/// Driven through [`ONE_SIDED`] like the tree above: the second version is
+/// not there to fetch, so a call that answers is a call that rendered
+/// nothing. The control is the same call against the whole fixture set with
+/// nothing cached, which is the patch this tool has always given.
+#[tokio::test]
+async fn a_file_diff_is_served_the_stored_patch_rather_than_the_archives() {
+    let store = Memory::new();
+
+    let diffed = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+    let asked = json!({
+        "handle": diffed["structuredContent"]["handle"].clone(),
+        "path": "src/index.js",
+    });
+
+    let served = one_sided(|| store.store(), "get_file_diff", asked.clone()).await;
+    assert_eq!(
+        served["isError"],
+        json!(false),
+        "the patch was in the store, and the second version is not there to \
+         fetch: got {served}"
+    );
+
+    let cold = Memory::new();
+    assert_eq!(
+        served,
+        call_tool(|| cold.store(), "get_file_diff", asked.clone()).await,
+        "and it is the patch the tool renders from both archives, which is \
+         the whole of what a remembered one is allowed to be"
+    );
+
+    let empty = Memory::new();
+    let missed = one_sided(|| empty.store(), "get_file_diff", asked).await;
+    assert_eq!(
+        missed["isError"],
+        json!(true),
+        "with nothing to be served the same call has to fetch, and fetching \
+         is what this fixture set cannot do: got {missed}"
+    );
+}
+
+/// A renamed file is served the patch that answers the question asked.
+///
+/// A patch is rendered from one path in each version, and an entry holds the
+/// one the comparison's own tree names: `src/new-name.js` diffed from where
+/// it was. A caller that leaves `old_path` out is asking about a file the
+/// first version does not have, and this tool answers that with every line
+/// added — a different answer, and one the entry has no patch for.
+///
+/// So the two are held apart here. Asked the way the tree tells a caller to
+/// ask, the entry answers and nothing is fetched. Asked without it, the
+/// warm call has to give what the cold one gives, which is the rule a cache
+/// is only ever allowed to make faster.
+#[tokio::test]
+async fn a_renamed_file_is_served_only_the_patch_it_was_asked_for() {
+    let store = Memory::new();
+
+    let diffed = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+    let handle = || diffed["structuredContent"]["handle"].clone();
+
+    let moved = json!({
+        "handle": handle(),
+        "path": "src/new-name.js",
+        "old_path": "src/old-name.js",
+    });
+    let served = one_sided(|| store.store(), "get_file_diff", moved).await;
+    assert_eq!(
+        served["isError"],
+        json!(false),
+        "the patch for the file as the tree names it is the one the entry \
+         holds: got {served}"
+    );
+
+    let bare = json!({ "handle": handle(), "path": "src/new-name.js" });
+    let cold = Memory::new();
+    assert_eq!(
+        call_tool(|| store.store(), "get_file_diff", bare.clone()).await,
+        call_tool(|| cold.store(), "get_file_diff", bare).await,
+        "a file asked about without the `old_path` it moved from is the same \
+         answer warm and cold, and it is not the entry's patch"
+    );
+}
+
+/// So is the resource that answers with one file's diff.
+///
+/// The document is the tool's answer with a media type on it (ADR 0014), so
+/// a read that fetched where a call did not would be the two disagreeing
+/// about what the cache is for. It takes the same two steps in the same
+/// order: the entry's patch, and both archives only for a file the entry has
+/// none for.
+#[tokio::test]
+async fn a_read_of_one_files_diff_is_served_the_stored_patch_too() {
+    let store = Memory::new();
+
+    let diffed = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+    let uri = format!(
+        "diffpack://diff/{}/file/src/index.js",
+        diffed["structuredContent"]["handle"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
+    );
+
+    let served = read(ONE_SIDED, || store.store(), &uri).await;
+    assert!(
+        served.get("error").is_none(),
+        "the patch was in the store, and the second version is not there to \
+         fetch: got {served}"
+    );
+
+    let cold = Memory::new();
+    assert_eq!(
+        served,
+        read(FIXTURES, || cold.store(), &uri).await,
+        "and it is the document the tool's own rendering answers with"
+    );
+
+    let empty = Memory::new();
+    let missed = read(ONE_SIDED, || empty.store(), &uri).await;
+    assert!(
+        missed.get("error").is_some(),
+        "with nothing to be served the same read has to fetch: got {missed}"
+    );
+}
+
+/// A file the entry has no patch for is rendered, one file at a time.
+///
+/// Why the redeem asks for the file rather than trusting the entry as a
+/// whole. `src/index.js` is the one patch the per-patch cap takes at a
+/// hundred bytes; the three that fit are still in the entry. So one comes
+/// out of the store and the other has to be fetched, out of the same entry
+/// and in the same call — which is what "the patch this comparison holds for
+/// this file" means and what a flag about the entry could not have said.
+///
+/// The same shape answers a patch dropped with the whole entry's, and an
+/// entry written before there were patches to write, because none of the
+/// three is a patch this comparison is holding.
+#[tokio::test]
+async fn a_file_whose_patch_was_dropped_is_rendered_rather_than_missed() {
+    let store = Memory::new();
+    let capped = || store.store().capping_patches_at(100);
+
+    let diffed = call(capped, diffable()).await;
+    settles(&store, 2).await;
+    let asking = |path: &str| {
+        json!({
+            "handle": diffed["structuredContent"]["handle"].clone(),
+            "path": path,
+        })
+    };
+
+    let kept = one_sided(capped, "get_file_diff", asking("src/added.js")).await;
+    assert_eq!(
+        kept["isError"],
+        json!(false),
+        "a patch under the cap is in the entry and is served: got {kept}"
+    );
+
+    let dropped = one_sided(capped, "get_file_diff", asking("src/index.js")).await;
+    assert_eq!(
+        dropped["isError"],
+        json!(true),
+        "the file the cap took has to be fetched, and fetching is what this \
+         fixture set cannot do: got {dropped}"
+    );
+
+    let cold = Memory::new();
+    assert_eq!(
+        call_tool(capped, "get_file_diff", asking("src/index.js")).await,
+        call_tool(|| cold.store(), "get_file_diff", asking("src/index.js")).await,
+        "and where it can, the answer is the patch it always was"
     );
 }
 

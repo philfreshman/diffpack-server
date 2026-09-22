@@ -7,6 +7,13 @@
 //! which is all a URI has room for. The tool is *called* rather than
 //! reproduced, so the two cannot render one file two ways.
 //!
+//! That includes not rendering it at all. A comparison that came out of the
+//! store carries the patch for every file that changed, so this asks
+//! [`diff_package_versions::Comparison::patch`] for the file it is about
+//! before it asks for the archives — the same two steps in the same order as
+//! the tool, because a read that downloaded where a call did not would be the
+//! two disagreeing about what the cache is for.
+//!
 //! # What the media type carries
 //!
 //! What the tool says in `isDiff`, this says in the one field a client
@@ -107,21 +114,28 @@ pub async fn read(
     // below, where it would be a temporary living exactly as long as the
     // statement that reads it.
     let moved = moved_from(&comparison.tree, &wanted);
-    let files = comparison.files(handle, ctx).await?;
+    let asked = OneFile {
+        path: &wanted,
+        old_path: moved.as_deref(),
+        // The defaults a caller gets by passing nothing but a handle and a
+        // path, which is all a URI has room for.
+        context_lines: get_file_diff::ContextLines::default(),
+        max_bytes: None,
+    };
 
-    let patch = get_file_diff::render(
-        &files.from_files,
-        &files.to_files,
-        handle.inputs(),
-        OneFile {
-            path: &wanted,
-            old_path: moved.as_deref(),
-            // The defaults a caller gets by passing nothing but a handle and
-            // a path, which is all a URI has room for.
-            context_lines: get_file_diff::ContextLines::default(),
-            max_bytes: None,
-        },
-    )?;
+    // The patch the comparison is already holding, where it was remembered
+    // with one for this file. The same two steps the tool takes, and in the
+    // same order, because this document is that tool's answer with a media
+    // type on it (ADR 0014) — a read that fetched where a call did not would
+    // be the two disagreeing about what the cache is for.
+    let patch = match comparison.patch(asked.path, asked.old_path) {
+        Some(patch) => get_file_diff::presented(patch, &asked),
+        None => {
+            let files = comparison.files(ctx).await?;
+
+            get_file_diff::render(&files.from_files, &files.to_files, handle.inputs(), asked)?
+        }
+    };
 
     // The segment as it arrived rather than as it decoded, so a client that
     // encoded its path is answered at the URI it asked about. The two are

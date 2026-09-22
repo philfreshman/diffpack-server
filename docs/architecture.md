@@ -137,10 +137,20 @@ walks it lists. See [ADR
 That is where the cache is read, which is the part worth knowing before
 reading any of the four. A tool that takes a handle does not mention the
 store: it asks for the comparison and is handed one, remembered or worked out.
-What it gets either way is the tree — an entry is a tree and its patches and
-never the archives they came from — so `get_file_diff`, which renders from
-both versions' contents, still downloads them. Its `Comparison::files` is
-where that happens, and #84 is where an entry's own patches answer it instead.
+What it gets either way is the tree. What is beside the tree is one of two
+halves and never both, because that is what the two ways of arriving hold: a
+comparison worked out now carries both versions' files, and one that came out
+of the store carries the patches rendered when the entry was written and none
+of the archives they came from.
+
+So `get_file_diff` and the file-diff resource ask `Comparison::patch` for the
+one file they are about, and reach `Comparison::files` — two downloads — only
+for a file the comparison has no patch for. That is the right question
+whichever way a patch went missing: over the per-patch cap, dropped with the
+rest because the entry was too big, written before entries carried patches, or
+a file that never changed and so never had one. `patches_omitted` records that
+something is missing; it is not what an answer turns on, because an entry
+missing one file's patch still answers for every other.
 
 A tool writes down types rather than JSON. The `Tool` trait's associated
 `Args` and `Output` generate the input schema, the output schema and the
@@ -511,6 +521,12 @@ one back downloaded two archives every time. It is inside
 `diff_package_versions::compare` now, which all four take, so the same two
 methods with the same absent `Result`s serve three more paths than they did.
 
+What comes back is read whole since #84. An entry's patches were rendered on
+every write from #21 and read by nothing for as long, which made them eight
+steps of implementation feeding no reader; `get_file_diff` and the file-diff
+resource are the reader, and they are what turns a warm call for one file's
+diff from two downloads into none.
+
 Three things are the store's and not a caller's, and each is a rule about the
 cache rather than about the blobs underneath it. **A cache failure is never a
 diff failure**: every way this module can fail ends in a miss, so neither
@@ -524,10 +540,11 @@ cache.
 Two caps are the store's too — 256 KiB on one file's patch, 8 MiB on one
 entry — and both are fields rather than constants read where they are used, so
 a test drives them with a real comparison and a small number. Over the first,
-that patch is left out and the rest are kept; over the second, `meta.json` is
-written with `patches_omitted` and `patches.json` is not written at all. That
-flag is the difference between a comparison whose patches were dropped and one
-with nothing to patch, which is otherwise the same absent blob.
+that patch is left out and the rest are kept; over the second, `patches.json`
+is not written at all. `patches_omitted` is true either way — it is the
+difference between a comparison whose patches were dropped and one with
+nothing to patch, and a file the per-patch cap took is absent from an entry
+exactly the way a file that did not change is.
 
 A `put` heads before it writes. An entry is derived from its contents, so a
 blob already at that pathname holds those bytes already — and rewriting it

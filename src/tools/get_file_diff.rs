@@ -48,34 +48,37 @@
 //! order. The suite holds it over six files rather than reading it off the
 //! implementation.
 //!
-//! # Where a cached result comes in, and the half that is still missing
+//! # Where a cached result comes in
 //!
 //! The walk from a handle to a comparison is
 //! [`super::diff_package_versions::compare`]'s (#83), and it looks in the
-//! store before it looks at a registry. What that is worth here is not what
-//! it is worth next door, and the difference is worth stating in full
-//! because it reads like a win from the outside.
+//! store before it looks at a registry. What comes back carries one of two
+//! halves beside the tree, and both of them can answer this tool.
 //!
-//! A remembered comparison still costs this tool both downloads. An entry is
-//! a tree and its patches and never the archives they were worked out from,
-//! so one that came out of the store arrives without the contents this
-//! renders from and
-//! [`super::diff_package_versions::Comparison::files`] fetches them anyway.
-//! On a warm cache what this tool gains is one lookup it cannot yet spend.
+//! A comparison that was remembered carries the patches rendered when the
+//! entry was written — every changed file's, made at the moment both archives
+//! were in hand, which is the whole bet #21 placed. So the first thing this
+//! tool asks is
+//! [`super::diff_package_versions::Comparison::patch`], for the one file it
+//! is about, and a warm call that gets one is a patch served with nothing
+//! fetched at all.
 //!
-//! On a cold one it pays more than it used to, and on purpose. Before #83
-//! this tool fetched two archives and rendered one file, and built no tree at
-//! all; the walk it now calls builds the tree, renders every changed file's
-//! patch and writes the entry, and this tool reads neither half of what it
-//! wrote. What that buys is not its own: a first call here leaves the
-//! comparison behind for the three paths that *can* be served out of one,
-//! rather than downloading two archives and forgetting them.
+//! A comparison that was worked out by this very call carries both versions'
+//! files instead, and [`trim`] below renders out of those. So does a warm
+//! call for a file the entry has no patch for — one over the store's
+//! per-patch cap, one dropped with the rest because the entry was too big,
+//! one in an entry written before there were patches to write, or a file
+//! that did not change and so never had a patch at all. Every one of those
+//! is a file to render, which is why the question is "does this comparison
+//! hold this file's patch" and never "did this entry keep its patches": an
+//! entry missing one of them still answers for the rest.
 //!
-//! What would answer this tool instead is the entry's own patches — every
-//! changed file's, rendered when the entry was written, and read by nothing
-//! in `src/` yet. #84 is where they are read and this is the call site it
-//! changes. Until then the "render it on demand" half of #15 is still the
-//! only half there is here, and the tests that hold it hold it unchanged.
+//! On a cold call this tool pays more than it did before #83, and on
+//! purpose. It used to fetch two archives and render one file and build no
+//! tree; the walk it now calls builds the tree, renders every changed file
+//! and writes the entry. That is spent on the call after it — here and on
+//! the three other paths — rather than downloading two archives and
+//! forgetting them.
 //!
 //! # Where the descriptions come from
 //!
@@ -466,17 +469,25 @@ impl Tool for GetFileDiff {
     type Output = Patch;
 
     async fn call(args: Args, ctx: &Ctx) -> Result<Patch, Failure> {
-        let files = diff_package_versions::compare(&args.handle, ctx)
-            .await?
-            .files(&args.handle, ctx)
-            .await?;
+        let comparison = diff_package_versions::compare(&args.handle, ctx).await?;
+        let asked = args.asked();
 
-        render(
-            &files.from_files,
-            &files.to_files,
-            args.handle.inputs(),
-            args.asked(),
-        )
+        // The entry's own patch, where this comparison was remembered and
+        // holds one for the file that was asked about. It is the only thing
+        // in an entry that can answer this tool — a tree carries statuses,
+        // paths and line counts and never a file's contents — and it is what
+        // makes a warm call cost no download at all.
+        if let Some(patch) = comparison.patch(asked.path, asked.old_path) {
+            return Ok(presented(patch, &asked));
+        }
+
+        // Nothing there for this file, whichever of the ways that is: a
+        // comparison worked out by this very call, a patch over a cap, or a
+        // file that never changed and so was never rendered. Each of them is
+        // a file to render, and rendering it needs both versions.
+        let files = comparison.files(ctx).await?;
+
+        render(&files.from_files, &files.to_files, args.handle.inputs(), asked)
     }
 }
 
@@ -559,7 +570,30 @@ pub fn render(
     let from = content(from_files, from_path);
     let to = content(to_files, asked.path);
 
-    let rendered = engine::patch(asked.path, from, to, inputs.ignore_whitespace);
+    Ok(presented(
+        engine::patch(asked.path, from, to, inputs.ignore_whitespace),
+        &asked,
+    ))
+}
+
+/// One file's patch, out of a rendering that has already been made.
+///
+/// The trim and the cut, which is everything this tool does to the engine's
+/// output and nothing it does to work out what the output is. Public because
+/// a rendering can arrive two ways: [`render`] has just made one out of both
+/// versions' contents, and
+/// [`diff_package_versions::Comparison::patch`](crate::tools::diff_package_versions::Comparison::patch)
+/// hands back one the cache rendered when the entry was written. Those two
+/// are the same bytes by [ADR
+/// 0013](../../docs/adr/0013-the-patch-renderer-lives-in-the-engine-seam.md),
+/// and what is done to them afterwards has to be the same as well or a
+/// remembered patch is a differently trimmed one.
+///
+/// `context_lines` and `max_bytes` are the caller's either way. They are
+/// presentation and not part of what was rendered, which is why a cached
+/// patch can answer a call that asks for a different amount of context from
+/// the one before it.
+pub fn presented(rendered: engine::Patch, asked: &OneFile<'_>) -> Patch {
     let is_diff = rendered.is_diff;
 
     // Only a diff is trimmed. The other two answers are a file's own
@@ -570,8 +604,8 @@ pub fn render(
         _ => rendered.data,
     };
 
-    Ok(Patch {
+    Patch {
         excerpt: page::truncate(&text, asked.max_bytes),
         is_diff,
-    })
+    }
 }
