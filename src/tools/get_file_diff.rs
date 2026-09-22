@@ -48,15 +48,24 @@
 //! order. The suite holds it over six files rather than reading it off the
 //! implementation.
 //!
-//! # Where a cached result would come in
+//! # Where a cached result comes in, and the half that is still missing
 //!
-//! Nowhere yet, and that is worth saying because it looks like an omission.
-//! The DiffStore is here — #21 built it, and `diff_package_versions` already
-//! writes every changed file's patch into an entry — but nothing reads one
-//! back, so every call re-extracts both archives from the inputs the handle
-//! carries. That is precisely the path a cache miss takes, so the "render it
-//! on demand" half of #15 is the only half there is here, and the tests that
-//! hold it will go on holding it once a store is in front of it.
+//! The walk from a handle to a comparison is
+//! [`super::diff_package_versions::compare`]'s (#83), and it looks in the
+//! store before it looks at a registry — so this tool no longer builds a tree
+//! it never reads, and a comparison this server has already made costs it
+//! nothing to find.
+//!
+//! It still costs both downloads, and that is the half that is missing rather
+//! than an omission here. An entry is a tree and its patches and never the
+//! archives they were worked out from, so a remembered comparison arrives
+//! without the contents this renders from and
+//! [`super::diff_package_versions::Comparison::files`] fetches them. What
+//! would answer instead is the entry's own patches — every changed file's,
+//! rendered when the entry was written, and read by nothing in `src/` yet.
+//! #84 is where they are read and this is the call site it changes. Until
+//! then the "render it on demand" half of #15 is still the only half there
+//! is here, and the tests that hold it hold it unchanged.
 //!
 //! # Where the descriptions come from
 //!
