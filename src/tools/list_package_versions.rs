@@ -32,18 +32,19 @@
 //! and indistinguishably from a package the registry points at nothing for.
 //! [`Page`] itself is untouched, because it is shared by every listing tool
 //! and a tool-specific field on it is what [ADR
-//! 0005](../docs/adr/0005-one-module-owns-the-response-ceiling.md) rules out.
+//! 0005](../../docs/adr/0005-one-module-owns-the-response-ceiling.md) rules
+//! out.
 //! What is left is a wrapper — [`Output`] — which is the shape
 //! `diff_package_versions` already has.
 //!
 //! # Where the descriptions come from
 //!
-//! Every doc comment on a field of [`Args`] and [`Version`] becomes a
-//! `description` in a schema a model reads, so it is written for that reader
-//! and names nothing in this repository. `cursor` and `limit` have no doc
-//! comment on purpose: they are [`crate::page`]'s types and that module
-//! writes their descriptions, including the rule that an out-of-range `limit`
-//! is clamped rather than refused.
+//! Every doc comment on a field of [`Args`], [`Output`] and [`Version`]
+//! becomes a `description` in a schema a model reads, so it is written for
+//! that reader and names nothing in this repository. `cursor` and `limit`
+//! have no doc comment on purpose: they are [`crate::page`]'s types and that
+//! module writes their descriptions, including the rule that an out-of-range
+//! `limit` is clamped rather than refused.
 
 use serde::{Deserialize, Serialize};
 
