@@ -63,11 +63,13 @@ well-formed request, which is what that range is for. Within it the MCP
 specification has taken `-32020..-32099`, leaving `-32000..-32019`.
 
 `-32002` is skipped inside that run, and the gap is the point: it is
-`RESOURCE_NOT_FOUND`, and a peer below `2026-07-28` still receives it — rmcp
-raises it to `-32602` only for one negotiating that revision or newer.
-A code of ours in that slot would arrive at some clients as *no such resource*
-— the one sentence these codes exist to stop being said about a version that
-was simply never published.
+`RESOURCE_NOT_FOUND`, and rmcp reads that code on the way out rather than
+passing it through. A peer below `2026-07-28` still receives it, so a code of
+ours in that slot would arrive as *no such resource* — the one sentence these
+codes exist to stop being said about a version that was simply never
+published. A peer negotiating that revision or newer never sees ours at all:
+rmcp raises `-32002` to `-32602` before the wire, so the slot cannot carry a
+meaning of ours in either direction.
 
 ## Rejected: an `isError` equivalent for a resource read
 

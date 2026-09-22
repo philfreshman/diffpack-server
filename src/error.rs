@@ -71,10 +71,14 @@ pub const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(30);
 /// gave when there was one.
 ///
 /// `-32002` is the hole in the run, and deliberately: it is
-/// [`ErrorCode::RESOURCE_NOT_FOUND`], which `2026-07-28` replaced with
-/// `-32602` but which rmcp still sends to a peer on an older revision. A code
-/// of ours in that slot would reach half the clients in the world as *no such
-/// resource*, which is the one sentence these four exist to stop being said.
+/// [`ErrorCode::RESOURCE_NOT_FOUND`], and rmcp reads that code on the way out
+/// rather than passing it through. A peer that negotiated a revision below
+/// `2026-07-28` is sent it unchanged, so a code of ours in that slot arrives
+/// as *no such resource* — the one sentence these four exist to stop being
+/// said about a version that was simply never published. A peer on
+/// `2026-07-28` or newer does not even get that far: SEP-2164 moved
+/// resource-not-found to `-32602`, and rmcp rewrites the code to match before
+/// it reaches the wire. Either way the slot is not ours to mean anything in.
 const INTERNAL_FAILURE: ErrorCode = ErrorCode(-32000);
 
 /// The request was understood, and there is no answer to it.

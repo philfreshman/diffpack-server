@@ -116,10 +116,12 @@ fn a_resource_that_does_not_resolve_is_invalid_params() {
 /// for invalid parameters, which is what a URI that resolves to nothing is.
 ///
 /// `-32002` is excluded by name as well as by range. It is
-/// `RESOURCE_NOT_FOUND`, which rmcp still sends to a peer below `2026-07-28`,
-/// so a code of ours in that slot would reach half the clients in the world
-/// as "no such resource" — the sentence the other four exist to stop being
-/// said about a version that was never published.
+/// `RESOURCE_NOT_FOUND`, and rmcp reads it rather than passing it on: a peer
+/// below `2026-07-28` is sent it unchanged, so a code of ours there would
+/// arrive as "no such resource" — the sentence the other four exist to stop
+/// being said about a version that was never published — and a peer on
+/// `2026-07-28` or newer has it rewritten to `-32602` before the wire, so it
+/// would not arrive as ours at all.
 ///
 /// Through `refuse`, which is the one place every failure is a code. The wire
 /// shows one code per read, so `tests/resources.rs` is where the codes a
