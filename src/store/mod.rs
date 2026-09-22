@@ -110,6 +110,20 @@ pub const PATCH_CAP: usize = 256 * 1024;
 /// place in it.
 pub const ENTRY_CAP: usize = 8 * 1024 * 1024;
 
+/// The most this project's blob store may hold. Never exceeded.
+pub const CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
+/// What a sweep evicts down to, leaving the gap up to [`CACHE_MAX_BYTES`].
+///
+/// The 16 MiB is not decoration. Two invocations can admit at the same
+/// moment, each having read a total that did not include the other's entry;
+/// and Vercel Blob takes up to a minute to propagate a delete, so a listing
+/// taken after a sweep can still count blobs that are already gone. Size
+/// accounting here is a good estimate and never a fact, and a design that
+/// treats it as one exceeds the ceiling exactly once, in production,
+/// unobserved.
+pub const CACHE_TARGET_BYTES: u64 = 240 * 1024 * 1024;
+
 /// The interface the rest of the crate has to cached results.
 pub struct DiffStore {
     source: Source,
@@ -122,6 +136,14 @@ pub struct DiffStore {
 
     /// The most one entry may weigh, and a field for the same reason.
     entry_cap: usize,
+
+    /// The most this store may hold, and a field for the same reason again:
+    /// a budget of a few kilobytes and a real comparison exercise the sweep
+    /// that a budget of 256 MB and eight thousand of them would.
+    max_bytes: u64,
+
+    /// What a sweep leaves this store at. See [`CACHE_TARGET_BYTES`].
+    target_bytes: u64,
 
     /// Where this store says it could not answer.
     ///
@@ -175,6 +197,8 @@ impl DiffStore {
             source,
             patch_cap: PATCH_CAP,
             entry_cap: ENTRY_CAP,
+            max_bytes: CACHE_MAX_BYTES,
+            target_bytes: CACHE_TARGET_BYTES,
             log: Sink::default(),
         }
     }
@@ -205,6 +229,20 @@ impl DiffStore {
     pub fn capping_entries_at(self, bytes: usize) -> Self {
         Self {
             entry_cap: bytes,
+            ..self
+        }
+    }
+
+    /// The same store, holding at most `max` bytes and sweeping down to
+    /// `target` when admitting an entry would take it past `max`.
+    ///
+    /// Two numbers rather than one, because the gap between them is what
+    /// absorbs the two things that make a hard-edged check unreliable — see
+    /// [`CACHE_TARGET_BYTES`].
+    pub fn budgeting(self, max: u64, target: u64) -> Self {
+        Self {
+            max_bytes: max,
+            target_bytes: target,
             ..self
         }
     }
@@ -304,12 +342,98 @@ impl DiffStore {
                 return;
             };
 
+            if !self.admitting(bytes.len() as u64).await {
+                return;
+            }
+
             self.write(&meta.key.meta_path(), bytes).await;
+            return;
+        }
+
+        // Room for both blobs, asked for once: they are one entry, and an
+        // entry admitted by halves is the thing the budget is measured in
+        // arriving in a shape the budget cannot see.
+        if !self.admitting((bytes.len() + patches.len()) as u64).await {
             return;
         }
 
         self.write(&meta.key.meta_path(), bytes).await;
         self.write(&meta.key.patches_path(), patches).await;
+    }
+
+    /// Make room for an entry of `incoming` bytes, and say whether there is
+    /// any.
+    ///
+    /// The budget is a ceiling over a store this process shares with every
+    /// other invocation, so the total is read from the store rather than
+    /// carried: there is nowhere to carry it that two functions would agree
+    /// on. What that costs is one listing per write, and what it buys is a
+    /// number that is true of the store rather than of this process.
+    async fn admitting(&self, incoming: u64) -> bool {
+        // Refused before anything is listed, let alone deleted. A sweep for
+        // an entry that would not fit in an empty store spends every other
+        // comparison in the cache and still has no room at the end of it.
+        if incoming > self.max_bytes {
+            return self.gave_up::<()>(TOO_BIG).is_some();
+        }
+
+        // A listing that could not be taken is a total that is not known,
+        // and admitting against a total that is not known is how a ceiling
+        // gets exceeded. The cost of refusing is one entry not cached,
+        // which is the cost of every other failure in this module.
+        let Some(blobs) = self.listed().await else {
+            return false;
+        };
+
+        let mut total: u64 = blobs.iter().map(|blob| blob.size).sum();
+        if total + incoming <= self.max_bytes {
+            return true;
+        }
+
+        // Down to the target rather than to the ceiling, so that the next
+        // write is not another sweep and two of them at once have room to
+        // overlap in. See [`CACHE_TARGET_BYTES`].
+        for entry in oldest_first(&blobs) {
+            if total + incoming <= self.target_bytes {
+                break;
+            }
+
+            self.remove(&entry.blobs).await;
+            total = total.saturating_sub(entry.bytes);
+        }
+
+        true
+    }
+
+    /// Every blob this store holds, or nothing if it could not say.
+    async fn listed(&self) -> Option<Vec<blob::Blob>> {
+        match &self.source {
+            Source::Live(api) => match api.list(&prefix()).await {
+                Ok(blobs) => Some(blobs),
+                Err(_) => self.gave_up(LISTING),
+            },
+            Source::Memory(memory) => Some(memory.list(&prefix())),
+            Source::Unavailable(why) => self.gave_up(why),
+        }
+    }
+
+    /// Delete every blob at `pathnames`.
+    ///
+    /// All of them in one call, because they are one entry: a delete that
+    /// took them one at a time could leave half an entry behind when the
+    /// second failed.
+    async fn remove(&self, pathnames: &[&str]) {
+        match &self.source {
+            Source::Live(api) => {
+                if api.delete(pathnames).await.is_err() {
+                    self.gave_up::<()>(DELETING);
+                }
+            }
+            Source::Memory(memory) => memory.delete(pathnames),
+            Source::Unavailable(why) => {
+                self.gave_up::<()>(why);
+            }
+        }
     }
 
     /// The bytes at `pathname`, if the store holds any.
@@ -346,13 +470,13 @@ impl DiffStore {
                     // of skipping a write that was needed is one more
                     // recomputed diff.
                     Err(_) => {
-                        self.gave_up(WRITING);
+                        self.gave_up::<()>(WRITING);
                         return;
                     }
                 }
 
                 if api.put(pathname, bytes).await.is_err() {
-                    self.gave_up(WRITING);
+                    self.gave_up::<()>(WRITING);
                 }
             }
             Source::Memory(memory) => {
@@ -361,7 +485,7 @@ impl DiffStore {
                 }
             }
             Source::Unavailable(why) => {
-                self.gave_up(why);
+                self.gave_up::<()>(why);
             }
         }
     }
@@ -372,13 +496,80 @@ impl DiffStore {
     /// cannot come apart: a path that gave up without saying so is a cache
     /// that has quietly stopped working, which looks exactly like a cache
     /// that is working and cold.
-    fn gave_up(&self, doing: &'static str) -> Option<Vec<u8>> {
+    fn gave_up<T>(&self, doing: &'static str) -> Option<T> {
         self.log.note(&Note {
             seam: "store",
             doing,
         });
         None
     }
+}
+
+/// One cached entry as a listing shows it.
+///
+/// Built from blobs rather than read: the store holds blobs, and an entry is
+/// this module's grouping of them. There is no index to consult and none
+/// wanted — a second record of what the store holds is a second record to
+/// keep in step with it.
+struct Listed<'a> {
+    /// What the whole entry weighs.
+    bytes: u64,
+
+    /// When the entry began to exist, which is its oldest blob's moment.
+    /// The two are written one after the other, so the later one is when
+    /// the entry was finished rather than when it arrived.
+    uploaded_at: &'a str,
+
+    /// Every blob the entry is, so that they go together.
+    blobs: Vec<&'a str>,
+}
+
+/// `blobs` grouped into entries, oldest first.
+///
+/// The `diff_id` is the third segment of a pathname — `diffs/v1/{id}/…` —
+/// and a blob whose pathname has no third segment is not one of this
+/// module's, so it is counted towards the total and never deleted. The
+/// budget is over the store, and something else's blob still takes up room
+/// in it.
+fn oldest_first(blobs: &[blob::Blob]) -> Vec<Listed<'_>> {
+    let mut entries: BTreeMap<&str, Listed<'_>> = BTreeMap::new();
+
+    for blob in blobs {
+        let Some(diff_id) = blob.pathname.split('/').nth(2) else {
+            continue;
+        };
+
+        let entry = entries.entry(diff_id).or_insert_with(|| Listed {
+            bytes: 0,
+            uploaded_at: &blob.uploaded_at,
+            blobs: Vec::new(),
+        });
+
+        entry.bytes += blob.size;
+        entry.uploaded_at = entry.uploaded_at.min(&blob.uploaded_at);
+        entry.blobs.push(&blob.pathname);
+    }
+
+    let mut entries: Vec<Listed<'_>> = entries.into_values().collect();
+
+    // The store's own ISO-8601 to the millisecond, whose lexical order is
+    // its chronological one. Two entries in the same millisecond are
+    // separated by the blobs they are, so that a sweep of the same listing
+    // twice deletes the same entries.
+    entries.sort_by(|left, right| {
+        (left.uploaded_at, &left.blobs).cmp(&(right.uploaded_at, &right.blobs))
+    });
+
+    entries
+}
+
+/// Where every cached entry lives.
+///
+/// Built from the schema number rather than written out, because bumping it
+/// moves the entries and a sweep that kept looking at the old prefix would
+/// count a store it no longer writes to.
+fn prefix() -> String {
+    format!("diffs/v{}/", crate::cache_key::SCHEMA)
 }
 
 /// Run `work` after the answer has gone, and let the runtime drain it.
@@ -403,6 +594,15 @@ const READING: &str = "reading a cached result from the blob store";
 
 /// What a failed write says it was doing.
 const WRITING: &str = "writing to the blob store";
+
+/// What a failed listing says it was doing.
+const LISTING: &str = "listing what the blob store holds";
+
+/// What a failed eviction says it was doing.
+const DELETING: &str = "evicting an entry from the blob store";
+
+/// What a store refusing an entry it could never hold says it was doing.
+const TOO_BIG: &str = "admitting an entry larger than the whole budget";
 
 /// Names the adapter and nothing else.
 ///
@@ -546,6 +746,37 @@ impl Memory {
         }
 
         Some(self.blobs.lock().ok()?.get(pathname)?.bytes.clone())
+    }
+
+    /// Every blob this store holds under `prefix`.
+    ///
+    /// The three fields a real listing carries and no others, because they
+    /// are the three the budget is built on. A store whose reads are lost
+    /// still answers this, for the reason [`Memory::holds`] does: losing a
+    /// download is not forgetting what is there.
+    fn list(&self, prefix: &str) -> Vec<blob::Blob> {
+        let Ok(blobs) = self.blobs.lock() else {
+            return Vec::new();
+        };
+
+        blobs
+            .iter()
+            .filter(|(pathname, _)| pathname.starts_with(prefix))
+            .map(|(pathname, held)| blob::Blob {
+                pathname: pathname.clone(),
+                size: held.bytes.len() as u64,
+                uploaded_at: held.uploaded_at.clone(),
+            })
+            .collect()
+    }
+
+    /// Lose every blob at `pathnames`.
+    fn delete(&self, pathnames: &[&str]) {
+        if let Ok(mut blobs) = self.blobs.lock() {
+            for pathname in pathnames {
+                blobs.remove(*pathname);
+            }
+        }
     }
 
     /// Whether this store holds a blob at `pathname`.

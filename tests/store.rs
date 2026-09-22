@@ -536,6 +536,91 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// The budget
+// ---------------------------------------------------------------------------
+
+/// A store with room for one entry, asked to hold two, keeps the newer one.
+///
+/// The budget is derived from an entry this test has just written rather
+/// than stated as a number, so it stays a budget with room for exactly one
+/// of them when the fixture changes. What is asserted is not derived: the
+/// two blobs that survive are named, and they are the second comparison's.
+///
+/// Driven at a few kilobytes for the reason the patch cap is driven at a
+/// hundred bytes — a cap exercised with a small number and a real comparison
+/// is the same code as one exercised with 256 MB and eight thousand of them.
+#[tokio::test]
+async fn a_budget_with_room_for_one_entry_keeps_the_newer_one() {
+    let store = Memory::new();
+
+    let first = call(|| store.store(), at(0.50)).await;
+    lands(&store, &first).await;
+
+    // One entry's worth, and the headroom production keeps over its target.
+    let entry = held(&store);
+    let budgeted = || store.store().budgeting(entry + entry / 16, entry);
+
+    let second = call(budgeted, at(0.51)).await;
+    lands(&store, &second).await;
+
+    assert_eq!(
+        store.written(),
+        vec![meta_of(&second), patches_of(&second)],
+        "the older comparison should have made way for the newer one"
+    );
+}
+
+/// The arguments of the comparison every budget test writes, at `threshold`.
+///
+/// One comparison at a dozen thresholds rather than a dozen comparisons: the
+/// threshold is a field of the cache key, so each is an entry of its own —
+/// and `diffable`'s rename is of a file whose content did not change, so
+/// every threshold below 1.0 detects it and every entry is the same size.
+/// Entries that differ in size would make what a sweep deletes depend on
+/// which of them it reached first.
+fn at(threshold: f64) -> Value {
+    let mut arguments = diffable();
+    arguments["similarity_threshold"] = json!(threshold);
+    arguments
+}
+
+/// How many bytes `store` is holding, summed from the store itself.
+///
+/// Read back through the blobs rather than taken from a total the sweep
+/// worked out: the criterion is that the store stays inside its budget, and
+/// a number eviction computed cannot disagree with eviction.
+fn held(store: &Memory) -> u64 {
+    store
+        .written()
+        .iter()
+        .filter_map(|pathname| store.blob(pathname))
+        .map(|bytes| bytes.len() as u64)
+        .sum()
+}
+
+/// Wait until `store` holds the entry `answer` is about, or give up.
+///
+/// [`settles`] counts blobs, which a store that evicts no longer grows
+/// monotonically: an entry admitted and then swept by the call after it
+/// leaves the count where it was. So this waits for the entry itself.
+async fn lands(store: &Memory, answer: &Value) {
+    let (meta, patches) = (meta_of(answer), patches_of(answer));
+
+    for _ in 0..400 {
+        let written = store.written();
+        if written.contains(&meta) && written.contains(&patches) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    panic!(
+        "the entry at `{meta}` should be there by now, {:?} is",
+        store.written()
+    );
+}
+
 /// Wait until `store` holds `blobs` of them, or give up.
 ///
 /// A write happens after the answer, so "it was written" is something that
