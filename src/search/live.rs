@@ -10,8 +10,11 @@
 //! a source that has moved or broken, and the remedy is to try again or to
 //! search elsewhere rather than to check a spelling.
 
+use std::future::Future;
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
+
+use tokio::sync::Mutex;
 
 use crate::error::Failure;
 use crate::fetch::{self, About};
@@ -43,8 +46,9 @@ impl Live {
 
     /// Whatever `source` serves, as text, refusing anything over `limit`.
     ///
-    /// A source that is the whole index is fetched once per warm instance
-    /// rather than once per search — see [`remembered`].
+    /// A source that is the whole index is fetched once per instance rather
+    /// than once per search, and once however many searches ask for it at the
+    /// same moment — see [`once_at_a_time`].
     pub async fn body(
         &self,
         source: &SearchSource,
@@ -52,17 +56,10 @@ impl Live {
         registry: Registry,
     ) -> Result<Body, Failure> {
         if source.whole_index {
-            if let Some(body) = remembered(&source.url) {
-                return Ok(body);
-            }
+            return once_at_a_time(&source.url, || fetch(source, limit, registry)).await;
         }
 
-        let body = fetch(source, limit, registry).await?;
-
-        if source.whole_index {
-            remember(&source.url, &body);
-        }
-        Ok(body)
+        fetch(source, limit, registry).await
     }
 }
 
@@ -91,6 +88,63 @@ async fn fetch(source: &SearchSource, limit: u64, registry: Registry) -> Result<
     String::from_utf8(bytes)
         .map(Into::into)
         .map_err(|_| super::unreadable(registry, "what the registry served is not text"))
+}
+
+/// What `url` serves, fetched by at most one caller at a time.
+///
+/// The memo below makes the index fetched once per *warm* instance, and warm
+/// is the whole of what it promises. A cold one has nothing to find, so
+/// without this every search that arrives before the first fetch lands starts
+/// one of its own — and each of those holds the whole document, which for the
+/// one source in this shape is tens of megabytes. The memo's saving arrives
+/// exactly one fetch too late to prevent the burst it was chosen to prevent.
+///
+/// So a caller that finds nothing takes its turn before fetching, and looks
+/// again once it has one: by then the caller ahead of it has usually left the
+/// document behind, and what was a fetch becomes a clone of an [`Arc`]. One
+/// turn rather than one per URL, for the reason [`remember`] holds one
+/// document rather than several — a map keyed by URL is a cache with an
+/// eviction policy to choose, and there is one source in this shape.
+///
+/// A [`tokio::sync::Mutex`] rather than a `std` one, and it is the only lock
+/// here that is held across an `await`. The two around the memo are held for
+/// an assignment and a clone and are not — a `std` guard held across an await
+/// parks a runtime thread with the lock in its hand, which is how one slow
+/// registry becomes every request on the instance.
+///
+/// A fetch that fails leaves the memo empty and the turn free, so the next
+/// caller tries rather than inheriting a failure. Nothing is remembered
+/// negatively: a search source that is down is a `Failure` a model can act on
+/// each time it asks, not a state this instance holds on to.
+///
+/// [`Arc`]: std::sync::Arc
+async fn once_at_a_time<F, Fut>(url: &str, fetch: F) -> Result<Body, Failure>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<Body, Failure>>,
+{
+    if let Some(body) = remembered(url) {
+        return Ok(body);
+    }
+
+    let _turn = turn().lock().await;
+
+    // Between the look above and this one, the caller that held the turn has
+    // had time to fetch the document and leave it behind. Not looking again
+    // is what makes this a queue rather than a guard: every waiter would
+    // fetch in turn, which is the same work in a longer line.
+    if let Some(body) = remembered(url) {
+        return Ok(body);
+    }
+
+    let body = fetch().await?;
+    remember(url, &body);
+    Ok(body)
+}
+
+fn turn() -> &'static Mutex<()> {
+    static TURN: OnceLock<Mutex<()>> = OnceLock::new();
+    TURN.get_or_init(|| Mutex::new(()))
 }
 
 /// What this instance last fetched from `url`, while it is still current.
@@ -188,7 +242,9 @@ mod tests {
         );
 
         for answer in &answers {
-            let body = answer.as_ref().expect("every search in the burst is answered");
+            let body = answer
+                .as_ref()
+                .expect("every search in the burst is answered");
             assert_eq!(
                 &**body, "every package there is",
                 "the ones that waited should be answered with what the first fetched"
