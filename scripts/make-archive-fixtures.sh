@@ -224,6 +224,48 @@ for i in $(seq 1 "$ENORMOUS"); do
 done
 targz "enormous-1.0.0.tgz" "package" "$enormous"
 
+# The second version of it, which is what makes the comparison above a
+# comparison. Reading `diffpack://diff/{handle}` for a version against itself
+# is a tree of six thousand *unchanged* nodes: the right size to exercise the
+# response ceiling and the wrong content to exercise anything else, because
+# the branch that refuses a tree too large to serve would never have seen a
+# node that moved.
+#
+# Three files rather than another six thousand, and that is the point: what
+# is big here is the *listing*, and everything 2.0.0 leaves out is a `removed`
+# node in it. So the tree stays over the ceiling and costs a kilobyte to check
+# in, against the 140 KB a second copy of the package would.
+#
+# One file of each status the fixture can produce deterministically:
+#
+# - `...00001` is byte-identical, so it is `unchanged` and the totals still
+#   have something in that column
+# - `...00002` is the same path with different content, so it is `modified`
+# - `README.md` is a path 1.0.0 does not have, so it is `added`
+# - the other 5,998 are `removed`
+#
+# No `renamed`, deliberately. A rename is a removed file and an added one that
+# the engine finds similar enough, and every file here is `export const n = N;`
+# — so which pair it chose would depend on the engine rather than on this
+# fixture. `README.md`'s content shares nothing with them for the same reason:
+# an added file that could be paired with any of six thousand removals is a
+# fixture whose totals move when the threshold does.
+enormous_next=$work/enormous-next
+descriptor="packages/generated-client-for-the-platform-api-00/src/resources"
+descriptor="${descriptor}/schema-definitions-and-validators-000"
+descriptor="${descriptor}/resource-descriptor-with-a-deliberately-long-generated-name"
+write "${enormous_next}/package/${descriptor}-00001.generated.ts" "export const n = 1;
+"
+write "${enormous_next}/package/${descriptor}-00002.generated.ts" "export const n = 2;
+export const alsoChanged = true;
+"
+write "${enormous_next}/package/README.md" "Generated clients for the platform API.
+
+Nothing in this file resembles a resource descriptor, so no removal pairs with
+it and the statuses below stay the fixture's rather than the threshold's.
+"
+targz "enormous-2.0.0.tgz" "package" "$enormous_next"
+
 # --- a package whose files are awkward to hand back ------------------------
 #
 # Two files, each for a criterion #12 carries that no ordinary package can

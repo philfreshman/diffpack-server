@@ -27,6 +27,7 @@
 use rmcp::model::{CacheScope, ReadResourceResult, Resource, ResourceContents};
 use serde::Serialize;
 
+use crate::error::Failure;
 use crate::registry::{ArchiveSource, Registry, VERSION_RULE};
 
 /// The URI a client reads this at.
@@ -54,24 +55,30 @@ pub fn resource() -> Resource {
 const TTL_MS: u64 = 60 * 60 * 1000;
 
 /// The catalogue itself.
-pub fn read() -> ReadResourceResult {
+///
+/// A `Result` for a failure that cannot happen. Every field below is a
+/// string, a bool or a list of those, so `serde_json` has nothing here to
+/// refuse — but the answer to a serialisation that failed anyway is not an
+/// empty document: this resource is declared `application/json`, and a `200`
+/// carrying nothing under that header is an agent parsing an empty string
+/// and concluding this server knows no registries. A refusal it can read is
+/// the smaller wrong answer, and there is no shorter way to say "impossible"
+/// than a branch that says it.
+pub fn read() -> Result<ReadResourceResult, Failure> {
     let catalogue = Catalogue {
         version_rule: VERSION_RULE,
         registries: Registry::ALL.into_iter().map(Described::of).collect(),
     };
 
-    // A document this server built out of its own types, so a failure to
-    // serialise it is impossible rather than handled: every field is a
-    // string, a bool or a list of those.
-    let contents = ResourceContents::text(
-        serde_json::to_string_pretty(&catalogue).unwrap_or_default(),
-        URI,
-    )
-    .with_mime_type("application/json");
+    let document = serde_json::to_string_pretty(&catalogue).map_err(|_| Failure::Internal {
+        doing: "describing the registries",
+    })?;
 
-    ReadResourceResult::new(vec![contents])
+    let contents = ResourceContents::text(document, URI).with_mime_type("application/json");
+
+    Ok(ReadResourceResult::new(vec![contents])
         .with_ttl_ms(TTL_MS)
-        .with_cache_scope(CacheScope::Public)
+        .with_cache_scope(CacheScope::Public))
 }
 
 /// What a reader is handed.

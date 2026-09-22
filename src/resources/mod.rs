@@ -57,7 +57,7 @@ pub fn templates() -> Vec<ResourceTemplate> {
 /// one.
 pub async fn read(uri: &str, ctx: &Ctx) -> Result<ReadResourceResult, Failure> {
     if uri == registries::URI {
-        return Ok(registries::read());
+        return registries::read();
     }
 
     if let Some((handle, path)) = file_diff::parts_in(uri) {
