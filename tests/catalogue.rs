@@ -1,14 +1,18 @@
 //! What a package has released, asked of the module that fetches it.
 //!
-//! The counterpart of `tests/archive.rs`, and it holds the same two things
-//! that suite does: what this server will not read, and that the cap it
-//! refuses by is set where a real document fits under it.
+//! The counterpart of `tests/archive.rs`, and it holds what that suite holds:
+//! a refusal a tool test cannot reach, and that the cap this seam refuses by
+//! is set where a real document fits under it.
 //!
 //! What the *answer* looks like — newest first, the dates, the preview flag —
 //! is `tests/list_package_versions.rs`, driven over the wire the way an agent
-//! drives it. What is left for this file is the pair of refusals that a tool
-//! test cannot reach, because neither is a document the fixture set can serve
+//! drives it. What is left for this file is the refusal that a tool test
+//! cannot reach, because it is not a document the fixture set can serve
 //! through the tool's happy path.
+//!
+//! The cap *firing* is not here and is not missing. It is one rule under all
+//! three seams since #81, so it is driven once, in `tests/size_cap.rs`, which
+//! holds this seam to naming its own refusal when it does.
 //!
 //! Every test below drives the fixture adapter, which reads
 //! `fixtures/versions/` instead of a registry. The live adapter is exercised
@@ -22,42 +26,6 @@ use diffpack_server::registry::Registry;
 // ---------------------------------------------------------------------------
 // What this server will not read
 // ---------------------------------------------------------------------------
-
-/// A document over the cap is refused, and refused as the failure that names
-/// it rather than as the one an archive gets: a model told the *archive* was
-/// too large is told to ask for a single file instead of a whole tree, and
-/// there is no single file of a package's release history to ask for.
-///
-/// The cap is a value on the adapter so that this can be asserted with a real
-/// document and a small limit, rather than by finding a package whose
-/// metadata weighs 32 MB. Nothing exercised that field until this test, which
-/// left the refusal itself unproven.
-#[tokio::test]
-async fn a_version_document_over_the_size_cap_is_refused() {
-    let failure = fixtures()
-        .with_limit(64)
-        .versions(Registry::Crates, "tokio")
-        .await
-        .expect_err("64 bytes is smaller than any real document");
-
-    match failure {
-        Failure::VersionsTooLarge {
-            registry,
-            package,
-            bytes,
-            limit,
-        } => {
-            assert_eq!(registry, "crates.io");
-            assert_eq!(package, "tokio");
-            assert_eq!(limit, 64, "the refusal names the limit that was applied");
-            assert!(
-                bytes > 64,
-                "the refusal names what was on offer, got {bytes} bytes"
-            );
-        }
-        other => panic!("a refusal a model can act on, got {other:?}"),
-    }
-}
 
 /// A document this server cannot read is the registry's problem and not the
 /// caller's, and it is neither a panic nor a package that does not exist.

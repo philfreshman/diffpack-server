@@ -168,40 +168,6 @@ async fn a_pypi_zip_source_distribution_arrives_as_its_files() {
 // What this server will not download
 // ---------------------------------------------------------------------------
 
-/// An archive over the cap is refused, and refused as the failure #7 has for
-/// it rather than as a generic one: a model told "too large" with the size
-/// and the limit knows to ask for one file instead of a whole tree, where a
-/// model told "the registry is unavailable" would retry forever.
-///
-/// The cap is a value on the adapter so that this can be asserted with a real
-/// archive and a small limit, rather than by finding a 128 MB package.
-#[tokio::test]
-async fn an_archive_over_the_size_cap_is_refused() {
-    let failure = fixtures()
-        .with_limit(64)
-        .fetch(Registry::Npm, "@types/node", "20.1.0")
-        .await
-        .expect_err("64 bytes is smaller than any real archive");
-
-    match failure {
-        Failure::TooLarge {
-            package,
-            version,
-            bytes,
-            limit,
-        } => {
-            assert_eq!(package, "@types/node");
-            assert_eq!(version, "20.1.0");
-            assert_eq!(limit, 64, "the refusal names the limit that was applied");
-            assert!(
-                bytes > 64,
-                "the refusal names what was on offer, got {bytes} bytes"
-            );
-        }
-        other => panic!("a refusal a model can act on, got {other:?}"),
-    }
-}
-
 /// The cap production runs with has to sit above what an ordinary package
 /// weighs — #10 puts an 80 MB crate in the normal range and a 5 GB one in the
 /// attack range. A cap below the first would refuse packages people diff

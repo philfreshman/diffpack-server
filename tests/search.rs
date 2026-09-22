@@ -1,14 +1,19 @@
 //! Which packages a registry has, asked of the module that fetches them.
 //!
 //! The counterpart of `tests/archive.rs` and `tests/catalogue.rs`, and it
-//! holds what those suites hold: what this server will not read, and that the
-//! cap it refuses by is set above the one source that is a whole document.
+//! holds what those suites hold: a refusal a tool test cannot reach, and that
+//! the cap this seam refuses by is set above the one source that is a whole
+//! document.
 //!
 //! What the *answer* looks like — the three shapes, the ranking, the empty
 //! page — is `tests/search_packages.rs`, driven over the wire the way an
-//! agent drives it. What is left for this file is the pair of refusals a tool
-//! test cannot reach, because neither is something the fixture set can serve
+//! agent drives it. What is left for this file is the refusal a tool test
+//! cannot reach, because it is not something the fixture set can serve
 //! through the tool's happy path.
+//!
+//! The cap *firing* is not here and is not missing. It is one rule under all
+//! three seams since #81, so it is driven once, in `tests/size_cap.rs`, which
+//! holds this seam to naming its own refusal when it does.
 //!
 //! Every test below drives the fixture adapter, which reads
 //! `fixtures/searches/` instead of a registry. The live adapter is exercised
@@ -22,40 +27,6 @@ use diffpack_server::search::{self, Search};
 // ---------------------------------------------------------------------------
 // What this server will not read
 // ---------------------------------------------------------------------------
-
-/// An answer over the cap is refused, and refused as the failure that names
-/// it rather than as the registry being unwell: the source answered, and went
-/// on answering past what this server holds.
-///
-/// The cap is a value on the seam so that this can be asserted with a real
-/// answer and a small limit, rather than by finding a registry that serves
-/// 64 MB. It is applied where both adapters pass through, so the fixture set
-/// cannot answer with something the registries would have been refused for —
-/// which is what makes this test about the rule rather than about `fetch`.
-#[tokio::test]
-async fn a_search_answer_over_the_size_cap_is_refused() {
-    let failure = fixtures()
-        .with_limit(64)
-        .hits(Registry::Crates, "serde", 200)
-        .await
-        .expect_err("64 bytes is smaller than any real answer");
-
-    match failure {
-        Failure::SearchTooLarge {
-            registry,
-            bytes,
-            limit,
-        } => {
-            assert_eq!(registry, "crates.io");
-            assert_eq!(limit, 64, "the refusal names the limit that was applied");
-            assert!(
-                bytes > 64,
-                "the refusal names what was on offer, got {bytes} bytes"
-            );
-        }
-        other => panic!("a refusal a model can act on, got {other:?}"),
-    }
-}
 
 /// An answer this server cannot read is the registry's problem, and it is
 /// neither a panic nor a query that matched nothing.
