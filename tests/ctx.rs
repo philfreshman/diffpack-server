@@ -22,19 +22,11 @@
 use std::path::Path;
 use std::time::Duration;
 
-use axum::body::Body;
-use axum::http::Request;
-use diffpack_server::mcp::Diffpack;
-use diffpack_server::router;
+mod common;
+
+use common::{Client, FIXTURES};
 use diffpack_server::tools::Ctx;
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
-
-const CURRENT: &str = "2026-07-28";
-
-/// The fixture sets, as every suite is served from them.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 /// A root with nothing under it.
 ///
@@ -243,11 +235,18 @@ async fn no_seam_a_context_carries_can_reach_a_registry() {
 /// Answers the whole envelope rather than the result, because half of what is
 /// asserted above is a JSON-RPC error and the other half is a result.
 async fn call(fixtures: &'static str, seam: &Seam) -> Value {
-    let ctx = Ctx::fixture(fixtures);
+    let client = Client::over(Ctx::fixture(fixtures));
 
     let mut answer = Value::Null;
     for request in 0..seam.calls {
-        answer = post(ctx.clone(), seam.tool, seam.arguments.clone()).await;
+        answer = client
+            .post(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": { "name": seam.tool, "arguments": seam.arguments },
+            }))
+            .await;
 
         // A seam is allowed to leave work running after it has answered, and
         // one does: the cache writes its entry after the response, which is
@@ -258,55 +257,4 @@ async fn call(fixtures: &'static str, seam: &Seam) -> Value {
         }
     }
     answer
-}
-
-/// One `tools/call` for `tool`, through a router over `ctx`.
-async fn post(ctx: Ctx, tool: &str, arguments: Value) -> Value {
-    let body = json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": tool,
-            "arguments": arguments,
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": CURRENT,
-                "io.modelcontextprotocol/clientCapabilities": {},
-            },
-        },
-    });
-
-    let request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", "tools/call")
-        .header("mcp-name", tool)
-        .body(Body::from(body.to_string()))
-        .expect("the request should build");
-
-    let router = router::router_with(move || Ok(Diffpack::with_ctx(ctx.clone())), Vec::new());
-
-    let response = router
-        .oneshot(request)
-        .await
-        .expect("the router answers every request");
-
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("the body should read")
-        .to_bytes();
-
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!(
-            "expected a JSON body ({status}), got {e}: {}",
-            String::from_utf8_lossy(&bytes)
-        )
-    })
 }

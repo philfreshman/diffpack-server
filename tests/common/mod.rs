@@ -232,8 +232,7 @@ impl Client {
     /// ceiling bounds is the frame this server wrote, and two frames that
     /// parse alike can still differ in size.
     pub async fn respond(&self, body: Value) -> Answer {
-        let body = self.envelope(body);
-        self.send(self.request(&body)).await
+        self.send(self.request(body)).await
     }
 
     /// Drive `request` through a router this client builds.
@@ -285,6 +284,12 @@ impl Client {
 
     /// `body`, as an HTTP request a conforming client of this revision sends.
     ///
+    /// Exactly what [`Client::respond`] sends, handed back rather than sent,
+    /// for the suite whose question is about a header: one that should not be
+    /// there, one a browser sets, one this server has to ignore. Those change
+    /// a request a conforming client would send, which is a thing to start
+    /// from rather than to assemble again.
+    ///
     /// Everything below is the client's obligation under the transport rather
     /// than this server's leniency, which is why the builder always meets it:
     /// a request that skipped any of it would be testing how this server
@@ -303,7 +308,9 @@ impl Client {
     /// unconditional, and a `match` — and the two that were not the
     /// conditional one were each a suite away from testing a client nobody
     /// writes.
-    pub fn request(&self, body: &Value) -> Request<Body> {
+    pub fn request(&self, body: Value) -> Request<Body> {
+        let body = self.envelope(body);
+
         let mut request = Request::builder()
             .method("POST")
             .uri("/mcp")
