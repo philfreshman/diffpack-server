@@ -80,11 +80,11 @@ const INTERNAL_FAILURE: ErrorCode = ErrorCode(-32000);
 /// The request was understood, and there is no answer to it.
 ///
 /// The registry has no such package or version, the archive will not extract,
-/// the path names a directory. Nothing here is transient and nothing here is
-/// a malformed request, so neither `-32602` nor a retry is the right thing to
-/// tell a client: what is left is to ask for something else. See
-/// [`Failure::message`], which says the same thing in a sentence, for the
-/// reader that gets one.
+/// the path names a directory, a release history has no shorter form to ask
+/// for. Nothing here is transient and nothing here is a malformed request, so
+/// neither `-32602` nor a retry is the right thing to tell a client: what is
+/// left is to ask for something else. See [`Failure::message`], which says the
+/// same thing in a sentence, for the reader that gets one.
 const ASK_FOR_SOMETHING_ELSE: ErrorCode = ErrorCode(-32001);
 
 /// Nothing was served, and another attempt might be.
@@ -94,12 +94,18 @@ const ASK_FOR_SOMETHING_ELSE: ErrorCode = ErrorCode(-32001);
 /// fine and so is the thing it asked about; what failed was the attempt.
 const TRY_AGAIN: ErrorCode = ErrorCode(-32003);
 
-/// The answer exists and is larger than this server will serve.
+/// The answer exists, is larger than this server will serve, and has a
+/// narrower form.
 ///
 /// Distinct from [`ASK_FOR_SOMETHING_ELSE`] because the remedy is different
 /// and a client can act on the difference: the thing asked about is there, and
 /// a narrower request for the same thing is the way to it. Distinct from
 /// [`TRY_AGAIN`] because asking again unchanged will fail identically.
+///
+/// All three clauses have to hold, which is why being over a limit is not on
+/// its own enough to earn this code. A client reads it as *narrow and ask
+/// again*, so a failure with nothing narrower behind it would send that client
+/// round the same call for as long as it kept obeying.
 const ASK_FOR_LESS: ErrorCode = ErrorCode(-32004);
 
 /// Everything this server can fail at.
@@ -432,10 +438,17 @@ impl Failure {
         match self {
             // The registry answered, and the answer is no. Asking again
             // changes nothing; asking for something else might.
+            //
+            // `VersionsTooLarge` is here and not with the other two limits,
+            // because the remedy and not the cause is what a code carries. A
+            // package's release history has no narrower form to ask for —
+            // [`Self::message`] says so in as many words — so telling a
+            // client to ask for less would send it back with the same call.
             Self::NoSuchPackage { .. }
             | Self::NoSuchVersion { .. }
             | Self::MalformedArchive { .. }
             | Self::UnreadableVersions { .. }
+            | Self::VersionsTooLarge { .. }
             | Self::UnreadableSearch { .. }
             | Self::NoSuchFile { .. }
             | Self::PathIsDirectory { .. }
@@ -450,11 +463,11 @@ impl Failure {
             | Self::Unavailable { .. } => Channel::Model(TRY_AGAIN),
 
             // The thing asked about is there and is over a limit. A narrower
-            // request for the same thing is the way to it.
-            Self::TooLarge { .. }
-            | Self::VersionsTooLarge { .. }
-            | Self::SearchTooLarge { .. }
-            | Self::ItemTooLarge { .. } => Channel::Model(ASK_FOR_LESS),
+            // request for the same thing is the way to it — a single file
+            // instead of a tree, a tighter query, the cursor past one entry.
+            Self::TooLarge { .. } | Self::SearchTooLarge { .. } | Self::ItemTooLarge { .. } => {
+                Channel::Model(ASK_FOR_LESS)
+            }
 
             // Invalid method parameter(s), in the JSON-RPC specification's own
             // words: a URI that resolves to nothing, a tool nothing answers

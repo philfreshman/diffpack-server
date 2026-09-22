@@ -14,9 +14,9 @@ Five codes. Two were already here and three are new:
 | :--- | :--- | :--- |
 | `-32602` | Invalid params: the caller can fix this from what it was already told | `InvalidParams`, `NoSuchTool`, `NoSuchResource` |
 | `-32000` | A fault of this server's | `Internal` |
-| `-32001` | Ask for something else: the request was understood and there is no answer to it | `NoSuchPackage`, `NoSuchVersion`, `MalformedArchive`, `UnreadableVersions`, `UnreadableSearch`, `NoSuchFile`, `PathIsDirectory`, `UnresolvableArchiveUrl` |
+| `-32001` | Ask for something else: the request was understood and there is no answer to it | `NoSuchPackage`, `NoSuchVersion`, `MalformedArchive`, `UnreadableVersions`, `VersionsTooLarge`, `UnreadableSearch`, `NoSuchFile`, `PathIsDirectory`, `UnresolvableArchiveUrl` |
 | `-32003` | Try again: nothing was served, and another attempt might be | `RateLimited`, `TimedOut`, `Busy`, `Unreachable`, `Unavailable` |
-| `-32004` | Ask for less: the answer is there and is over a limit | `TooLarge`, `VersionsTooLarge`, `SearchTooLarge`, `ItemTooLarge` |
+| `-32004` | Ask for less: the answer is there, is over a limit, and has a narrower form | `TooLarge`, `SearchTooLarge`, `ItemTooLarge` |
 
 The three new ones are the three remedies `Failure::message` already writes
 out in prose. A transient failure's sentence says "again" and a permanent
@@ -111,10 +111,21 @@ wire can carry.
 Against it: the variants are deliberately finer than the remedies. `TooLarge`,
 `VersionsTooLarge` and `SearchTooLarge` are three variants because a `413`
 means a different thing to each seam and the *message* has to say which — that
-is the split #79 lists as a trap not to fold. None of the three implies a
-different action from a client, so three codes would publish a distinction
-that exists for the prose. It also makes every new variant a wire change, and
-a code nobody branches on is a code that will be wrong.
+is the split #79 lists as a trap not to fold. Where two of them imply the same
+action from a client, a code apiece would publish a distinction that exists
+for the prose. It also makes every new variant a wire change, and a code
+nobody branches on is a code that will be wrong.
+
+The grouping is by remedy and not by cause, which is not the same cut, and
+`VersionsTooLarge` is where the two come apart. It is the third of the `413`
+seams and it does not take `-32004`: a package's release history has no
+narrower form, and `Failure::message` has said so since it was written —
+*"there is no shorter answer to ask for"*. A client reads `-32004` as *narrow
+and ask again*, and there is nothing to narrow, so it would come back with the
+identical call. It takes `-32001` with the rest of what this server has no
+answer to, and the three seams keep their three messages. Being over a limit
+is the cause; having something smaller to ask for is the remedy, and the code
+carries the remedy.
 
 ## What this costs
 
