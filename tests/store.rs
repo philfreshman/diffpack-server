@@ -420,6 +420,68 @@ async fn half_an_entry_is_not_a_cache_hit() {
     );
 }
 
+/// An entry that lost the patches it kept still answers for every file.
+///
+/// The one state the flag's correction moved out of the rule above, held
+/// where it can be seen. An entry the per-patch cap trimmed says a patch is
+/// missing from it *and* has a `patches.json`, so a lost one is read as the
+/// absence the entry declared rather than as the half it is, and the entry is
+/// served without the patches that did fit rather than being rewritten.
+///
+/// What that costs is those patches, until eviction takes the entry — the
+/// two downloads this entry exists to save, on every call for one file's
+/// diff, for as long as it is there. What it cannot cost is a wrong answer,
+/// and that is the half worth pinning: a file absent from an entry is a file
+/// to render, never a file reported unchanged, so the warm answer is the cold
+/// one whichever way the patch went missing.
+#[tokio::test]
+async fn an_entry_that_lost_the_patches_it_kept_still_answers_for_every_file() {
+    let store = Memory::new();
+    let capped = || store.store().capping_patches_at(100);
+
+    let answer = call(capped, diffable()).await;
+    settles(&store, 2).await;
+
+    store.forget(&patches_of(&answer));
+
+    let again = call(capped, diffable()).await;
+    assert_eq!(
+        again["structuredContent"]["cached"],
+        json!(true),
+        "an entry that says a patch was dropped is whole without a \
+         `patches.json`, and says the same thing when the cap took one: got \
+         {again}"
+    );
+
+    let asked = json!({
+        "handle": answer["structuredContent"]["handle"].clone(),
+        "path": "src/added.js",
+    });
+
+    let cold = Memory::new();
+    assert_eq!(
+        call_tool(capped, "get_file_diff", asked.clone()).await,
+        call_tool(|| cold.store(), "get_file_diff", asked.clone()).await,
+        "and a file whose patch went with the blob is rendered, which is the \
+         same answer it has always given"
+    );
+
+    let missed = one_sided(capped, "get_file_diff", asked).await;
+    assert_eq!(
+        missed["isError"],
+        json!(true),
+        "rendered rather than served, because the patches that did fit are \
+         gone with the blob: got {missed}"
+    );
+
+    assert_eq!(
+        store.written(),
+        vec![meta_of(&answer)],
+        "and nothing rewrites them, which is what this costs until the entry \
+         is evicted"
+    );
+}
+
 /// A store that is not there costs a recomputed diff and nothing else.
 ///
 /// This is the rule the whole module is arranged around: the cache holds a
