@@ -357,6 +357,53 @@ async fn the_answer_does_not_wait_for_the_entry_to_be_written() {
     );
 }
 
+/// An entry that is already there is not written again.
+///
+/// Rewriting an identical entry would reset the moment it was uploaded, and
+/// that moment is the order #22 evicts in — so a comparison that is asked
+/// for often would keep moving to the back of the queue and the cache would
+/// evict the entries that earn their place.
+///
+/// What makes a write happen at all when the entry is there is a read that
+/// missed although it should not have: a transient failure on the lookup, or
+/// two invocations computing the same comparison at once, neither able to
+/// see what the other is about to write. A store whose reads are lost is
+/// both of those, staged rather than raced.
+#[tokio::test]
+async fn an_entry_that_is_already_there_is_not_written_again() {
+    let store = Memory::new();
+
+    let answer = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+
+    let uploaded = |at: &str| {
+        store
+            .uploaded_at(at)
+            .unwrap_or_else(|| panic!("`{at}` should be there"))
+    };
+    let (meta, patches) = (meta_of(&answer), patches_of(&answer));
+    let (before_meta, before_patches) = (uploaded(&meta), uploaded(&patches));
+
+    let missed = Memory::losing_reads(&store);
+    let again = call(|| missed.store(), diffable()).await;
+
+    assert_eq!(
+        again["structuredContent"]["cached"],
+        json!(false),
+        "the call has to have missed, or there is no write to skip: got {again}"
+    );
+
+    // Long enough that a write would have landed: this store keeps its blobs
+    // in a map, so an overwrite is microseconds away and not milliseconds.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    assert_eq!(
+        (uploaded(&meta), uploaded(&patches)),
+        (before_meta, before_patches),
+        "the entry was written a second time, and eviction orders on this"
+    );
+}
+
 /// A comparison is named by every argument, not by the package and the pair.
 ///
 /// Each variation below changes one field of the cache key and nothing else,

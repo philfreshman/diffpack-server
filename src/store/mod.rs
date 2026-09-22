@@ -27,6 +27,7 @@ mod blob;
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -313,15 +314,42 @@ impl DiffStore {
         }
     }
 
-    /// Put `bytes` at `pathname`, or do not.
+    /// Put `bytes` at `pathname`, unless something is already there.
+    ///
+    /// The head is not an optimisation. An entry is derived from its
+    /// contents, so a blob already at this pathname holds these bytes
+    /// already — and writing them again would reset the moment it was
+    /// uploaded, which is the order #22 evicts in. A comparison asked for
+    /// often would keep moving to the back of that queue.
+    ///
+    /// What makes that happen at all is a read that missed although it
+    /// should not have: a lookup that failed, or two invocations working out
+    /// the same comparison at once.
     async fn write(&self, pathname: &str, bytes: Vec<u8>) {
         match &self.source {
             Source::Live(api) => {
+                match api.head(pathname).await {
+                    Ok(Some(_)) => return,
+                    Ok(None) => {}
+                    // A head that could not be answered is not a reason to
+                    // overwrite: the entry may well be there, and the cost
+                    // of skipping a write that was needed is one more
+                    // recomputed diff.
+                    Err(_) => {
+                        self.gave_up(WRITING);
+                        return;
+                    }
+                }
+
                 if api.put(pathname, bytes).await.is_err() {
                     self.gave_up(WRITING);
                 }
             }
-            Source::Memory(memory) => memory.write(pathname, bytes).await,
+            Source::Memory(memory) => {
+                if !memory.holds(pathname) {
+                    memory.write(pathname, bytes).await;
+                }
+            }
             Source::Unavailable(why) => {
                 self.gave_up(why);
             }
@@ -397,7 +425,7 @@ impl std::fmt::Debug for DiffStore {
 /// would be a suite that passes while the layout is wrong.
 #[derive(Debug, Clone, Default)]
 pub struct Memory {
-    blobs: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    blobs: Arc<Mutex<BTreeMap<String, Held>>>,
 
     /// How long this store takes over one blob.
     ///
@@ -406,7 +434,34 @@ pub struct Memory {
     /// is written faster than a response can be built, so without it the two
     /// orderings look the same.
     stall: Duration,
+
+    /// Whether every read of this store answers as a miss.
+    ///
+    /// What a lookup that failed looks like, and what two invocations
+    /// computing one comparison at once look like to each other. Both end in
+    /// a write over an entry that is already there, which is the one thing
+    /// the head before a put is there to stop.
+    lose_reads: bool,
 }
+
+/// One blob this store holds.
+///
+/// `uploaded_at` is the moment the store took it, which is the blob field
+/// eviction orders on. It counts rather than reads a clock: two writes in
+/// one millisecond are indistinguishable by a timestamp and not by this,
+/// and zero-padding keeps the lexical order the real store's ISO-8601
+/// already has.
+#[derive(Debug, Clone)]
+struct Held {
+    bytes: Vec<u8>,
+    uploaded_at: String,
+}
+
+/// How many blobs this process has taken, across every [`Memory`].
+///
+/// One counter for all of them, because what it stands in for is a clock and
+/// a clock is not per store either.
+static UPLOADS: AtomicU64 = AtomicU64::new(0);
 
 impl Memory {
     pub fn new() -> Self {
@@ -419,6 +474,23 @@ impl Memory {
             stall: delay,
             ..self
         }
+    }
+
+    /// `store`'s blobs, answering every read of them as a miss.
+    ///
+    /// Written as a view of another store rather than as a flag on one,
+    /// because what it stands for is a second reader of the same blobs — an
+    /// invocation that cannot see what the first has written.
+    pub fn losing_reads(store: &Self) -> Self {
+        Self {
+            lose_reads: true,
+            ..store.clone()
+        }
+    }
+
+    /// When the blob at `pathname` was taken, if this store holds one.
+    pub fn uploaded_at(&self, pathname: &str) -> Option<String> {
+        Some(self.blobs.lock().ok()?.get(pathname)?.uploaded_at.clone())
     }
 
     /// The blob at `pathname`, if this store holds one.
@@ -445,7 +517,23 @@ impl Memory {
     }
 
     fn read(&self, pathname: &str) -> Option<Vec<u8>> {
-        self.blobs.lock().ok()?.get(pathname).cloned()
+        if self.lose_reads {
+            return None;
+        }
+
+        Some(self.blobs.lock().ok()?.get(pathname)?.bytes.clone())
+    }
+
+    /// Whether this store holds a blob at `pathname`.
+    ///
+    /// Not [`Memory::read`], and the difference is the whole of what a head
+    /// before a put is for: a store whose reads are lost still knows what it
+    /// holds, exactly as a blob store whose download failed still answers
+    /// this.
+    fn holds(&self, pathname: &str) -> bool {
+        self.blobs
+            .lock()
+            .is_ok_and(|blobs| blobs.contains_key(pathname))
     }
 
     async fn write(&self, pathname: &str, bytes: Vec<u8>) {
@@ -454,7 +542,8 @@ impl Memory {
         }
 
         if let Ok(mut blobs) = self.blobs.lock() {
-            blobs.insert(pathname.to_owned(), bytes);
+            let uploaded_at = format!("{:020}", UPLOADS.fetch_add(1, Ordering::Relaxed));
+            blobs.insert(pathname.to_owned(), Held { bytes, uploaded_at });
         }
     }
 }
