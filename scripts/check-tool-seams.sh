@@ -78,12 +78,14 @@ readonly RESOURCES="src/resources"
 # crate, which is why it is one line in a checked-in file rather than an
 # import someone adds on a Friday.
 #
-# `futures` is here for one thing: a tool comparing two versions waits on the
-# network twice and the two waits do not depend on each other. Joining them is
-# that tool's own business rather than a seam's, because `archive` fetches one
-# version and cannot know it is half of a pair. It is on the list rather than
-# written as a full path at a call site, which is the spelling this rule
-# cannot see.
+# `futures` is here for one thing, in one file: `diff_package_versions`
+# compares two versions, so it waits on the network twice and the two waits do
+# not depend on each other. Joining them is that tool's own business rather
+# than a seam's, because `archive` fetches one version and cannot know it is
+# half of a pair. The walk holding that `try_join!` is what every other diff
+# path calls (ADR 0016), so one file under here names this crate and the list
+# stays a list of what the job needs. It is on the list rather than written as
+# a full path at a call site, which is the spelling this rule cannot see.
 readonly ALLOWED_ROOTS=(crate self super std core alloc futures rmcp serde serde_json schemars)
 
 # The crate's own modules a tool or a resource may reach. The seams, plus `error` because

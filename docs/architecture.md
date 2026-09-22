@@ -12,7 +12,9 @@ reasoning behind each seam is in [`adr/`](adr/).
 api/mcp.rs          entry point: wraps the router in VercelLayer
 src/router.rs       routes, panic guard over the transport, origin config
 src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
-src/tools/          one module per tool: definition and handler together
+src/tools/          one module per tool: definition and handler together,
+                    and diff_package_versions::compare, the one walk from a
+                    handle to a comparison that all four diff paths take
 src/resources/      one module per resource: URI and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
@@ -120,6 +122,26 @@ a tool module does is: ask `registry`, `archive`, `catalogue`, `search` or
 `store` for what it needs, shape an answer through `page`, and fail through
 `error`. What it does not do is fetch, cache or paginate by hand.
 
+One thing under here is not a tool, and it is in a tool module rather than
+beside one. `diff_package_versions::compare` is the walk from a handle to a
+compared tree — the store lookup, the pair of downloads, the tree build, the
+patches rendered while both archives are still in hand, and the entry written
+back. All four diff paths go through it: the tool that mints a handle, the two
+that take one, and the two resources. It is in that module because that is the
+tool which *computes* a comparison, and the other three read back what it
+worked out; a module of its own, named after neither, is what [ADR
+0014](adr/0014-a-resource-is-a-projection-of-the-tools.md) rejected for the
+walks it lists. See [ADR
+0016](adr/0016-the-walk-to-a-comparison-is-this-tools.md).
+
+That is where the cache is read, which is the part worth knowing before
+reading any of the four. A tool that takes a handle does not mention the
+store: it asks for the comparison and is handed one, remembered or worked out.
+What it gets either way is the tree — an entry is a tree and its patches and
+never the archives they came from — so `get_file_diff`, which renders from
+both versions' contents, still downloads them. Its `Comparison::files` is
+where that happens, and #84 is where an entry's own patches answer it instead.
+
 A tool writes down types rather than JSON. The `Tool` trait's associated
 `Args` and `Output` generate the input schema, the output schema and the
 structured answer, so a schema cannot disagree with the handler beside it; the
@@ -202,9 +224,17 @@ shapes. A `Resource` carries a `uri` a client can follow as it stands and a
 client followed literally and got `-32602` for.
 
 **Nothing here computes an answer a tool already computes.** The catalogue is
-`registry` serialised, the totals are `diff_package_versions`'s walk, the tree
-is `get_diff_tree`'s, and one file's patch is `get_file_diff`'s renderer. See
-[ADR 0014](adr/0014-a-resource-is-a-projection-of-the-tools.md).
+`registry` serialised, the comparison is `diff_package_versions::compare`, the
+totals are that module's walk, the tree is `get_diff_tree`'s, and one file's
+patch is `get_file_diff`'s renderer. See [ADR
+0014](adr/0014-a-resource-is-a-projection-of-the-tools.md).
+
+The comparison is on that list since #83 and was the one exception to it:
+`src/resources/diff.rs` held the fetch, the extraction and the tree build, and
+three tools each had a copy of the same walk. A resource computing what a tool
+computes is what 0014 forbids, so the walk went to the tool that owns it and
+0014's sentence became true rather than nearly true. See [ADR
+0016](adr/0016-the-walk-to-a-comparison-is-this-tools.md).
 
 A read has one channel. `ReadResourceResult` carries contents and nothing
 else, so there is no `isError` half to put a message in and every failure is a
@@ -424,14 +454,15 @@ the same number.
 The slots are the process's and not a request's, which is the point — a `Ctx`
 is built per request, so a cap held there would bound one caller against
 itself and leave an instance serving several of them unbounded. Four because
-two is the floor: three callers ask for two archives through one `try_join!`
-— `diff_package_versions`, `get_file_diff`, and `resources::diff::compare`,
-which both diff resources read through — and a cap below two would serialise
-the only shape of call this server makes concurrently. The third arrived
-after the number was chosen and does not move it: each `bytes()` takes one
-slot and gives it back before returning, so no caller holds a slot while
-waiting on another, and there is no hold-and-wait among them to deadlock on
-however many arrive at once.
+two is the floor: `diff_package_versions::compare` asks for both archives of
+a comparison through one `try_join!`, and a cap below two would serialise the
+only shape of call this server makes concurrently. There used to be three
+copies of that call and the number did not depend on which of them was
+running: each `bytes()` takes one slot and gives it back before returning, so
+no caller holds a slot while waiting on another, and there is no hold-and-wait
+among them to deadlock on however many arrive at once. There is one copy since
+#83, which does not move the number either — every diff path still reaches
+that `try_join!`, through one function instead of four.
 
 A fifth body waits rather than being refused, and the wait has a budget of
 its own: `SLOT_WAIT`, which is `UPSTREAM_TIMEOUT` again for a different
@@ -472,6 +503,13 @@ Vercel Blob client is the implementation behind it and is private to this
 module, along with the 256 MB budget and the eviction that keeps it. A
 tool asks for a result and gets one or does not; how many HTTP calls that took
 is not a tool's business. See [ADR 0003](adr/0003-the-cache-seam-is-a-store.md).
+
+Who asks changed with #83 and the seam did not. The lookup used to be in
+`diff_package_versions` alone, which is the one caller that never needed it —
+it is the tool that computes a comparison — while the three that exist to read
+one back downloaded two archives every time. It is inside
+`diff_package_versions::compare` now, which all four take, so the same two
+methods with the same absent `Result`s serve three more paths than they did.
 
 Three things are the store's and not a caller's, and each is a rule about the
 cache rather than about the blobs underneath it. **A cache failure is never a
