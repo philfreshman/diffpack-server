@@ -96,8 +96,26 @@ impl DiffKey {
     }
 
     fn blob_path(&self, file: &str) -> String {
-        format!("diffs/v{}/{}/{}", self.schema, self.diff_id(), file)
+        format!("{}{}/{}", prefix(self.schema), self.diff_id(), file)
     }
+}
+
+/// Where `schema`'s entries live in the blob store.
+///
+/// The layout is this module's, and the prefix is the half of it somebody
+/// else needs: `src/store/` counts and sweeps what is under one, and a
+/// second spelling of `diffs/v{n}/` there would be a second thing to change
+/// when [`SCHEMA`] moves. Both cannot disagree about the version today —
+/// they derive from the same constant — but they are one layout and this is
+/// where it is written.
+///
+/// Takes the schema rather than reading [`SCHEMA`], because the two callers
+/// do not ask the same question. A [`DiffKey`] names the pathname of *its
+/// own* schema, which is a field and need not be this build's; a store
+/// sweeps this build's, because a sweep reading the old prefix would be
+/// counting a store it no longer writes to.
+pub fn prefix(schema: u32) -> String {
+    format!("diffs/v{schema}/")
 }
 
 /// A JSON string literal, escaping included. `serde_json` owns the escaping

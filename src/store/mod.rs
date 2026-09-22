@@ -153,6 +153,11 @@ pub struct DiffStore {
     /// store it no longer writes to. It is a field so that the one test that
     /// runs a sweep against the real blob store can scope itself to a prefix
     /// of its own, rather than evicting the cache this project serves from.
+    ///
+    /// Asked of [`crate::cache_key::prefix`] rather than spelled here. The
+    /// blob layout is that module's — it is where a `DiffKey` becomes the
+    /// two pathnames this one sweeps — and a `diffs/v{n}/` written out in
+    /// this file would be a second copy of it to keep in step.
     prefix: String,
 
     /// Where this store says it could not answer.
@@ -209,7 +214,7 @@ impl DiffStore {
             entry_cap: ENTRY_CAP,
             max_bytes: CACHE_MAX_BYTES,
             target_bytes: CACHE_TARGET_BYTES,
-            prefix: format!("diffs/v{}/", crate::cache_key::SCHEMA),
+            prefix: crate::cache_key::prefix(crate::cache_key::SCHEMA),
             log: Sink::default(),
         }
     }
