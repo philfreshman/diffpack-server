@@ -1,11 +1,11 @@
 //! The handle that passes between the tool that computes a diff and the ones
 //! that read it back.
 //!
-//! `diff_package_versions` (#13) mints one; `get_diff_tree` (#14),
-//! `get_file_diff` (#15) and the diff resources (#16) take one. It carries the
-//! `diff_id` — the cache lookup, and the string #27 needs — and beside it the
-//! inputs that `diff_id` was minted from, so that a reading tool whose entry
-//! has been evicted recomputes instead of refusing. See [ADR
+//! `diff_package_versions` (#13) mints one; `get_diff_tree` (#14) and
+//! `get_file_diff` (#15) take one, and the diff resources (#16) will. It
+//! carries the `diff_id` — the cache lookup, and the string #27 needs — and
+//! beside it the inputs that `diff_id` was minted from, so that a reading
+//! tool whose entry has been evicted recomputes instead of refusing. See [ADR
 //! 0006](../docs/adr/0006-the-handle-carries-its-inputs.md).
 
 use std::borrow::Cow;
