@@ -94,6 +94,12 @@ pub fn patch(
 
         // Identical content is the file rather than a diff of it, and it is
         // how a rename that moved a file without touching it reads.
+        //
+        // Byte equality, and deliberately not the comparison
+        // `ignore_whitespace` would make: a file that was reformatted *did*
+        // change, and answering with its content would hide the reformatting
+        // that is the only thing that happened to it. The engine draws the
+        // line here too.
         (Some(from), Some(to)) if from == to => Patch {
             data: to.to_owned(),
             is_diff: false,

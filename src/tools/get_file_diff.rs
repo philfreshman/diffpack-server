@@ -5,17 +5,19 @@
 //! file is `modified` and how many lines it gained and lost; this is the
 //! lines.
 //!
-//! # The renderer is transcribed, not called
+//! # The renderer is the engine seam's
 //!
 //! `diffpack-engine` decides which of five things one file's answer is, in a
 //! function that is private to it and reachable only through a
-//! `wasm_bindgen` entry point — so [`render`] below is that function written
-//! out rather than a call to it. The output has to stay byte-identical to
-//! what the browser shows, which makes every wart in it deliberate: the
-//! trailing `+ ` a file ending in a newline gets from being split on `\n`,
-//! the `--- from/` header naming the *new* path on a rename, and the byte
-//! comparison that decides "unchanged" even under a handle that says to
-//! ignore whitespace.
+//! `wasm_bindgen` entry point — so it is written out rather than called, and
+//! [ADR 0013](../../docs/adr/0013-the-patch-renderer-lives-in-the-engine-seam.md)
+//! puts the transcription in [`crate::engine`] rather than here. This tool
+//! and the one that fills the cache render the same file, and two
+//! transcriptions that drifted would answer it differently depending on
+//! whether anyone had asked for it before.
+//!
+//! What stays here is everything the engine has no opinion about: the
+//! directory refusal below, and the trimming two sections down.
 //!
 //! Only the fourth case — both versions have the file and it changed — goes
 //! through anything public, so it is the only one `tests/get_file_diff.rs`
@@ -179,9 +181,6 @@ impl Default for ContextLines {
 /// The word that turns trimming off.
 const FULL: &str = "full";
 
-/// What the engine answers about a path in neither version, word for word.
-const ABSENT: &str = "File not present in either version.";
-
 impl<'de> Deserialize<'de> for ContextLines {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         match Asked::deserialize(deserializer)? {
@@ -242,63 +241,6 @@ impl JsonSchema for ContextLines {
             ),
         })
     }
-}
-
-/// One file's patch, and whether what came back is a diff at all.
-///
-/// The four-case renderer `diffpack-engine`'s `build_diff_result` is, written
-/// out here because that function is private to the engine and
-/// `get_diff_for_path` beside it is a `wasm_bindgen` entry point. The output
-/// has to stay byte-identical to what the browser shows, so this is a
-/// transcription rather than an implementation: every wart below is the
-/// engine's, including the trailing `+ ` a file ending in a newline gets from
-/// splitting on `\n`.
-fn render(
-    path: &str,
-    from: Option<&str>,
-    to: Option<&str>,
-    ignore_whitespace: bool,
-) -> (String, bool) {
-    match (from, to) {
-        (None, None) => (ABSENT.to_owned(), false),
-
-        (None, Some(to)) => (sided(&format!("--- /dev/null\n+++ to/{path}"), '+', to), true),
-
-        (Some(from), None) => (
-            sided(&format!("--- from/{path}\n+++ /dev/null"), '-', from),
-            true,
-        ),
-
-        // Byte equality, and deliberately not the comparison
-        // `ignore_whitespace` would make: a file that was reformatted *did*
-        // change, and answering with its content would hide the reformatting
-        // that is the only thing that happened to it. The engine draws the
-        // line here too.
-        (Some(from), Some(to)) if from == to => (to.to_owned(), false),
-
-        // The one case the engine renders through a function this crate can
-        // call, which is why it is the one `tests/get_file_diff.rs` holds
-        // against the engine rather than against a literal.
-        (Some(from), Some(to)) => (
-            engine::get_diff_content(path, from, to, ignore_whitespace),
-            true,
-        ),
-    }
-}
-
-/// `header`, then every line of `content` under `sign`.
-///
-/// The engine splits on `\n` here rather than diffing, which is what gives a
-/// file ending in a newline one more line than it has.
-fn sided(header: &str, sign: char, content: &str) -> String {
-    let mut text = header.to_owned();
-    for line in content.split('\n') {
-        text.push('\n');
-        text.push(sign);
-        text.push(' ');
-        text.push_str(line);
-    }
-    text
 }
 
 /// What one line of a rendered diff is.
@@ -547,14 +489,15 @@ impl Tool for GetFileDiff {
         let from = content(&from_files, from_path);
         let to = content(&to_files, &args.path);
 
-        let (text, is_diff) = render(&args.path, from, to, inputs.ignore_whitespace);
+        let rendered = engine::patch(&args.path, from, to, inputs.ignore_whitespace);
+        let is_diff = rendered.is_diff;
 
         // Only a diff is trimmed. The other two answers are a file's own
         // content and a sentence, and neither has a header to keep or a
         // change to keep lines around.
         let text = match args.context_lines {
-            ContextLines::Around(lines) if is_diff => trim(&text, lines),
-            _ => text,
+            ContextLines::Around(lines) if is_diff => trim(&rendered.data, lines),
+            _ => rendered.data,
         };
 
         Ok(Patch {
