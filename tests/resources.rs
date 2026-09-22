@@ -39,7 +39,7 @@ const FILE_TEMPLATE: &str = "diffpack://diff/{handle}/file/{path}";
 /// test in this file and reach a client as a server that has none.
 #[tokio::test]
 async fn a_client_is_told_this_server_has_resources() {
-    let answer = post(json!({
+    let answer = current(json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "server/discover",
@@ -1009,7 +1009,7 @@ async fn walk(handle: &str) -> Vec<Value> {
 /// Call `tool` with `arguments`, returning the `result` — or panicking with
 /// the JSON-RPC error, so a failure says what the server objected to.
 async fn call(tool: &str, arguments: Value) -> Value {
-    let answer = post(json!({
+    let answer = current(json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
@@ -1112,7 +1112,7 @@ async fn result_of(uri: &str) -> Value {
 
 /// The whole JSON-RPC answer to a read, error and all.
 async fn reading(uri: &str) -> Value {
-    post(json!({
+    current(json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "resources/read",
@@ -1145,7 +1145,7 @@ fn edited(handle: &str, field: &str, value: Value) -> String {
 
 /// Everything `resources/list` answers with.
 async fn resources() -> Vec<Value> {
-    let answer = post(json!({
+    let answer = current(json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "resources/list",
@@ -1161,7 +1161,7 @@ async fn resources() -> Vec<Value> {
 
 /// Everything `resources/templates/list` answers with.
 async fn templates() -> Vec<Value> {
-    let answer = post(json!({
+    let answer = current(json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "resources/templates/list",
@@ -1232,7 +1232,12 @@ async fn advertised() -> Vec<(String, String)> {
 
 /// A request as a conforming `2026-07-28` client sends it, to a server whose
 /// archives come from `fixtures/archives/` rather than from the registries.
-async fn post(body: Value) -> Value {
+///
+/// Named for the revision rather than for the verb, because the only thing
+/// this and [`previous`] differ in is which revision the client speaks —
+/// `tests/common/mod.rs` owns everything else about sending it, and a second
+/// `post` in `tests/` would read as a second opinion about that.
+async fn current(body: Value) -> Value {
     Client::fixture().post(body).await
 }
 
