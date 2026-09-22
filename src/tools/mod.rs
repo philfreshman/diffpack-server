@@ -158,8 +158,9 @@ tools! {
 /// around a seam.
 ///
 /// Beside the seams it carries what the dispatch needs and a handler never
-/// touches: the [`Sink`] the one line per call is written to, and the
-/// [`Spent`] that call's phases add up in. That is the whole of the
+/// touches: the [`Sink`] the one line per call is written to, the [`Spent`]
+/// that call's phases add up in, and the [`Lookup`] saying what it found in
+/// the store. That is the whole of the
 /// difference between what a `Ctx` is for a handler and what it is for a
 /// request — a handler reaches the seams, and a request is also the line it
 /// leaves behind.
