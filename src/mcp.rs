@@ -196,7 +196,35 @@ impl ServerHandler for Diffpack {
     ///
     /// The same shape as [`Self::call_tool`] and for the same reason: which
     /// URI resolves to what, and which channel a refusal takes, is decided
-    /// once in [`crate::resources`] rather than here.
+    /// once in [`crate::resources`] rather than here. Since #85 the code a
+    /// refusal carries is the [`Failure`]'s too, so there is nothing for this
+    /// method to choose and [`Failure::refuse`] is the whole of the mapping.
+    ///
+    /// # Why this writes no line, and what it now costs
+    ///
+    /// [`crate::tools::call`] leaves a [`Line`](crate::log::Line) behind and
+    /// this does not, so a resource read is invisible to [`crate::log`]: no
+    /// duration, no outcome, and no `cache` field. #26 owns it, and this is a
+    /// note about what has changed under that deferral rather than a repeat of
+    /// it.
+    ///
+    /// It was a small gap when resource reads fetched their own archives every
+    /// time. It is not one now. #83 made the two diff resources go through
+    /// `diff_package_versions::compare`, which is the path that consults the
+    /// store, and #84 gave an entry's patches a reader — so a read of one
+    /// file's diff can be served entirely out of the cache and fetch nothing
+    /// at all. The calls the cache does the most for are exactly the calls
+    /// nothing counts, which means the hit rate in the log is taken over the
+    /// population that benefits least.
+    ///
+    /// Landing it here would have been a second design inside a change about
+    /// error codes, and not a small one: a `Line` is built from a tool name
+    /// and a [`JsonObject`](rmcp::model::JsonObject) of arguments, and a read
+    /// has a URI and nothing else. What that line says — whether the handle is
+    /// decoded so the package and version can be counted, or logged opaque —
+    /// is a decision about what the log exposes, which is #26's to make along
+    /// with `Line`'s own shape and `CONTEXT.md`'s entry saying a Line is one
+    /// per tool call.
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
