@@ -129,6 +129,7 @@ macro_rules! tools {
 // property of the collection rather than a call at the end of a builder.
 tools! {
     diff_package_versions::DiffPackageVersions,
+    get_diff_tree::GetDiffTree,
     get_file_content::GetFileContent,
     list_package_files::ListPackageFiles,
     list_package_versions::ListPackageVersions,

@@ -357,7 +357,15 @@ answer's size follows from its subject, and a Summary's does not. Twenty
 entries is twenty entries whether the pair moved one file or nine thousand,
 so there is no ceiling to stay under and nothing for a cursor to resume.
 The tree it samples from *is* subject to both, which is why walking it is
-`get_diff_tree`'s job (#14) and not this one's.
+`get_diff_tree`'s job and not this one's.
+
+That tool is also where a shape that is not a sequence is made into one. A
+Page is a slice of a sequence and a cursor names a position in it, so the
+tree is walked into a flat list of nodes — each carrying its whole path,
+a directory immediately before what is under it — and handed here exactly as
+a file listing is. `path`, `depth` and `status` are how a caller asks for
+part of it, and they narrow the sequence before this module sees it. See
+[ADR 0012](adr/0012-a-tree-is-paged-as-a-flat-sequence.md).
 
 Three things a caller does not do: count bytes, encode a cursor, or decide
 what "too big" means. The ceiling is on *serialised* bytes and is a third of
@@ -368,8 +376,9 @@ a package whose paths are long.
 
 ### `src/handle.rs` — the handle a diff is asked for again by
 
-What passes between the tool that computes a diff (#13) and the three that
-read one back (#14, #15, #16). It carries the `diff_id` — the cache lookup,
+What passes between the tool that computes a diff and the ones that read one
+back — `get_diff_tree` today, `get_file_diff` (#15) and the diff resources
+(#16) beside it later. It carries the `diff_id` — the cache lookup,
 and the string #27 needs — and beside it the inputs that `diff_id` was minted
 from, so that a reading tool whose entry has been evicted recomputes rather
 than refusing. See [ADR 0006](adr/0006-the-handle-carries-its-inputs.md).
