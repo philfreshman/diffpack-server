@@ -718,22 +718,30 @@ async fn a_path_encoded_the_way_a_uri_template_expands_it_reads_the_same_file() 
 /// `%FF` is the other half: two hex digits that decode to a byte no UTF-8
 /// string can hold. A path is text here, so that is malformed too rather
 /// than something to render lossily.
+///
+/// The read at the top is what keeps this honest. A server that served this
+/// template not at all would refuse every URI below with the same `-32602`,
+/// for "no resource at this URI" rather than for the escape — so the control
+/// is a path that is one, read through the same template with the same
+/// handle. That is the thing to assert rather than the wording of the
+/// refusal: a test that read the message would be pinning a sentence.
 #[tokio::test]
 async fn a_path_whose_escapes_are_malformed_is_refused() {
+    let handle = diffable();
+
+    let works = reading(&file_uri(&handle, "src/index.js")).await;
+    assert!(
+        works.get("result").is_some(),
+        "this template reads a path that is one, so a refusal below is the \
+         decoder's: got {works}"
+    );
+
     for path in ["src%2", "src%zz.js", "src/%FF.js"] {
-        let answer = reading(&file_uri(&diffable(), path)).await;
+        let answer = reading(&file_uri(&handle, path)).await;
 
         assert_eq!(
             answer["error"]["code"], -32602,
             "`{path}` is not a path this server can decode: got {answer}"
-        );
-        // Not "no resource at this URI": the URI is one of ours and the
-        // client's own escape is what is wrong with it.
-        assert!(
-            answer["error"]["message"]
-                .as_str()
-                .is_some_and(|message| !message.contains("No resource at")),
-            "the refusal should say what is wrong with the path, got {answer}"
         );
     }
 }
