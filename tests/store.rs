@@ -669,6 +669,189 @@ async fn a_sweep_takes_the_oldest_entries_whole_and_the_newest_survive() {
     );
 }
 
+/// An entry that could never fit is refused before anything is deleted.
+///
+/// The sharpest way to lose a cache: an entry larger than the whole budget
+/// arrives, a sweep runs to make room for it, every other comparison is
+/// deleted, and there is still no room at the end of it. The store is then
+/// empty and the entry that emptied it was never written either.
+///
+/// So the size is checked before the listing is taken, and what proves it is
+/// the entry that was already there still being there. A refusal an operator
+/// cannot see is a cache that has quietly stopped writing, so it says what it
+/// would not take.
+#[tokio::test]
+async fn an_entry_too_big_for_the_whole_budget_is_refused_without_a_sweep() {
+    let store = Memory::new();
+
+    let first = call(|| store.store(), at(0)).await;
+    lands(&store, &first).await;
+    let entry = held(&store);
+
+    // A budget no comparison this server makes could fit in.
+    let log = Capture::new();
+    let budgeted = || {
+        store
+            .store()
+            .budgeting(entry / 2, entry / 4)
+            .logging_to(log.sink())
+    };
+
+    let answered = call(budgeted, at(1)).await;
+    let notes = noted(&log).await;
+
+    assert_eq!(
+        store.written(),
+        vec![meta_of(&first), patches_of(&first)],
+        "the entry already there is untouched: a sweep that emptied the cache \
+         and still had no room would have spent it for nothing"
+    );
+    assert_eq!(
+        answered["isError"],
+        json!(false),
+        "and an entry the cache will not hold is still a comparison that was \
+         answered, got {answered}"
+    );
+    assert!(
+        notes
+            .iter()
+            .all(|note| note.contains("larger than the whole budget")),
+        "the refusal says what it would not take, and says: {notes:?}"
+    );
+}
+
+/// Wait until `log` carries a note from the store, or give up.
+///
+/// A refusal happens where a write happens — after the answer — so it is
+/// something that becomes true rather than something that is true when the
+/// call returns.
+async fn noted(log: &Capture) -> Vec<String> {
+    for _ in 0..400 {
+        let notes: Vec<String> = log
+            .lines()
+            .into_iter()
+            .filter(|line| line.contains(r#""seam":"store""#))
+            .collect();
+
+        if !notes.is_empty() {
+            return notes;
+        }
+
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    panic!(
+        "the store should have said something by now, {:?} is all there is",
+        log.lines()
+    );
+}
+
+/// Two admissions at once, each deciding against the other's absence.
+///
+/// This is what the gap between the ceiling and the target is for, and the
+/// only test that can tell the two numbers apart: with a single number, a
+/// sweep leaves the store exactly full, and the second admission — which
+/// read the store before the first one's blobs arrived — finds room that is
+/// already spoken for and takes it.
+///
+/// Staged rather than raced, the way a lost read stages two invocations
+/// computing one comparison. The store takes a fifth of a second over every
+/// blob, so the second call cannot help but list while the first call's
+/// write is still in flight: that is the whole of the overlap, and without
+/// it the two would simply happen in turn and agree.
+#[tokio::test]
+async fn two_admissions_at_once_do_not_take_the_store_over_the_ceiling() {
+    let store = Memory::new();
+
+    let first = call(|| store.store(), at(0)).await;
+    lands(&store, &first).await;
+    let entry = held(&store);
+
+    for step in 1..4 {
+        let answer = call(|| store.store(), at(step)).await;
+        lands(&store, &answer).await;
+    }
+
+    // Four entries at the ceiling, a sweep down to three, so the gap is the
+    // one entry a second admission needs — the proportion production keeps
+    // between 256 MB and 240 MB over an entry that may weigh 8 MB.
+    let (max, target) = (4 * entry, 3 * entry);
+    let slow = store.clone().stalling(Duration::from_millis(200));
+    let budgeted = || slow.store().budgeting(max, target);
+
+    let (fifth, sixth) = tokio::join!(call(budgeted, at(4)), call(budgeted, at(5)));
+    lands(&store, &fifth).await;
+    lands(&store, &sixth).await;
+
+    assert!(
+        held(&store) <= max,
+        "two entries admitted at once left the store holding {} bytes against \
+         a ceiling of {max}",
+        held(&store)
+    );
+}
+
+/// The answer does not wait for the sweep, any more than for the write.
+///
+/// A caller is waiting on a diff and not on a cache, and a sweep is the most
+/// expensive thing the cache does: a listing of the whole store and a delete
+/// per entry it takes. Making a caller wait for it would spend their latency
+/// on room for somebody else's next call.
+///
+/// Measured rather than assumed, in the three parts the write's own version
+/// of this is measured in. The answer arrives in a fraction of what the
+/// store takes over one blob; the entries the sweep is about to take are
+/// still there when it does, which is what says the sweep had not run yet;
+/// and they do go in the end, after more time has passed than the answer
+/// took — because a sweep nobody waits for is still a sweep.
+#[tokio::test]
+async fn the_answer_does_not_wait_for_the_sweep() {
+    let store = Memory::new();
+
+    let oldest = call(|| store.store(), at(0)).await;
+    lands(&store, &oldest).await;
+    let entry = held(&store);
+
+    let second = call(|| store.store(), at(1)).await;
+    lands(&store, &second).await;
+
+    // Room for one, so admitting a third has to take both of these, and a
+    // store that takes half a second over every blob it touches.
+    let slow = store.clone().stalling(Duration::from_millis(500));
+    let budgeted = || slow.store().budgeting(entry + entry / 16, entry);
+
+    let began = Instant::now();
+    let third = call(budgeted, at(2)).await;
+    let answered = began.elapsed();
+
+    assert_eq!(
+        third["isError"],
+        json!(false),
+        "the comparison is the answer, got {third}"
+    );
+    assert!(
+        answered < Duration::from_millis(250),
+        "the answer waited {answered:?} on a store that takes 500ms a blob"
+    );
+    assert!(
+        store.written().contains(&meta_of(&oldest)),
+        "the oldest entry was already gone when the answer arrived, so the \
+         caller waited for the sweep after all"
+    );
+
+    lands(&store, &third).await;
+    assert!(
+        !store.written().contains(&meta_of(&oldest)),
+        "the sweep nobody waited for should still have happened: {:?}",
+        store.written()
+    );
+    assert!(
+        began.elapsed() >= Duration::from_millis(500),
+        "a sweep this fast was not the slow store's, which would make the \
+         measurement above meaningless"
+    );
+}
+
 /// The arguments of the `step`th comparison a budget test writes.
 ///
 /// One comparison at many thresholds rather than many comparisons: the

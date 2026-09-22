@@ -412,7 +412,7 @@ impl DiffStore {
                 Ok(blobs) => Some(blobs),
                 Err(_) => self.gave_up(LISTING),
             },
-            Source::Memory(memory) => Some(memory.list(&prefix())),
+            Source::Memory(memory) => Some(memory.list(&prefix()).await),
             Source::Unavailable(why) => self.gave_up(why),
         }
     }
@@ -429,7 +429,7 @@ impl DiffStore {
                     self.gave_up::<()>(DELETING);
                 }
             }
-            Source::Memory(memory) => memory.delete(pathnames),
+            Source::Memory(memory) => memory.delete(pathnames).await,
             Source::Unavailable(why) => {
                 self.gave_up::<()>(why);
             }
@@ -637,12 +637,14 @@ impl std::fmt::Debug for DiffStore {
 pub struct Memory {
     blobs: Arc<Mutex<BTreeMap<String, Held>>>,
 
-    /// How long this store takes over one blob.
+    /// How long this store takes over one blob it lists, deletes or writes.
     ///
     /// Nothing, unless a test asks for otherwise. It is what makes "the
     /// answer did not wait for the write" a measurement: an in-process map
     /// is written faster than a response can be built, so without it the two
-    /// orderings look the same.
+    /// orderings look the same. A sweep is the same measurement over the
+    /// more expensive half — a listing of the whole store and a delete per
+    /// entry it takes.
     stall: Duration,
 
     /// Whether every read of this store answers as a miss.
@@ -754,7 +756,9 @@ impl Memory {
     /// are the three the budget is built on. A store whose reads are lost
     /// still answers this, for the reason [`Memory::holds`] does: losing a
     /// download is not forgetting what is there.
-    fn list(&self, prefix: &str) -> Vec<blob::Blob> {
+    async fn list(&self, prefix: &str) -> Vec<blob::Blob> {
+        self.stalled().await;
+
         let Ok(blobs) = self.blobs.lock() else {
             return Vec::new();
         };
@@ -771,11 +775,26 @@ impl Memory {
     }
 
     /// Lose every blob at `pathnames`.
-    fn delete(&self, pathnames: &[&str]) {
+    async fn delete(&self, pathnames: &[&str]) {
+        self.stalled().await;
+
         if let Ok(mut blobs) = self.blobs.lock() {
             for pathname in pathnames {
                 blobs.remove(*pathname);
             }
+        }
+    }
+
+    /// Take as long over this as the store was asked to.
+    ///
+    /// Every operation a write performs and none that a read does. What the
+    /// delay stands for is a request to somebody else's service, and a
+    /// lookup makes one of those too — but the lookup is the half of the
+    /// cache a caller *is* waiting on, so a store that stalled it would be
+    /// measuring the opposite of what it was built to measure.
+    async fn stalled(&self) {
+        if !self.stall.is_zero() {
+            tokio::time::sleep(self.stall).await;
         }
     }
 
@@ -792,9 +811,7 @@ impl Memory {
     }
 
     async fn write(&self, pathname: &str, bytes: Vec<u8>) {
-        if !self.stall.is_zero() {
-            tokio::time::sleep(self.stall).await;
-        }
+        self.stalled().await;
 
         if let Ok(mut blobs) = self.blobs.lock() {
             let uploaded_at = format!("{:020}", UPLOADS.fetch_add(1, Ordering::Relaxed));
