@@ -79,10 +79,11 @@ that rule stops being true.
 ## What this costs
 
 `diff_package_versions` grows. It was already the largest tool module and it
-now holds a public type, a public function and a method that three other
-modules call — a fifth export from this directory with a caller outside the
-module that owns it, where 0014 counted four and named the fifth as the
-direction to watch.
+now holds two public types, a public function and a method that three other
+modules call. 0014 counted four exports from this directory with a caller
+outside the module that owns them and named the fifth as the direction to
+watch; these are the fifth onwards, so the warning is spent here rather than
+approached, and the next one has no room left in it.
 
 The difference is which way the work moved. 0014's warning is about a resource
 doing its own work through a tool's front door; this is work *leaving* a

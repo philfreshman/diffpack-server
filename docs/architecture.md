@@ -14,7 +14,7 @@ src/router.rs       routes, panic guard over the transport, origin config
 src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
 src/tools/          one module per tool: definition and handler together,
                     and diff_package_versions::compare, the one walk from a
-                    handle to a comparison that all four diff paths take
+                    handle to a comparison that every diff path takes
 src/resources/      one module per resource: URI and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
@@ -126,7 +126,7 @@ One thing under here is not a tool, and it is in a tool module rather than
 beside one. `diff_package_versions::compare` is the walk from a handle to a
 compared tree — the store lookup, the pair of downloads, the tree build, the
 patches rendered while both archives are still in hand, and the entry written
-back. All four diff paths go through it: the tool that mints a handle, the two
+back. Every diff path goes through it: the tool that mints a handle, the two
 that take one, and the two resources. It is in that module because that is the
 tool which *computes* a comparison, and the other three read back what it
 worked out; a module of its own, named after neither, is what [ADR
