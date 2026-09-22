@@ -23,6 +23,9 @@ use tower::ServiceExt;
 
 const CURRENT: &str = "2026-07-28";
 
+/// The previous revision, still spoken by clients that have not caught up.
+const PREVIOUS: &str = "2025-11-25";
+
 /// The fixture sets this suite is served from, instead of the registries.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
@@ -60,6 +63,43 @@ async fn a_client_is_told_this_server_has_resources() {
         answer["result"]["capabilities"]["resources"].is_object(),
         "a server offering resources should say so where a client looks, got {}",
         answer["result"]["capabilities"]
+    );
+}
+
+/// A client on the previous revision finds them and reads one too.
+///
+/// One endpoint serves both revisions — `tests/mcp.rs` says why — and a
+/// client on `2025-11-25` sends none of what the current one does: no
+/// per-request `_meta`, no `Mcp-Method`, no `Mcp-Name`. Worth its own test
+/// because everything else here is written as a `2026-07-28` client, so a
+/// resource that only answered one of the two would pass the whole file.
+#[tokio::test]
+async fn a_previous_revision_client_lists_and_reads_a_resource() {
+    let listed = previous(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "resources/list",
+        "params": {},
+    }))
+    .await;
+
+    assert_eq!(
+        listed["result"]["resources"][0]["uri"],
+        json!(REGISTRIES),
+        "got {listed}"
+    );
+
+    let read = previous(json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "resources/read",
+        "params": { "uri": REGISTRIES },
+    }))
+    .await;
+
+    assert!(
+        read["result"]["contents"][0]["text"].is_string(),
+        "a client on the previous revision should read a resource too, got {read}"
     );
 }
 
@@ -1019,7 +1059,14 @@ fn meta() -> Value {
 /// A request as a conforming `2026-07-28` client sends it, to a server whose
 /// archives come from `fixtures/archives/` rather than from the registries.
 async fn post(body: Value) -> Value {
-    let (_, answer) = respond(body).await;
+    let (_, answer) = respond(body, CURRENT).await;
+    answer
+}
+
+/// The same, as a client on the previous revision sends it: none of the
+/// headers or the `_meta` SEP-2243 and SEP-1319 added.
+async fn previous(body: Value) -> Value {
+    let (_, answer) = respond(body, PREVIOUS).await;
     answer
 }
 
@@ -1028,7 +1075,10 @@ async fn post(body: Value) -> Value {
 /// The bytes rather than the structure, because that is what the response
 /// ceiling bounds: what Vercel refuses is the frame this server wrote, and
 /// two frames that parse alike can still differ.
-async fn respond(body: Value) -> (String, Value) {
+async fn respond(body: Value, version: &str) -> (String, Value) {
+    // ISO-8601 dates sort lexicographically, so a string comparison is the
+    // "this revision and later" the spec's own wording means.
+    let current = version >= CURRENT;
     let method = body["method"].as_str().expect("a call names a method");
 
     let mut request = Request::builder()
@@ -1037,17 +1087,20 @@ async fn respond(body: Value) -> (String, Value) {
         .header("host", "mcp.diffpack.io")
         .header("accept", "application/json, text/event-stream")
         .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", method);
+        .header("mcp-protocol-version", version);
 
     // SEP-2243 repeats the thing being asked for in a header as well as in
     // the body, so an intermediary can route without parsing one. For a read
     // that is the URI, the way it is the tool name for a call — the client's
-    // obligation under the transport, not this server's leniency, which is
-    // why the builder always meets it.
-    for source in ["uri", "name"] {
-        if let Some(name) = body["params"][source].as_str() {
-            request = request.header("mcp-name", name);
+    // obligation under the transport from `2026-07-28`, not this server's
+    // leniency, which is why the builder always meets it and a client on the
+    // previous revision sends none of it.
+    if current {
+        request = request.header("mcp-method", method);
+        for source in ["uri", "name"] {
+            if let Some(name) = body["params"][source].as_str() {
+                request = request.header("mcp-name", name);
+            }
         }
     }
 
