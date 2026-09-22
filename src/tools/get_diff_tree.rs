@@ -15,12 +15,13 @@
 //! a second cursor format. See [ADR
 //! 0012](../../docs/adr/0012-a-tree-is-paged-as-a-flat-sequence.md).
 //!
-//! # What the listing is rooted at
+//! # What the walk is rooted at
 //!
 //! A directory is not inside its own subtree, so neither the comparison's
-//! root nor a directory named by `path` is in its own listing — the same rule
-//! [`super::list_package_files`]'s `prefix` follows, and for the same reason:
-//! an agent that asked what is under `src` is not asking about `src`.
+//! root nor a directory named by `path` is in what comes back — the same
+//! rule [`super::list_package_files`]'s `prefix` follows, and for the same
+//! reason: an agent that asked what is under `src` is not asking about
+//! `src`.
 //!
 //! # Where a cached result would come in
 //!
@@ -82,9 +83,10 @@ pub struct Args {
     #[serde(default)]
     pub path: Option<String>,
 
-    /// How many levels to descend, counting from whatever the listing is
-    /// rooted at: `1` is that directory's own contents and nothing inside
-    /// them. Omit it to descend the whole way.
+    /// How many levels to descend, counting from wherever the answer is
+    /// rooted — the comparison itself, or the directory `path` named: `1` is
+    /// that directory's own contents and nothing inside them. Omit it to
+    /// descend the whole way.
     // Declared rather than enforced, the way `similarity_threshold` is on
     // the tool that mints a handle — but the other way round, because this
     // one has a safe reading below its range. A `0` is what counting from
@@ -350,7 +352,7 @@ impl Tool for GetDiffTree {
         // either way, so `src/` and `src` are one directory. Nothing left
         // over is the whole comparison, which is what `/` means and what
         // omitting the argument means.
-        let listing = match args.path.as_deref().map(|path| path.trim_end_matches('/')) {
+        let rooted_at = match args.path.as_deref().map(|path| path.trim_end_matches('/')) {
             Some(path) if !path.is_empty() => subtree(&tree, path),
             _ => Some(&tree),
         };
@@ -361,8 +363,8 @@ impl Tool for GetDiffTree {
         let depth = args.depth.map_or(u32::MAX, |asked| asked.max(1));
 
         let mut nodes = Vec::new();
-        if let Some(listing) = listing {
-            flatten(listing, depth, &args.status, &mut nodes);
+        if let Some(rooted_at) = rooted_at {
+            flatten(rooted_at, depth, &args.status, &mut nodes);
         }
 
         page::paginate(nodes, args.limit, args.cursor)
