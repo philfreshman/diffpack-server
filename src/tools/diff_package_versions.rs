@@ -40,6 +40,7 @@ use crate::engine::{self, DiffFileEntry, DiffStatus, FileType};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
 use crate::registry::Registry;
+use crate::store::Entry;
 use crate::tools::{Ctx, Tool};
 
 /// The tool.
@@ -320,23 +321,43 @@ impl Tool for DiffPackageVersions {
             ignore_whitespace: args.ignore_whitespace,
         });
         let inputs = handle.inputs();
+        let key = handle.key();
 
-        // Concurrently, the way the engine's wasm entry point fetches them:
-        // the two downloads do not depend on each other, and a version pair
-        // is the one place this server waits on the network twice.
-        let (from_files, to_files) = try_join!(
-            ctx.archive()
-                .fetch(inputs.registry, &inputs.package, &inputs.from_version),
-            ctx.archive()
-                .fetch(inputs.registry, &inputs.package, &inputs.to_version),
-        )?;
+        // Everything below the cache is the same either way, because what is
+        // remembered is the tree and not the answer: the totals and the
+        // sample are walked out of it here, so a cached answer and a fresh
+        // one cannot differ without the tree differing.
+        let (tree, cached) = match ctx.store().get(&key).await {
+            Some(entry) => (entry.tree, true),
+            None => {
+                // Concurrently, the way the engine's wasm entry point fetches
+                // them: the two downloads do not depend on each other, and a
+                // version pair is the one place this server waits on the
+                // network twice.
+                let (from_files, to_files) = try_join!(
+                    ctx.archive()
+                        .fetch(inputs.registry, &inputs.package, &inputs.from_version),
+                    ctx.archive()
+                        .fetch(inputs.registry, &inputs.package, &inputs.to_version),
+                )?;
 
-        let tree = engine::build_diff_tree(
-            &from_files,
-            &to_files,
-            inputs.similarity_threshold,
-            inputs.ignore_whitespace,
-        );
+                let tree = engine::build_diff_tree(
+                    &from_files,
+                    &to_files,
+                    inputs.similarity_threshold,
+                    inputs.ignore_whitespace,
+                );
+
+                ctx.store()
+                    .put(Entry {
+                        key,
+                        tree: tree.clone(),
+                    })
+                    .await;
+
+                (tree, false)
+            }
+        };
 
         let mut totals = Totals::default();
         let mut changed = Vec::new();
@@ -360,7 +381,7 @@ impl Tool for DiffPackageVersions {
             to_version,
             totals,
             most_changed: changed,
-            cached: false,
+            cached,
         })
     }
 }

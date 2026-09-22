@@ -7,11 +7,13 @@
 //! that is invisible — until the tool arrives, reaches the seam through a
 //! context built for a different one, and asks a registry from CI.
 //!
-//! So this suite drives the seams a context carries rather than a tool: one
-//! call per seam, chosen because it is the shortest path to that seam and not
-//! because this is a suite about the tool making it. Each goes over the wire,
-//! through the service factory `router_with` takes, because building a
-//! context is only interesting if it is the context a handler is handed.
+//! So this suite drives the seams a context carries rather than a tool: the
+//! shortest call that reaches each one, chosen for that and not because this
+//! is a suite about the tool making it. Each goes over the wire, through the
+//! service factory `router_with` takes, because building a context is only
+//! interesting if it is the context a handler is handed — and every call for
+//! one seam goes to one context, because a seam that remembers between calls
+//! has nothing to say to a context built fresh for each.
 //!
 //! Which seams those are is `Ctx::seams`'s answer and not this file's list,
 //! so a seam added to a context with no call written for it fails here rather
@@ -52,6 +54,14 @@ struct Seam {
     tool: &'static str,
     arguments: Value,
 
+    /// How many times to make that call before reading the answer.
+    ///
+    /// One for every seam whose answer is the document it read. The store's
+    /// is two, because a cache has nothing to say about the first call: what
+    /// distinguishes this process's own store from one reaching outside is
+    /// that the second call was served by the first.
+    calls: usize,
+
     /// Where in that tool's answer to read, and what the fixture set says
     /// there — a fact the registry this seam stands in for could not have
     /// answered with.
@@ -60,7 +70,13 @@ struct Seam {
 
     /// What the fixture adapter says it was doing when it could not find its
     /// set, which is how a refusal is known to have come from disk.
-    doing: &'static str,
+    ///
+    /// `None` for the store, and that is the rule rather than an exception
+    /// to it: a cache failure must never reach a caller (ADR 0003), so a
+    /// store that refused would be the bug and not the proof. What stands in
+    /// for this check there is the assertion above — a store this test can
+    /// make answer `cached` is a store inside this process.
+    doing: Option<&'static str>,
 }
 
 /// Every seam, in the order a context carries them.
@@ -78,31 +94,52 @@ fn seams() -> Vec<Seam> {
                 "version": "1.0.0",
                 "path": "src/lib.rs",
             }),
+            calls: 1,
             reads: "/text",
             // The fixture `serde` carries a `src/lib.rs` of one line that the
             // real crate does not.
             fixture_says: json!("pub fn serialize() {}\n"),
-            doing: "reading the archive fixtures",
+            doing: Some("reading the archive fixtures"),
         },
         Seam {
             name: "catalogue",
             tool: "list_package_versions",
             arguments: json!({ "registry": "npm", "package": "zod" }),
+            calls: 1,
             reads: "/total",
             // The fixture `zod` has four versions where the real package has
             // hundreds.
             fixture_says: json!(4),
-            doing: "reading the version fixtures",
+            doing: Some("reading the version fixtures"),
         },
         Seam {
             name: "search",
             tool: "search_packages",
             arguments: json!({ "registry": "npm", "query": "zod" }),
+            calls: 1,
             reads: "/total",
             // npm answers this query with hundreds; the fixture set answers
             // it with two.
             fixture_says: json!(2),
-            doing: "reading the search fixtures",
+            doing: Some("reading the search fixtures"),
+        },
+        Seam {
+            name: "store",
+            tool: "diff_package_versions",
+            arguments: json!({
+                "registry": "npm",
+                "package": "diffable",
+                "from_version": "1.0.0",
+                "to_version": "2.0.0",
+            }),
+            calls: 2,
+            reads: "/cached",
+            // The store a fixture context carries keeps its blobs in this
+            // process, so the second call is served by the first. A context
+            // left with a live store would answer `false` both times in CI,
+            // where there are no blob credentials to reach one with.
+            fixture_says: json!(true),
+            doing: None,
         },
     ]
 }
@@ -137,7 +174,7 @@ fn every_seam_a_context_carries_is_driven_here() {
 #[tokio::test]
 async fn every_seam_a_context_carries_is_the_fixture_set() {
     for seam in seams() {
-        let answer = call(FIXTURES, seam.tool, seam.arguments).await;
+        let answer = call(FIXTURES, &seam).await;
         let read = answer["result"]["structuredContent"].pointer(seam.reads);
 
         assert_eq!(
@@ -170,7 +207,12 @@ async fn no_seam_a_context_carries_can_reach_a_registry() {
     );
 
     for seam in seams() {
-        let answer = call(NO_FIXTURES, seam.tool, seam.arguments).await;
+        // The store is the seam with nothing to refuse with. See `Seam`.
+        let Some(doing) = seam.doing else {
+            continue;
+        };
+
+        let answer = call(NO_FIXTURES, &seam).await;
 
         assert_eq!(
             answer["error"]["code"], -32000,
@@ -180,7 +222,7 @@ async fn no_seam_a_context_carries_can_reach_a_registry() {
         );
         assert_eq!(
             answer["error"]["message"],
-            format!("diffpack failed while {}.", seam.doing),
+            format!("diffpack failed while {doing}."),
             "the `{}` seam should have gone to the fixture adapter, got \
              {answer}",
             seam.name
@@ -188,12 +230,29 @@ async fn no_seam_a_context_carries_can_reach_a_registry() {
     }
 }
 
-/// `tools/call` for `tool`, against a server whose context is built over
-/// `fixtures`.
+/// `seam`'s call, against a server whose context is built over `fixtures`,
+/// answering with the last of them.
+///
+/// One context for all of a seam's calls, cloned into each request. A `Ctx`
+/// shares its seams through an `Arc`, which is what production does too: the
+/// factory is what a request goes through, not what an adapter is rebuilt by.
+/// Building a fresh one per request would give the store a fresh set of
+/// blobs and make its second call indistinguishable from its first.
 ///
 /// Answers the whole envelope rather than the result, because half of what is
 /// asserted above is a JSON-RPC error and the other half is a result.
-async fn call(fixtures: &'static str, tool: &str, arguments: Value) -> Value {
+async fn call(fixtures: &'static str, seam: &Seam) -> Value {
+    let ctx = Ctx::fixture(fixtures);
+
+    let mut answer = Value::Null;
+    for _ in 0..seam.calls {
+        answer = post(ctx.clone(), seam.tool, seam.arguments.clone()).await;
+    }
+    answer
+}
+
+/// One `tools/call` for `tool`, through a router over `ctx`.
+async fn post(ctx: Ctx, tool: &str, arguments: Value) -> Value {
     let body = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -220,10 +279,7 @@ async fn call(fixtures: &'static str, tool: &str, arguments: Value) -> Value {
         .body(Body::from(body.to_string()))
         .expect("the request should build");
 
-    let router = router::router_with(
-        move || Ok(Diffpack::with_ctx(Ctx::fixture(fixtures))),
-        Vec::new(),
-    );
+    let router = router::router_with(move || Ok(Diffpack::with_ctx(ctx.clone())), Vec::new());
 
     let response = router
         .oneshot(request)
