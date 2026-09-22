@@ -41,6 +41,22 @@
 //! doing its own work through a tool's front door, and this is work leaving a
 //! resource rather than arriving at one.
 //!
+//! [`Comparison`] is what it answers with, and it carries one of two halves
+//! beside the tree: both versions' files where this call worked the
+//! comparison out, and every changed file's patch where it came out of the
+//! store. [`Comparison::patch`] asks for one file and [`Comparison::files`]
+//! for the archives, and the second is what the first not having an answer
+//! costs — which is why a tool asks in that order rather than deciding for
+//! itself which half it was given.
+//!
+//! [`Comparison::patch`] is the only thing here that goes to another tool
+//! module: it asks [`super::get_diff_tree::node_at`] where the file it was
+//! given sits in this tree, because a patch is rendered from one path in each
+//! version and a caller naming a different pair is asking a different
+//! question. That export already had a caller outside its module and this is
+//! a third asking it the same thing, rather than a fourth descent through a
+//! tree.
+//!
 //! # Where the descriptions come from
 //!
 //! Every doc comment on a field of [`Args`] and [`Output`] becomes a
@@ -69,7 +85,7 @@ use crate::handle::{DiffHandle, Inputs};
 use crate::registry::Registry;
 use crate::resources;
 use crate::store::Entry;
-use crate::tools::{Ctx, Tool};
+use crate::tools::{get_diff_tree, Ctx, Tool};
 
 /// The tool.
 pub struct DiffPackageVersions;
@@ -403,10 +419,18 @@ pub struct Versions {
 
 /// One comparison, as whoever asked for it holds it.
 ///
-/// The tree is the whole of the comparison and is always here. Both versions'
-/// files are not, and that is the difference this type exists to carry: an
-/// entry is a tree and its patches, so a comparison that came out of the
-/// store came without the archives it was worked out from.
+/// The tree is the whole of the comparison and is always here. What is beside
+/// it is one of two halves and never both, and that is the difference this
+/// type exists to carry. A comparison worked out now has both versions' files
+/// and can render anything out of them. A comparison that came out of the
+/// store has the patches that were rendered when the entry was written and
+/// none of the archives they came from, because that is what an entry is.
+///
+/// Neither half is public. Which one a comparison arrived with is not a
+/// question a caller should be answering — [`Comparison::patch`] and
+/// [`Comparison::files`] are the two questions there are, and a caller that
+/// matched on the halves would be a fourth place deciding what to do about a
+/// comparison that came without its archives.
 pub struct Comparison {
     /// The whole comparison, as the engine arranged it.
     pub tree: DiffFileEntry,
@@ -421,36 +445,69 @@ pub struct Comparison {
     /// handed it a different handle from the one [`compare`] was given would
     /// be served another comparison's versions with nothing in the answer
     /// saying they do not belong to this tree. Both call sites pass the same
-    /// handle today; nothing made them, and the type is where that is settled
+    /// handle; nothing made them, and the type is where that is settled
     /// rather than in a sentence asking them to keep doing it.
     ///
     /// It is the handle and not the key, because what a fetch needs is the
-    /// inputs a handle carries (ADR 0006) and a key is the hash of them.
+    /// inputs a handle carries ([ADR
+    /// 0006](../../docs/adr/0006-the-handle-carries-its-inputs.md)) and a key
+    /// is the hash of them.
     handle: DiffHandle,
 
-    /// Both versions' files, where this call is the one that downloaded them.
+    /// Every changed file's patch, where this comparison was remembered with
+    /// them.
     ///
-    /// Private, because absent here is not the question a caller is asking —
-    /// [`Comparison::files`] is — and a caller that matched on it would be a
-    /// fourth place deciding what to do about a comparison that arrived
-    /// without its archives.
+    /// Empty when it was worked out now, and not because there are none: the
+    /// call that worked it out holds both versions' files and renders what it
+    /// wants from those. This is the half an entry has instead of them.
+    patches: BTreeMap<String, Patch>,
+
+    /// Both versions' files, where this call is the one that downloaded them.
     files: Option<Versions>,
 }
 
 impl Comparison {
+    /// The patch this comparison is already holding for the file at `path`,
+    /// if it is the patch a caller asking about that file would be rendered.
+    ///
+    /// `old_path` is where the file was in the first version as the *caller*
+    /// named it, and it has to be where this comparison's own tree says it
+    /// was. A patch is rendered from one path in each version, so a pair that
+    /// does not match the tree's is a different answer and not a worse way of
+    /// spelling this one: a renamed file asked about without its `old_path`
+    /// is every line of it added, which is what `get_file_diff` has always
+    /// said and has to keep saying whether or not anything asked before.
+    ///
+    /// Nothing for a file this comparison has no patch for, and that is the
+    /// whole of the rule. It is right whichever way one went missing — over
+    /// the per-patch cap, dropped with the rest because the entry was too
+    /// big, written before entries carried patches at all, or a file that did
+    /// not change and so never had one. Every one of those is a file to
+    /// render, and rendering it is what [`Comparison::files`] is for.
+    ///
+    /// Cloned rather than lent, because a caller that got nothing here goes
+    /// on to [`Comparison::files`], which takes the comparison: a borrow
+    /// would outlive the question it was asked. One patch is a quarter of a
+    /// megabyte at the very most, and the caller was about to render it.
+    pub fn patch(&self, path: &str, old_path: Option<&str>) -> Option<Patch> {
+        let node = get_diff_tree::node_at(&self.tree, path)?;
+
+        (node.old_path.as_deref() == old_path)
+            .then(|| self.patches.get(path).cloned())
+            .flatten()
+    }
+
     /// Both versions' files, downloaded now if this comparison was
     /// remembered without them.
     ///
     /// Takes `self`, because the two file maps are much the largest thing a
     /// comparison carries and every caller that wants them wants them whole
-    /// — each has taken what it needed from the tree first.
+    /// — each has taken what it needed from the tree, and asked
+    /// [`Comparison::patch`] for the one file it is about, first.
     ///
-    /// A remembered comparison spares the tree and not the downloads, which
-    /// is the whole of what the store holds: what would answer one file's
-    /// diff without them is the entry's own patches, rendered when the entry
-    /// was written and read by nothing yet (#84).
-    ///
-    /// The handle is this comparison's own and not a caller's. See the field.
+    /// A remembered comparison spares the tree and the patches and not the
+    /// downloads. What is here is the file this call wants and the entry does
+    /// not have: one over a cap, or one that never changed.
     pub async fn files(self, ctx: &Ctx) -> Result<Versions, Failure> {
         let Self { handle, files, .. } = self;
 
@@ -533,6 +590,7 @@ pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failu
             tree: entry.tree,
             cached: true,
             handle: handle.clone(),
+            patches: entry.patches,
             files: None,
         });
     }
@@ -568,6 +626,11 @@ pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failu
         tree,
         cached: false,
         handle: handle.clone(),
+        // Empty rather than the map above, which has just been handed to the
+        // store. A caller holding both versions' files renders what it wants
+        // from those, so a second copy of every changed file's patch would be
+        // the largest thing here and read by nobody.
+        patches: BTreeMap::new(),
         files: Some(files),
     })
 }

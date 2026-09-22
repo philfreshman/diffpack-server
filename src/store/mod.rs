@@ -57,6 +57,13 @@ pub struct Entry {
     /// Written now because the extraction has already happened: rendering
     /// every changed file at this moment costs almost nothing, where doing it
     /// later costs two archive downloads (#15).
+    ///
+    /// And read back for exactly that: this is the only half of an entry that
+    /// can answer `get_file_diff` and the file-diff resource, because a tree
+    /// holds statuses, paths and line counts and never a file's contents. A
+    /// reader asks for the one file it is about and renders that file when
+    /// there is nothing here for it — see `patches_omitted` below for the two
+    /// ways there can be nothing.
     pub patches: BTreeMap<String, Patch>,
 }
 

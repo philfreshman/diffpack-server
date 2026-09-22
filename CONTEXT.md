@@ -201,18 +201,19 @@ holding — that is a Comparison.
 _Avoid_: comparison (for the value a call holds), delta, changeset
 
 **Comparison**:
-One Diff in hand: its Tree, whether it was remembered or worked out, and both
-Versions' files where working it out is what put them there. It is what a
-Handle buys — `diff_package_versions::compare` takes one and answers with a
-Comparison, and all four paths that read a Diff go through it, so there is one
-walk from a Handle to a Tree rather than four ([ADR
-0016](docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md)). A remembered
-one has no files, because an Entry is a Tree and its Patches and never the
-archives those came from; asking for them anyway is two downloads and the
-Comparison says so rather than pretending. Distinct from an Entry, which is
-how a Comparison is remembered: an Entry is two Blobs in a store and a
-Comparison is what one invocation is holding, with or without an Entry behind
-it.
+One Diff in hand: its Tree, whether it was remembered or worked out, and one
+of two halves beside the Tree. It is what a Handle buys —
+`diff_package_versions::compare` takes one and answers with a Comparison, and
+all four paths that read a Diff go through it, so there is one walk from a
+Handle to a Tree rather than four ([ADR
+0016](docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md)). Which half it
+has is which way it arrived: one worked out now holds both Versions' files,
+and a remembered one holds the Patches the Entry was written with and none of
+the archives those came from. So a caller asks it for the one file it wants
+and renders that file when the Comparison has no Patch for it, rather than
+asking which half it was given. Distinct from an Entry, which is how a
+Comparison is remembered: an Entry is two Blobs in a store and a Comparison is
+what one invocation is holding, with or without an Entry behind it.
 _Avoid_: diff result, cached diff, comparison result, entry
 
 **Engine**:
