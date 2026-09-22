@@ -7,7 +7,7 @@
 //! disagreed with each other. Every expected value below is read from the
 //! fixture, which was generated from the document rather than from this code.
 
-use diffpack_server::cache_key::DiffKey;
+use diffpack_server::cache_key::{prefix, DiffKey};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -266,4 +266,19 @@ fn blob_paths_are_the_diff_id_under_the_schema_prefix() {
 
     assert_eq!(key.meta_path(), format!("diffs/v1/{id}/meta.json"));
     assert_eq!(key.patches_path(), format!("diffs/v1/{id}/patches.json"));
+
+    // The literals above are the layout. This is that `cache_key::prefix`
+    // names the same one — which matters because it is what `src/store/`
+    // counts and sweeps by, and the only other place that asks where an
+    // entry lives. The two could not disagree about the version number,
+    // both deriving from `SCHEMA`, and that is not the drift worth
+    // guarding against: a prefix that stopped being a prefix of a pathname
+    // is a sweep counting a store nothing writes to.
+    for path in [key.meta_path(), key.patches_path()] {
+        assert!(
+            path.starts_with(&prefix(key.schema)),
+            "`{path}` should be under `{}`",
+            prefix(key.schema)
+        );
+    }
 }
