@@ -79,6 +79,62 @@ async fn the_same_diff_asked_for_twice_is_remembered_the_second_time() {
     );
 }
 
+/// Remembering an answer is not allowed to change it.
+///
+/// A cache whose answers differ from the computation's is worse than no
+/// cache: the difference is invisible to whoever asked and shows up later as
+/// two agents disagreeing about the same comparison. So the whole answer is
+/// compared and not a field of it — `cached` is the one field that is
+/// *supposed* to differ, which is why it is the one taken out first.
+///
+/// What makes this hold is that what is remembered is the tree rather than
+/// the answer: the totals and the sample are walked out of it on both paths,
+/// so there is no second writer for them to disagree with.
+#[tokio::test]
+async fn a_remembered_answer_is_the_one_that_was_computed() {
+    let store = Memory::new();
+
+    let computed = call(&store, diffable()).await;
+    let remembered = call(&store, diffable()).await;
+
+    assert_eq!(
+        but_for_cached(remembered),
+        but_for_cached(computed),
+        "everything but `cached` is the same answer, the text block included"
+    );
+}
+
+/// One answer with `cached` taken out of both copies of it.
+///
+/// `tools::invoke` puts a tool's answer on the wire twice — as
+/// `structuredContent` and as the text block `rmcp` mirrors it into — so a
+/// field dropped from one is still in the other. The mirror is read back as
+/// JSON rather than compared as a string, which is also what makes the
+/// comparison above about the answer rather than about how it was spelled.
+fn but_for_cached(mut answer: Value) -> Value {
+    let mirrored = answer["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a text block, got {answer}"))
+        .to_owned();
+    answer["content"][0]["text"] =
+        serde_json::from_str(&mirrored).unwrap_or_else(|e| panic!("the mirror is JSON: {e}"));
+
+    for at in ["/structuredContent", "/content/0/text"] {
+        let copy = answer
+            .pointer_mut(at)
+            .and_then(Value::as_object_mut)
+            .unwrap_or_else(|| panic!("an object at `{at}` to take `cached` out of"));
+
+        assert!(
+            copy.remove("cached")
+                .is_some_and(|cached| cached.is_boolean()),
+            "every copy of an answer says whether it was cached, `{at}` does not"
+        );
+    }
+
+    answer
+}
+
 // ---------------------------------------------------------------------------
 // Driving the wire
 // ---------------------------------------------------------------------------
