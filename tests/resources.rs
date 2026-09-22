@@ -298,8 +298,48 @@ async fn the_catalogue_is_the_registry_module_rather_than_a_copy_of_it() {
 }
 
 // ---------------------------------------------------------------------------
+// What a client may hold on to
+// ---------------------------------------------------------------------------
+
+/// Every read says how long it may be treated as fresh, and who may keep it.
+///
+/// The criterion #11, #14 and #19 each arrived at and none could meet: in the
+/// `2026-07-28` schema `CacheableResult` is extended by `ReadResourceResult`
+/// and the list results, while `CallToolResult` extends plain `Result`. A
+/// tool has nowhere to put a freshness hint; this is where the promise those
+/// issues made comes due.
+///
+/// `public` throughout because this server has no authorization contexts to
+/// keep apart — every caller is anonymous and gets the same answer, so an
+/// intermediary holding one copy for everyone is correct rather than a leak.
+#[tokio::test]
+async fn every_read_says_how_fresh_it_is_and_who_may_cache_it() {
+    for uri in readable().await {
+        let result = result_of(&uri).await;
+
+        assert!(
+            result["ttlMs"].as_u64().is_some_and(|ttl| ttl > 0),
+            "reading `{uri}` should say how long the answer stays fresh, got {result}"
+        );
+        assert_eq!(
+            result["cacheScope"], "public",
+            "reading `{uri}` is the same answer for every caller, got {result}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Every URI this server will read, filled in where it is a template.
+///
+/// One list, so that a resource added without a freshness hint or without a
+/// refusal of its own fails rather than going unasserted. It grows as the
+/// templates become fillable.
+async fn readable() -> Vec<String> {
+    vec![REGISTRIES.to_owned()]
+}
 
 /// The values a filled-in pattern is compared against the module at.
 ///
@@ -368,6 +408,17 @@ async fn read(uri: &str) -> Value {
 
 /// The `contents` of a read, whatever shape they are in.
 async fn contents(uri: &str) -> Vec<Value> {
+    let result = result_of(uri).await;
+
+    result["contents"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a read answers with contents, got {result}"))
+        .clone()
+}
+
+/// The whole `result` of a read — or a panic naming the JSON-RPC error, so a
+/// failure says what the server objected to.
+async fn result_of(uri: &str) -> Value {
     let answer = post(json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -380,10 +431,7 @@ async fn contents(uri: &str) -> Vec<Value> {
         panic!("expected to read `{uri}`, got JSON-RPC error {error}");
     }
 
-    answer["result"]["contents"]
-        .as_array()
-        .unwrap_or_else(|| panic!("a read answers with contents, got {answer}"))
-        .clone()
+    answer["result"].clone()
 }
 
 /// Everything `resources/list` answers with.

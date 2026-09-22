@@ -24,7 +24,7 @@
 //! `per_page` on crates.io, and PyPI's index takes none at all), and a
 //! `match` here would be this module's copy of that fact.
 
-use rmcp::model::{Resource, ResourceContents};
+use rmcp::model::{CacheScope, ReadResourceResult, Resource, ResourceContents};
 use serde::Serialize;
 
 use crate::registry::{ArchiveSource, Registry, VERSION_RULE};
@@ -46,8 +46,15 @@ pub fn resource() -> Resource {
         .with_mime_type("application/json")
 }
 
+/// How long a client may treat this catalogue as fresh.
+///
+/// It changes only when a build deploys, which is the tool list's answer and
+/// for the tool list's reason — an hour of staleness costs a client nothing
+/// and saves it a round trip that might have paid for a cold start.
+const TTL_MS: u64 = 60 * 60 * 1000;
+
 /// The catalogue itself.
-pub fn read() -> ResourceContents {
+pub fn read() -> ReadResourceResult {
     let catalogue = Catalogue {
         version_rule: VERSION_RULE,
         registries: Registry::ALL.into_iter().map(Described::of).collect(),
@@ -56,11 +63,15 @@ pub fn read() -> ResourceContents {
     // A document this server built out of its own types, so a failure to
     // serialise it is impossible rather than handled: every field is a
     // string, a bool or a list of those.
-    ResourceContents::text(
+    let contents = ResourceContents::text(
         serde_json::to_string_pretty(&catalogue).unwrap_or_default(),
         URI,
     )
-    .with_mime_type("application/json")
+    .with_mime_type("application/json");
+
+    ReadResourceResult::new(vec![contents])
+        .with_ttl_ms(TTL_MS)
+        .with_cache_scope(CacheScope::Public)
 }
 
 /// What a reader is handed.

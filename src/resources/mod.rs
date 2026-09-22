@@ -47,7 +47,7 @@ pub fn templates() -> Vec<ResourceTemplate> {
 /// resource to have failed.
 pub fn read(uri: &str) -> Result<ReadResourceResult, Failure> {
     match uri {
-        registries::URI => Ok(ReadResourceResult::new(vec![registries::read()])),
+        registries::URI => Ok(registries::read()),
         unknown => Err(Failure::NoSuchResource {
             uri: unknown.to_owned(),
         }),
