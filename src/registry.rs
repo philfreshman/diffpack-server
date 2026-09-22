@@ -175,8 +175,23 @@ impl Registry {
         }
     }
 
-    /// The versions a [`VersionSource`] body names, newest first, or nothing
-    /// if this server cannot read it.
+    /// The versions a [`VersionSource`] body names, newest first and with the
+    /// one the registry points at, or nothing if this server cannot read it.
+    ///
+    /// # The two answers
+    ///
+    /// Every registry's version document carries both, and they are
+    /// different questions. The list is newest published first, which is what
+    /// *what changed in the last two releases* asks. `current` is the release
+    /// the registry itself resolves for someone who names no version, which
+    /// is what *the latest version* asks. Each registry names it its own way
+    /// and each arm below reads its own; on `@types/node` they are 24.13.6
+    /// and 26.6.2 most weeks.
+    ///
+    /// `current` is not looked up in the list. A registry pointing at a
+    /// version this server did not receive in the document is reported as the
+    /// registry spelled it, because the alternative is reporting *no current
+    /// release* for a package that has one.
     ///
     /// # Why the order is computed here rather than declared
     ///
@@ -314,6 +329,11 @@ impl Registry {
                     version_key: VersionKey,
                     #[serde(default)]
                     published_at: Option<String>,
+                    /// deps.dev's pointer, and the only one of the three that
+                    /// is a flag on a version rather than a field beside
+                    /// them. At most one version carries it.
+                    #[serde(default)]
+                    is_default: bool,
                 }
                 #[derive(Deserialize)]
                 struct VersionKey {
@@ -321,16 +341,22 @@ impl Registry {
                 }
 
                 let document: Document = serde_json::from_str(document).ok()?;
+                let mut current = None;
                 let listed = document
                     .versions
                     .into_iter()
-                    .map(|release| Version {
-                        prerelease: self.is_prerelease(&release.version_key.version),
-                        version: release.version_key.version,
-                        published_at: release.published_at,
+                    .map(|release| {
+                        if release.is_default {
+                            current = Some(release.version_key.version.clone());
+                        }
+                        Version {
+                            prerelease: self.is_prerelease(&release.version_key.version),
+                            version: release.version_key.version,
+                            published_at: release.published_at,
+                        }
                     })
                     .collect::<Vec<_>>();
-                (listed, None)
+                (listed, current)
             }
         };
 

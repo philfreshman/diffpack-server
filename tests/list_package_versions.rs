@@ -400,6 +400,39 @@ async fn a_crates_io_crates_current_version_is_stable_when_the_newest_release_is
     );
 }
 
+/// PyPI, through deps.dev, where the pointer is an `isDefault` on one of the
+/// versions rather than a field beside them.
+///
+/// `jupyterlab`'s two newest releases went out ninety minutes apart on the
+/// same afternoon: 4.6.4 at 15:25 and the 4.7.0a2 alpha at 16:59. So the most
+/// recently published version is the alpha and the one PyPI's own project
+/// page shows is 4.6.4, and an implementation that answered this field with
+/// the first entry of the list — which `requests` would not have caught,
+/// since its default *is* its newest publish — says the current version of
+/// `jupyterlab` is an alpha.
+#[tokio::test]
+async fn a_pypi_packages_current_version_is_the_default_and_not_the_newest_publish() {
+    let result = call(json!({
+        "registry": "pypi",
+        "package": "jupyterlab",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["currentVersion"],
+        json!("4.6.4"),
+        "deps.dev marks 4.6.4 `isDefault`, which is what `pip install \
+         jupyterlab` resolves: got {result}"
+    );
+
+    assert_eq!(
+        versions(&result).first(),
+        Some(&"4.7.0a2"),
+        "the alpha went out ninety minutes after 4.6.4, so it is the newest \
+         publish and not the current release: got {result}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Reading it a page at a time
 // ---------------------------------------------------------------------------
