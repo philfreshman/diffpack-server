@@ -296,7 +296,15 @@ them is not the fact)
 
 **Resource**:
 Something an agent reads by URI (`diffpack://…`) rather than calls. A Resource
-answers "what is there"; a Tool does something.
+answers "what is there"; a Tool does something. It computes nothing a Tool
+computes — the registry catalogue is `registry` serialised and a comparison is
+the Tools' own walks arranged into a document ([ADR
+0014](docs/adr/0014-a-resource-is-a-projection-of-the-tools.md)) — so what a
+Resource owns is the document and not the answer in it. One whose URI has a
+field to fill in is a *template*, and that is a different list: a Resource is
+what `resources/list` carries and a template is what
+`resources/templates/list` carries, because only the first is a URI a client
+can follow as it stands.
 _Avoid_: document, asset
 
 **Failure**:
