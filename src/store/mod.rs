@@ -421,11 +421,17 @@ impl DiffStore {
                 break;
             }
 
-            self.remove(&entry.blobs).await;
-            total = total.saturating_sub(entry.bytes);
+            if self.remove(&entry.blobs).await {
+                total = total.saturating_sub(entry.bytes);
+            }
         }
 
-        true
+        // The sweep can run out of entries before it runs out of work —
+        // every delete having failed is the plain case — and a sweep that
+        // freed nothing is a total that still has no room in it. Admitting
+        // here because a sweep was attempted is how the one number this
+        // issue is written around gets exceeded.
+        total + incoming <= self.max_bytes
     }
 
     /// Every blob this store holds, or nothing if it could not say.
@@ -440,21 +446,31 @@ impl DiffStore {
         }
     }
 
-    /// Delete every blob at `pathnames`.
+    /// Delete every blob at `pathnames`, and say whether they are gone.
     ///
     /// All of them in one call, because they are one entry: a delete that
     /// took them one at a time could leave half an entry behind when the
     /// second failed.
-    async fn remove(&self, pathnames: &[&str]) {
+    ///
+    /// The answer is what a sweep counts in. Bytes credited to a delete that
+    /// failed are room the store does not have, which is the same mistake as
+    /// admitting against a listing that was never taken.
+    async fn remove(&self, pathnames: &[&str]) -> bool {
         match &self.source {
-            Source::Live(api) => {
-                if api.delete(pathnames).await.is_err() {
+            Source::Live(api) => match api.delete(pathnames).await {
+                Ok(()) => true,
+                Err(_) => {
                     self.gave_up::<()>(DELETING);
+                    false
                 }
+            },
+            Source::Memory(memory) => {
+                memory.delete(pathnames).await;
+                true
             }
-            Source::Memory(memory) => memory.delete(pathnames).await,
             Source::Unavailable(why) => {
                 self.gave_up::<()>(why);
+                false
             }
         }
     }
