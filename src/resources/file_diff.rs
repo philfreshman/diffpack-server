@@ -102,13 +102,16 @@ pub async fn read(
 
     let comparison = diff_package_versions::compare(handle, ctx).await?;
 
-    // Bound rather than written into the struct below, where it would be a
-    // temporary living exactly as long as the statement that reads it.
+    // Read off the tree before the files are asked for, because asking for
+    // them takes the comparison. Bound rather than written into the struct
+    // below, where it would be a temporary living exactly as long as the
+    // statement that reads it.
     let moved = moved_from(&comparison.tree, &wanted);
+    let files = comparison.files(handle, ctx).await?;
 
     let patch = get_file_diff::render(
-        &comparison.from_files,
-        &comparison.to_files,
+        &files.from_files,
+        &files.to_files,
         handle.inputs(),
         OneFile {
             path: &wanted,

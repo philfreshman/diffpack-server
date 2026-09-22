@@ -447,11 +447,14 @@ impl Tool for GetFileDiff {
     type Output = Patch;
 
     async fn call(args: Args, ctx: &Ctx) -> Result<Patch, Failure> {
-        let comparison = diff_package_versions::compare(&args.handle, ctx).await?;
+        let files = diff_package_versions::compare(&args.handle, ctx)
+            .await?
+            .files(&args.handle, ctx)
+            .await?;
 
         render(
-            &comparison.from_files,
-            &comparison.to_files,
+            &files.from_files,
+            &files.to_files,
             args.handle.inputs(),
             args.asked(),
         )
