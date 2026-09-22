@@ -93,6 +93,21 @@ pub enum Failure {
     /// The registry did not answer inside [`UPSTREAM_TIMEOUT`].
     TimedOut { registry: String, waited: Duration },
 
+    /// No download slot came free inside the time one call may wait for one.
+    ///
+    /// This instance already reading as many bodies as it will hold, with a
+    /// queue in front of this call deeper than waiting it out is worth. No
+    /// registry was asked anything, which is why this is not
+    /// [`Failure::TimedOut`]: that message names a registry, and naming one
+    /// that was never contacted sends a model to somebody else's status page
+    /// for a problem that is ours and transient.
+    ///
+    /// The only failure here that is about this server's own capacity. Its
+    /// remedy is a retry, like a rate limit's — by the time a model asks
+    /// again the queue has drained or this instance is not the one serving
+    /// it.
+    Busy { waited: Duration },
+
     /// The registry could not be reached at all.
     ///
     /// A name that did not resolve, a refused connection, a TLS handshake
@@ -353,6 +368,7 @@ impl Failure {
             Self::NoSuchVersion { .. } => "no_such_version",
             Self::RateLimited { .. } => "rate_limited",
             Self::TimedOut { .. } => "timed_out",
+            Self::Busy { .. } => "busy",
             Self::Unreachable { .. } => "unreachable",
             Self::Unavailable { .. } => "unavailable",
             Self::MalformedArchive { .. } => "malformed_archive",
@@ -413,6 +429,12 @@ impl Failure {
 
             Self::TimedOut { registry, waited } => format!(
                 "{registry} did not answer within {} seconds. Try again.",
+                waited.as_secs()
+            ),
+
+            Self::Busy { waited } => format!(
+                "This server is already downloading as many package archives as it will \
+                 hold at once, and no slot came free within {} seconds. Try again shortly.",
                 waited.as_secs()
             ),
 

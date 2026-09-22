@@ -37,6 +37,7 @@
 //! everyone.
 
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use reqwest::redirect::Policy;
 use reqwest::{Client, Response, StatusCode};
@@ -60,11 +61,32 @@ use crate::registry::{self, Registry};
 /// of those at once, which is what an instance serving more than one request
 /// is doing — and past it a fifth body waits rather than being refused, since
 /// a caller that queued for a moment got its answer and a caller that was
-/// refused got nothing.
+/// refused got nothing. It waits for [`SLOT_WAIT`] and no longer: a queue
+/// deeper than one turn is not a moment.
 ///
 /// A number rather than a share of the platform's memory, because the
 /// platform does not tell a function what it was given.
 pub const DOWNLOADS_AT_ONCE: usize = 4;
+
+/// The longest a call waits for a download slot before it is refused.
+///
+/// [`error::UPSTREAM_TIMEOUT`], and the same number for a different budget.
+/// That one bounds what a slot's *holder* can do with one, which is sound per
+/// slot and says nothing about how many turns are in front of this caller: at
+/// queue depth `n` the wait is `⌈n/4⌉` of them, and nothing in that product
+/// is tied to the `maxDuration` `vercel.json` gives the function. A deep
+/// enough queue is a request the platform kills rather than one this server
+/// answers.
+///
+/// So one turn is the bound. A caller still queued after the longest any
+/// holder can keep a slot is behind a queue rather than behind a turn, and
+/// the honest answer to a queue is that this instance is full — which a
+/// caller can act on now, where thirty more seconds of waiting is an answer
+/// it may no longer be there for. It also makes the whole of [`bytes`]
+/// bounded by twice this, which is the guard #26 asks for: the wait and the
+/// exchange each have a budget, and their sum sits well inside the
+/// function's own.
+const SLOT_WAIT: Duration = error::UPSTREAM_TIMEOUT;
 
 /// The download slots, all of this process's.
 ///
@@ -148,16 +170,36 @@ pub struct About<'a> {
 ///
 /// The wait counts towards the call's fetch phase, along with the request
 /// itself, because it is the same thing to whoever is waiting for the answer.
-/// It is bounded by what a slot's holder can do with one:
+/// It has a budget of its own — [`SLOT_WAIT`] — and that is the second of the
+/// two this function is bounded by, not a restatement of the first.
 /// [`error::UPSTREAM_TIMEOUT`] covers the request and the body alike, so no
-/// slot is held longer than that however badly a registry behaves.
+/// slot is *held* longer than that however badly a registry behaves; what it
+/// says nothing about is how many turns are queued in front of a caller. So
+/// the whole of this function is bounded by the two budgets added: a turn
+/// waited for, and an exchange made.
 pub async fn bytes(url: &str, limit: u64, about: &About<'_>) -> Result<Vec<u8>, Failure> {
     // Dropped at the end of this function, which is what returns the slot on
     // every path out of it — an answer, a refusal, a timeout — rather than on
     // the one somebody remembered.
-    let _slot = DOWNLOADS.acquire().await.map_err(|_| Failure::Internal {
-        doing: "waiting for a download slot",
-    })?;
+    let _slot = match tokio::time::timeout(SLOT_WAIT, DOWNLOADS.acquire()).await {
+        Ok(Ok(slot)) => slot,
+
+        // A queue rather than a turn: every slot was taken for longer than
+        // any holder can keep one, so there is more than one call in front
+        // of this. Refused as this server being full, which is what it is —
+        // a registry named here would send a model to somebody else's
+        // status page for a problem of ours.
+        Err(_) => return Err(Failure::Busy { waited: SLOT_WAIT }),
+
+        // The semaphore is a `static` and nothing closes it, so this is
+        // unreachable rather than handled. It is ours either way and not a
+        // registry's, which is the channel it takes.
+        Ok(Err(_)) => {
+            return Err(Failure::Internal {
+                doing: "waiting for a download slot",
+            })
+        }
+    };
 
     let client = client()?;
     let name = about.registry.name();
@@ -452,6 +494,57 @@ mod tests {
             in_flight.peak()
         );
     }
+
+    /// A call that waits out its turn for a slot is refused rather than
+    /// queued behind however many others there are.
+    ///
+    /// The other half of the guard #26 asks for, and the half that was
+    /// outside every budget. `UPSTREAM_TIMEOUT` bounds what a slot's
+    /// *holder* can do with one, which is sound per slot and says nothing
+    /// about the queue in front of this caller: at depth `n` the wait is
+    /// `⌈n/4⌉` upstream timeouts, and none of that product answers to the
+    /// 300 seconds `vercel.json` gives the function. A deep enough queue is
+    /// a request Vercel kills rather than one this server answers.
+    ///
+    /// Every slot is held for the length of the test, which is what a caller
+    /// arriving at a full instance finds, and the clock is paused so the
+    /// assertion is about the bound rather than about thirty real seconds.
+    /// Nothing is listening at the URL, deliberately: a call that reached a
+    /// server would have had a slot.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_that_waits_out_its_turn_for_a_slot_is_refused() {
+        let _turn = ONE_AT_A_TIME.lock().await;
+
+        let mut held = Vec::new();
+        for _ in 0..DOWNLOADS_AT_ONCE {
+            held.push(
+                DOWNLOADS
+                    .acquire()
+                    .await
+                    .expect("the download slots are never closed"),
+            );
+        }
+
+        // Twice the bound, so that a wait which is not bounded at all fails
+        // here as a timeout rather than hanging the suite.
+        let refused = tokio::time::timeout(SLOT_WAIT * 2, bytes(UNSERVED, 1024, &about()))
+            .await
+            .expect("a call that cannot get a slot should be refused, not queued");
+
+        assert_eq!(
+            refused.as_ref().err().map(Failure::kind),
+            Some("busy"),
+            "the wait was this server's queue and not a registry's silence, got {refused:?}"
+        );
+
+        drop(held);
+    }
+
+    /// A URL nothing answers, for the calls that must not reach one.
+    ///
+    /// Port 1 on loopback: privileged, unbound, and refused immediately
+    /// rather than left to a connect timeout.
+    const UNSERVED: &str = "http://127.0.0.1:1/archive";
 
     /// The cap leaves room for both archives of one comparison at once.
     ///
