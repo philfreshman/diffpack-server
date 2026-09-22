@@ -26,7 +26,7 @@ src/store/          DiffStore: get(&DiffKey) / put(entry), inside a budget
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
-src/error.rs        Failure, the two channels, redaction
+src/error.rs        Failure, the two channels, the code each earns, redaction
 src/log.rs          one line per tool call: what, cache outcome, how long, how it ended
 src/engine.rs       the only importer of diffpack_engine
 src/health.rs       the /health body
