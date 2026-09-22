@@ -51,11 +51,12 @@
 //! # Where a cached result would come in
 //!
 //! Nowhere yet, and that is worth saying because it looks like an omission.
-//! The DiffStore arrives with #21; until it does, every call re-extracts both
-//! archives from the inputs the handle carries. That is precisely the path a
-//! cache miss takes, so the "render it on demand" half of #15 is the only
-//! half there is here, and the tests that hold it will go on holding it once
-//! a store is in front of it.
+//! The DiffStore is here — #21 built it, and `diff_package_versions` already
+//! writes every changed file's patch into an entry — but nothing reads one
+//! back, so every call re-extracts both archives from the inputs the handle
+//! carries. That is precisely the path a cache miss takes, so the "render it
+//! on demand" half of #15 is the only half there is here, and the tests that
+//! hold it will go on holding it once a store is in front of it.
 //!
 //! # Where the descriptions come from
 //!

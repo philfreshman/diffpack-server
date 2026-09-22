@@ -537,11 +537,12 @@ exception that the paragraph above is the reason for. `patch` renders one
 file's Patch — the four cases a file can be in between two versions, and which
 of them is a diff at all. The engine has it, as `build_diff_result`, but
 private to its `wasm_bindgen` layer and so not part of the surface a Cargo
-dependent links against. Two tools need it and they arrive at different times
-— #21 renders every changed file while both archives are extracted, #15
-renders one on demand when the cache does not have it — so it goes in the
-module that names the engine version it is pinned to, where a drift is one
-file to fix. See [ADR
+dependent links against. Two tools need it and they arrived at different
+times — #21 renders every changed file while both archives are extracted, #15
+renders one on demand, by which time it costs two downloads — so it goes in
+the module that names the engine version it is pinned to, where a drift is one
+file to fix. Both call it; the two arrived in parallel each with a copy, and
+collapsing them was the first thing the merge of the two was for. See [ADR
 0013](adr/0013-the-patch-renderer-lives-in-the-engine-seam.md).
 
 ### `src/health.rs` — the `/health` body

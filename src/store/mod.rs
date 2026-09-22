@@ -79,8 +79,10 @@ struct Meta {
     ///
     /// The difference between a comparison whose patches were dropped and
     /// one with nothing to patch, which is otherwise the same absent blob.
-    /// #15 needs to tell them apart: one means render it on demand, and the
-    /// other means there is nothing to render.
+    /// Whatever comes to read an entry back has to tell them apart: one
+    /// means render it on demand, the other means there is nothing to
+    /// render. `get_file_diff` renders on demand every time today and will
+    /// want this the moment it looks in the store first.
     ///
     /// Defaulted rather than required, because a blob written before this
     /// field existed is an entry whose patches are where they should be.
@@ -503,10 +505,11 @@ impl Memory {
 
     /// The blob at `pathname`, if this store holds one.
     ///
-    /// What a `patches.json` holds is the contract #15 reads a rendered patch
-    /// out of and #27 reads a result out of, and nothing else in this process
-    /// can see it — so a suite that could only count the blobs would be
-    /// pinning where they are and not what they say.
+    /// What a `patches.json` holds is the contract a rendered patch will be
+    /// read out of — `get_file_diff` once it looks in the store, #27 from
+    /// TypeScript — and nothing else in this process can see it, so a suite
+    /// that could only count the blobs would be pinning where they are and
+    /// not what they say.
     pub fn blob(&self, pathname: &str) -> Option<Vec<u8>> {
         self.read(pathname)
     }

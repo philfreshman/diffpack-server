@@ -13,12 +13,18 @@ dependent links against, so there is nothing to re-export. Only the fourth
 case is a diff the engine computes, and `get_diff_content` *is* exported; the
 other three are a header and a line prefix over a file one side does not have.
 
-Two callers need it and they arrive at different times. #21 renders every
-changed file at the moment both archives are extracted, because that is when a
-patch is nearly free; #15 renders one on demand when the cache does not have
-it, because by then it is two downloads. Those two renderings have to agree
-byte for byte, or the same file reads differently depending on whether anyone
-had asked for it before.
+Two callers need it. #21 renders every changed file at the moment both
+archives are extracted, because that is when a patch is nearly free; #15
+renders one on demand, by which time it is two downloads. Those two renderings
+have to agree byte for byte, or the same file reads differently depending on
+whether anyone had asked for it before.
+
+They were written in parallel and each arrived with its own transcription,
+which is this decision's own rejected alternative happening anyway. The two
+were byte for byte identical, so collapsing `get_file_diff`'s onto this one
+left every test in `tests/get_file_diff.rs` passing untouched — but nothing
+would have failed on the day they stopped being identical, which is the whole
+reason for the rule.
 
 So it goes in the module that names the engine version it is pinned to. A
 rendering that drifts from the engine's is then one file to fix, and it is the

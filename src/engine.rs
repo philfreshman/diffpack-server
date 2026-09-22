@@ -62,7 +62,7 @@ pub struct Patch {
 /// everything else here is. It is written out rather than left to each
 /// caller because there are two — the cache renders every changed file at
 /// the moment both archives are extracted (#21), and `get_file_diff` (#15)
-/// renders one on demand when the cache does not have it — and two
+/// renders one on demand, by which time it costs two downloads — and two
 /// renderings of one file that disagree is exactly the drift this module
 /// exists to prevent.
 ///

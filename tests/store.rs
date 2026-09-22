@@ -296,7 +296,10 @@ async fn an_entry_that_dropped_its_patches_is_still_remembered() {
 /// between them leaves a `meta.json` whose `patches.json` never arrived. That
 /// is not the absence above: this one says nothing was dropped, so answering
 /// with it would serve a comparison whose every patch is silently missing —
-/// which is what #15 reads as a changed file with nothing to render.
+/// a changed file that a reader of the entry would take for one with nothing
+/// to render. Nothing reads an entry back yet; `get_file_diff` renders on
+/// demand every time, so this is a wrong answer waiting rather than one
+/// being given.
 ///
 /// So it is a miss, and the miss is what repairs it: the recomputed entry
 /// heads past the `meta.json` that is there and writes the blob that is not.
