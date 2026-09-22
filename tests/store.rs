@@ -554,14 +554,14 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
 async fn a_budget_with_room_for_one_entry_keeps_the_newer_one() {
     let store = Memory::new();
 
-    let first = call(|| store.store(), at(0.50)).await;
+    let first = call(|| store.store(), at(0)).await;
     lands(&store, &first).await;
 
     // One entry's worth, and the headroom production keeps over its target.
     let entry = held(&store);
     let budgeted = || store.store().budgeting(entry + entry / 16, entry);
 
-    let second = call(budgeted, at(0.51)).await;
+    let second = call(budgeted, at(1)).await;
     lands(&store, &second).await;
 
     assert_eq!(
@@ -571,17 +571,121 @@ async fn a_budget_with_room_for_one_entry_keeps_the_newer_one() {
     );
 }
 
-/// The arguments of the comparison every budget test writes, at `threshold`.
+/// A run that writes many times the budget never takes the store past it.
 ///
-/// One comparison at a dozen thresholds rather than a dozen comparisons: the
+/// The ceiling is the criterion the whole issue is written around, and it is
+/// checked after every admission rather than once at the end: a store that
+/// went over and came back under would pass a single check at the end and be
+/// exactly the failure this is for.
+///
+/// Summed from the blobs the store holds rather than from a total the sweep
+/// worked out. A number eviction computed cannot disagree with eviction, so
+/// asserting against it would be asserting that the arithmetic is the
+/// arithmetic.
+#[tokio::test]
+async fn a_run_well_past_the_budget_never_takes_the_store_over_it() {
+    let store = Memory::new();
+
+    let first = call(|| store.store(), at(0)).await;
+    lands(&store, &first).await;
+
+    // Room for three entries, and the headroom production keeps over its
+    // target. Twelve are written into it.
+    let entry = held(&store);
+    let (max, target) = (3 * entry + entry / 16, 3 * entry);
+    let budgeted = || store.store().budgeting(max, target);
+
+    for step in 1..12 {
+        let answer = call(budgeted, at(step)).await;
+        lands(&store, &answer).await;
+
+        assert!(
+            held(&store) <= max,
+            "after {step} more comparisons the store holds {} bytes against a \
+             budget of {max}",
+            held(&store)
+        );
+    }
+
+    assert!(
+        held(&store) >= entry,
+        "a store that evicted everything would pass the check above without \
+         being a cache: it holds {} bytes",
+        held(&store)
+    );
+}
+
+/// A sweep takes the oldest entries whole, and the newest survive it.
+///
+/// The store is seeded past the cap and what is left is named, which is
+/// three things at once and deliberately one assertion. The survivors are
+/// the newest two, so eviction is oldest-first; each of them is both of its
+/// blobs, so an entry went or stayed whole; and nothing else is there, so
+/// no `meta.json` was left without its `patches.json` or the reverse.
+///
+/// Insertion age and not least-recently-used: none of the five seeded
+/// entries is read back before the sweep, so the order here is the order
+/// they were written in and nothing else. That is what this issue asked
+/// for, and #44 is why it is a latency cost rather than a tool going dark.
+#[tokio::test]
+async fn a_sweep_takes_the_oldest_entries_whole_and_the_newest_survive() {
+    let store = Memory::new();
+
+    let first = call(|| store.store(), at(0)).await;
+    lands(&store, &first).await;
+    let entry = held(&store);
+
+    // Seeded past the cap: five entries, oldest first, under a budget with
+    // room for all of them.
+    let mut seeded = vec![first];
+    for step in 1..5 {
+        let answer = call(|| store.store(), at(step)).await;
+        lands(&store, &answer).await;
+        seeded.push(answer);
+    }
+
+    assert_eq!(
+        held(&store),
+        5 * entry,
+        "the five weigh the same, which is what makes what a sweep deletes \
+         predictable rather than a race between sizes"
+    );
+
+    // Room for two. Admitting a sixth has to take four.
+    let budgeted = || store.store().budgeting(2 * entry + entry / 16, 2 * entry);
+    let sixth = call(budgeted, at(5)).await;
+    lands(&store, &sixth).await;
+
+    let mut survived: Vec<String> = [&seeded[4], &sixth]
+        .into_iter()
+        .flat_map(|answer| [meta_of(answer), patches_of(answer)])
+        .collect();
+    survived.sort();
+
+    assert_eq!(
+        store.written(),
+        survived,
+        "the newest two entries, both blobs of each, and nothing else"
+    );
+}
+
+/// The arguments of the `step`th comparison a budget test writes.
+///
+/// One comparison at many thresholds rather than many comparisons: the
 /// threshold is a field of the cache key, so each is an entry of its own —
 /// and `diffable`'s rename is of a file whose content did not change, so
-/// every threshold below 1.0 detects it and every entry is the same size.
-/// Entries that differ in size would make what a sweep deletes depend on
-/// which of them it reached first.
-fn at(threshold: f64) -> Value {
+/// every threshold below 1.0 detects it and every entry holds the same tree.
+///
+/// Never a round tenth, which is the whole of why this is a function and not
+/// a literal. `meta.json` carries the threshold as the `f64` it is, and
+/// `serde_json` writes `0.6` where it writes `0.61` — so an entry at a round
+/// tenth is a byte lighter than its neighbours, and what a sweep deletes
+/// would depend on a byte rather than on an age.
+fn at(step: u32) -> Value {
+    let hundredths = 51 + step + step / 9;
+
     let mut arguments = diffable();
-    arguments["similarity_threshold"] = json!(threshold);
+    arguments["similarity_threshold"] = json!(f64::from(hundredths) / 100.0);
     arguments
 }
 
