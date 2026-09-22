@@ -17,29 +17,17 @@
 //! ordered against PyPI's index. That is `crate::registry`'s and
 //! `tests/registry.rs` holds it against a body it can state in full.
 
-use axum::body::Body;
-use axum::http::Request;
+mod common;
+
+use common::{Client, FIXTURES};
 use diffpack_server::error::Failure;
-use diffpack_server::mcp::Diffpack;
 use diffpack_server::page;
 use diffpack_server::registry::Registry;
-use diffpack_server::router;
 use diffpack_server::tools::search_packages::{Args, SearchPackages};
 use diffpack_server::tools::{Ctx, Tool};
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
-
-const CURRENT: &str = "2026-07-28";
 
 const TOOL: &str = "search_packages";
-
-/// The fixture sets this suite is served, instead of the registries.
-///
-/// The root rather than one seam's directory inside it: `Ctx::fixture` gives
-/// each seam its own, so a suite naming the root cannot wire one of them to
-/// another's set.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 // ---------------------------------------------------------------------------
 // At the handler
@@ -73,8 +61,13 @@ async fn the_handler_returns_the_failure_that_says_the_source_is_unwell() {
 // What a client is told
 // ---------------------------------------------------------------------------
 
-/// The definition carries what an agent needs to call this correctly having
-/// read nothing else, which is #23's question asked of the tool that exists.
+/// The arguments and the answer this tool in particular has, which is #23's
+/// question asked of one tool.
+///
+/// The rules every tool is held to — a description, an object input schema, a
+/// declared output shape, the read-only and open-world hints, the registry
+/// enum — are `tests/tools.rs`'s, over all eight at once. What is here is
+/// only what is true of this one.
 #[tokio::test]
 async fn the_definition_carries_everything_an_agent_needs() {
     let tool = listed(TOOL).await;
@@ -103,12 +96,6 @@ async fn the_definition_carries_everything_an_agent_needs() {
         tool["inputSchema"]
     );
 
-    assert_eq!(
-        tool["inputSchema"]["properties"]["registry"]["enum"],
-        json!(["npm", "crates", "pypi"]),
-        "the enum comes from the registry module rather than from prose here, got {tool}"
-    );
-
     for field in ["items", "total"] {
         assert!(
             tool["outputSchema"]["properties"][field].is_object(),
@@ -123,18 +110,6 @@ async fn the_definition_carries_everything_an_agent_needs() {
             tool["outputSchema"]
         );
     }
-
-    assert_eq!(
-        tool["annotations"]["readOnlyHint"], true,
-        "searching changes nothing, and a client deciding whether to ask for \
-         confirmation reads this, got {}",
-        tool["annotations"]
-    );
-    assert_eq!(
-        tool["annotations"]["openWorldHint"], true,
-        "what answers a query is whatever the registry has, got {}",
-        tool["annotations"]
-    );
 }
 
 /// The one hint this tool answers differently from every other one here, and
@@ -492,103 +467,10 @@ async fn one_source_being_down_leaves_the_others_answering() {
 
 /// The listed definition of `name`, or a panic naming what was listed.
 async fn listed(name: &str) -> Value {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/list",
-        "params": { "_meta": meta() },
-    }))
-    .await;
-
-    let tools = answer["result"]["tools"]
-        .as_array()
-        .unwrap_or_else(|| panic!("tools/list should answer with an array, got {answer}"))
-        .clone();
-
-    tools
-        .iter()
-        .find(|tool| tool["name"] == name)
-        .unwrap_or_else(|| {
-            let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-            panic!("`{name}` should be listed, got {names:?}")
-        })
-        .clone()
+    Client::fixture().listed(name).await
 }
 
-/// Call the tool with `arguments`, returning the `result` — or panicking with
-/// the JSON-RPC error, so a failure says what the server objected to.
+/// Call this tool with `arguments`, returning the `result`.
 async fn call(arguments: Value) -> Value {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": { "name": TOOL, "arguments": arguments, "_meta": meta() },
-    }))
-    .await;
-
-    if let Some(error) = answer.get("error") {
-        panic!("expected a result, got JSON-RPC error {error}");
-    }
-    answer["result"].clone()
-}
-
-/// The per-request `_meta` a `2026-07-28` client attaches. See `tests/mcp.rs`.
-fn meta() -> Value {
-    json!({
-        "io.modelcontextprotocol/protocolVersion": CURRENT,
-        "io.modelcontextprotocol/clientCapabilities": {},
-    })
-}
-
-/// A request as a conforming `2026-07-28` client sends it, to a server whose
-/// searches are answered from `fixtures/searches/` rather than by the
-/// registries.
-///
-/// The fixture adapter is reached through the service factory `router_with`
-/// takes, which is the path production takes to build the `Ctx` every handler
-/// is handed.
-async fn post(body: Value) -> Value {
-    let method = body["method"].as_str().expect("a call names a method");
-
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", method);
-
-    if let Some(name) = body["params"]["name"].as_str() {
-        request = request.header("mcp-name", name);
-    }
-
-    let request = request
-        .body(Body::from(body.to_string()))
-        .expect("the request should build");
-
-    let router = router::router_with(
-        || Ok(Diffpack::with_ctx(Ctx::fixture(FIXTURES))),
-        Vec::new(),
-    );
-
-    let response = router
-        .oneshot(request)
-        .await
-        .expect("the router answers every request");
-
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("the body should read")
-        .to_bytes();
-
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!(
-            "expected a JSON body ({status}), got {e}: {}",
-            String::from_utf8_lossy(&bytes)
-        )
-    })
+    Client::fixture().call(TOOL, arguments).await
 }

@@ -30,34 +30,26 @@
 //! with `diffpack.io` is a fact about real registries that only a networked
 //! run can state.
 
-use axum::body::Body;
-use axum::http::Request;
-use diffpack_server::handle::{DiffHandle, Inputs};
-use diffpack_server::mcp::Diffpack;
-use diffpack_server::registry::Registry;
-use diffpack_server::router;
-use diffpack_server::tools::Ctx;
-use http_body_util::BodyExt;
-use serde_json::{json, Value};
-use tower::ServiceExt;
+mod common;
 
-const CURRENT: &str = "2026-07-28";
+use common::Client;
+use diffpack_server::handle::{DiffHandle, Inputs};
+use diffpack_server::registry::Registry;
+use serde_json::{json, Value};
 
 const TOOL: &str = "diff_package_versions";
-
-/// The fixture sets this suite is served from, instead of the registries.
-///
-/// The root rather than one seam's directory inside it: `Ctx::fixture` gives
-/// every seam a fixture adapter, so nothing this suite builds can reach a
-/// registry — including a seam this tool does not use today.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 // ---------------------------------------------------------------------------
 // What a client is told
 // ---------------------------------------------------------------------------
 
-/// The definition carries what an agent needs to call this correctly having
-/// read nothing else, which is #23's question asked of the tool that exists.
+/// The arguments and the answer this tool in particular has, which is #23's
+/// question asked of one tool.
+///
+/// The rules every tool is held to — a description, an object input schema, a
+/// declared output shape, the read-only and open-world hints, the registry
+/// enum — are `tests/tools.rs`'s, over all eight at once. What is here is
+/// only what is true of this one.
 #[tokio::test]
 async fn the_definition_carries_everything_an_agent_needs() {
     let tool = listed(TOOL).await;
@@ -111,34 +103,10 @@ async fn the_definition_carries_everything_an_agent_needs() {
     let threshold = &tool["inputSchema"]["properties"]["similarity_threshold"];
     assert_eq!(threshold["minimum"], json!(0.0), "got {threshold}");
     assert_eq!(threshold["maximum"], json!(1.0), "got {threshold}");
-
-    assert_eq!(
-        tool["inputSchema"]["properties"]["registry"]["enum"],
-        json!(["npm", "crates", "pypi"]),
-        "the enum comes from `src/registry.rs` rather than from prose here, got {tool}"
-    );
-
-    assert_eq!(
-        tool["outputSchema"]["type"], "object",
-        "a tool answering with structured content declares its shape, got {tool}"
-    );
-
-    assert_eq!(
-        tool["annotations"]["readOnlyHint"], true,
-        "computing a diff changes nothing a caller can observe, and a client \
-         deciding whether to ask for confirmation reads this, got {}",
-        tool["annotations"]
-    );
     assert_eq!(
         tool["annotations"]["idempotentHint"], true,
         "two published versions are immutable, so the same arguments give the \
          same diff, got {}",
-        tool["annotations"]
-    );
-    assert_eq!(
-        tool["annotations"]["openWorldHint"], true,
-        "the arguments name a package on a registry, which is a world this \
-         server does not control, got {}",
         tool["annotations"]
     );
 }
@@ -762,48 +730,6 @@ async fn the_handle_carries_the_inputs_it_was_minted_from() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// The listed definition of `name`, or a panic naming what was listed.
-async fn listed(name: &str) -> Value {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/list",
-        "params": { "_meta": meta() },
-    }))
-    .await;
-
-    let tools = answer["result"]["tools"]
-        .as_array()
-        .unwrap_or_else(|| panic!("tools/list should answer with an array, got {answer}"))
-        .clone();
-
-    tools
-        .iter()
-        .find(|tool| tool["name"] == name)
-        .unwrap_or_else(|| {
-            let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-            panic!("`{name}` should be listed, got {names:?}")
-        })
-        .clone()
-}
-
-/// Call the tool with `arguments`, returning the `result` — or panicking with
-/// the JSON-RPC error, so a failure says what the server objected to.
-async fn call(arguments: Value) -> Value {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": { "name": TOOL, "arguments": arguments, "_meta": meta() },
-    }))
-    .await;
-
-    if let Some(error) = answer.get("error") {
-        panic!("expected a result, got JSON-RPC error {error}");
-    }
-    answer["result"].clone()
-}
-
 /// One vector out of `fixtures/cache-key-vectors.json`, by name.
 ///
 /// The file is the normative document's, generated from it rather than from
@@ -826,63 +752,12 @@ fn golden_vector(name: &str) -> Value {
         .clone()
 }
 
-/// The per-request `_meta` a `2026-07-28` client attaches. See `tests/mcp.rs`.
-fn meta() -> Value {
-    json!({
-        "io.modelcontextprotocol/protocolVersion": CURRENT,
-        "io.modelcontextprotocol/clientCapabilities": {},
-    })
+/// The listed definition of `name`, or a panic naming what was listed.
+async fn listed(name: &str) -> Value {
+    Client::fixture().listed(name).await
 }
 
-/// A request as a conforming `2026-07-28` client sends it, to a server whose
-/// archives come from `fixtures/archives/` rather than from the registries.
-///
-/// The fixture adapter is reached the way #39 says a tool's state is reached:
-/// through the service factory `router_with` takes, which builds the `Ctx`
-/// every handler is handed. A test that reached around it would be testing a
-/// path production does not take.
-async fn post(body: Value) -> Value {
-    let method = body["method"].as_str().expect("a call names a method");
-
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", method);
-
-    if let Some(name) = body["params"]["name"].as_str() {
-        request = request.header("mcp-name", name);
-    }
-
-    let request = request
-        .body(Body::from(body.to_string()))
-        .expect("the request should build");
-
-    let router = router::router_with(
-        || Ok(Diffpack::with_ctx(Ctx::fixture(FIXTURES))),
-        Vec::new(),
-    );
-
-    let response = router
-        .oneshot(request)
-        .await
-        .expect("the router answers every request");
-
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("the body should read")
-        .to_bytes();
-
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!(
-            "expected a JSON body ({status}), got {e}: {}",
-            String::from_utf8_lossy(&bytes)
-        )
-    })
+/// Call this tool with `arguments`, returning the `result`.
+async fn call(arguments: Value) -> Value {
+    Client::fixture().call(TOOL, arguments).await
 }
