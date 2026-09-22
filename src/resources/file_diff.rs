@@ -32,7 +32,7 @@ use rmcp::model::{CacheScope, ReadResourceResult, ResourceContents, ResourceTemp
 use crate::error::Failure;
 use crate::handle::DiffHandle;
 use crate::tools::get_diff_tree;
-use crate::tools::get_file_diff::{self, Args};
+use crate::tools::get_file_diff::{self, OneFile};
 use crate::tools::Ctx;
 
 /// What stands between the handle and the path.
@@ -86,14 +86,17 @@ pub async fn read(
 ) -> Result<ReadResourceResult, Failure> {
     let comparison = super::diff::compare(handle, ctx).await?;
 
+    // Bound rather than written into the struct below, where it would be a
+    // temporary living exactly as long as the statement that reads it.
+    let moved = moved_from(&comparison, path);
+
     let patch = get_file_diff::render(
         &comparison.from_files,
         &comparison.to_files,
         handle.inputs(),
-        &Args {
-            handle: handle.clone(),
-            path: path.to_owned(),
-            old_path: moved_from(&comparison, path),
+        OneFile {
+            path,
+            old_path: moved.as_deref(),
             // The defaults a caller gets by passing nothing but a handle and
             // a path, which is all a URI has room for.
             context_lines: get_file_diff::ContextLines::default(),

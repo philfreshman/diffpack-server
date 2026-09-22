@@ -459,7 +459,33 @@ impl Tool for GetFileDiff {
                 .fetch(inputs.registry, &inputs.package, &inputs.to_version),
         )?;
 
-        render(&from_files, &to_files, inputs, &args)
+        render(&from_files, &to_files, inputs, args.asked())
+    }
+}
+
+/// What a caller asked for about one file, once the comparison it is part of
+/// is settled.
+///
+/// [`Args`] without the handle, because by the time anything is rendered the
+/// handle has been spent: `inputs` says which comparison this is, and the
+/// handle would be a second copy of the same fact. A resource building one of
+/// these would otherwise clone a handle so that [`render`] could ignore it.
+pub struct OneFile<'a> {
+    pub path: &'a str,
+    pub old_path: Option<&'a str>,
+    pub context_lines: ContextLines,
+    pub max_bytes: Option<page::MaxBytes>,
+}
+
+impl Args {
+    /// This call, without the handle it named a comparison with.
+    pub fn asked(&self) -> OneFile<'_> {
+        OneFile {
+            path: &self.path,
+            old_path: self.old_path.as_deref(),
+            context_lines: self.context_lines,
+            max_bytes: self.max_bytes,
+        }
     }
 }
 
@@ -482,9 +508,9 @@ pub fn render(
     from_files: &FileMap,
     to_files: &FileMap,
     inputs: &Inputs,
-    args: &Args,
+    asked: OneFile<'_>,
 ) -> Result<Patch, Failure> {
-    let from_path = args.old_path.as_deref().unwrap_or(&args.path);
+    let from_path = asked.old_path.unwrap_or(asked.path);
 
     // A directory has no content, so the engine reads one as absent on
     // both sides and renders the sentence that says it is in neither
@@ -494,7 +520,7 @@ pub fn render(
     // second version first, because that is the one a caller's path
     // usually names.
     let directory = [
-        (to_files, args.path.as_str(), &inputs.to_version),
+        (to_files, asked.path, &inputs.to_version),
         (from_files, from_path, &inputs.from_version),
     ]
     .into_iter()
@@ -513,21 +539,21 @@ pub fn render(
     }
 
     let from = content(from_files, from_path);
-    let to = content(to_files, &args.path);
+    let to = content(to_files, asked.path);
 
-    let rendered = engine::patch(&args.path, from, to, inputs.ignore_whitespace);
+    let rendered = engine::patch(asked.path, from, to, inputs.ignore_whitespace);
     let is_diff = rendered.is_diff;
 
     // Only a diff is trimmed. The other two answers are a file's own
     // content and a sentence, and neither has a header to keep or a
     // change to keep lines around.
-    let text = match args.context_lines {
+    let text = match asked.context_lines {
         ContextLines::Around(lines) if is_diff => trim(&rendered.data, lines),
         _ => rendered.data,
     };
 
     Ok(Patch {
-        excerpt: page::truncate(&text, args.max_bytes),
+        excerpt: page::truncate(&text, asked.max_bytes),
         is_diff,
     })
 }

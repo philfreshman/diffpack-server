@@ -6,7 +6,6 @@
 //! tools — the list a client is told, and the dispatch that answers one URI
 //! — and each resource's URI, its description and its handler live together
 //! in one module, for the reason ADR 0002 gives for a tool.
-
 //!
 //! # Why a template is not a resource
 //!
