@@ -144,6 +144,16 @@ And it leaves one pair sharing a code on purpose. `InvalidParams` and
 `NoSuchResource` are both `-32602`, because both really are invalid
 parameters: a URI this server does not serve and a percent-escape that decodes
 to nothing are each the caller's to fix out of what it already has. The test
-that used to separate them by prose now does it by the shape of the answer —
-it reads a path that works through the same template first — which is a
-stronger claim than the sentence was.
+that used to separate them by prose now does it by the shape of the answer: it
+reads a path that works through the same template first, so a refusal below it
+cannot be a template this server never served.
+
+That is a different claim from the one the sentence made, and it is worth
+being exact about which. The old assertion ruled out `NoSuchResource` for each
+malformed path on its own; the control read rules out only the case its own
+comment named, a template that answers nothing at all. Nothing at the wire can
+rule out the per-path version, because these two share a code on purpose —
+which is the cost of the pair, and it is paid here. What holds the line
+instead is `src/resources/file_diff.rs`, where the refusal is built: the
+escape is resolved after the URI has already matched the template, so there is
+no route from a malformed escape to `NoSuchResource` to be caught.
