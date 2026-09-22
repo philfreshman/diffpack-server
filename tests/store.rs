@@ -942,10 +942,22 @@ fn held(store: &Memory) -> u64 {
 /// [`settles`] counts blobs, which a store that evicts no longer grows
 /// monotonically: an entry admitted and then swept by the call after it
 /// leaves the count where it was. So this waits for the entry itself.
+///
+/// It waits far longer than [`settles`] does, and the number is deliberately
+/// not a tight one. An entry that had to make room for itself costs a
+/// listing, a delete per entry the sweep took and then its own two writes —
+/// five blobs' worth of delay against a store a test has asked to take half
+/// a second over each, where a plain write costs two. A bound near the real
+/// figure is a test that passes on a quiet machine and fails on a busy one,
+/// which is what this was before it did exactly that in CI.
+///
+/// Nothing is measured here. Every timing this suite asserts is taken before
+/// this is called, so patience costs a slow failure and never a wrong pass.
 async fn lands(store: &Memory, answer: &Value) {
     let (meta, patches) = (meta_of(answer), patches_of(answer));
+    let giving_up = Instant::now() + Duration::from_secs(30);
 
-    for _ in 0..400 {
+    while Instant::now() < giving_up {
         let written = store.written();
         if written.contains(&meta) && written.contains(&patches) {
             return;
