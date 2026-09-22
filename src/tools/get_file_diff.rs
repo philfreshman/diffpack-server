@@ -198,8 +198,9 @@ impl<'de> Deserialize<'de> for ContextLines {
 /// The two shapes this argument arrives in.
 ///
 /// Untagged rather than a hand-written visitor: what a caller writes is a
-/// number or a word, and the refusal for anything else is written above
-/// rather than left to `serde`'s "did not match any variant".
+/// number or a word, and the refusal for a word that is not [`FULL`] is
+/// written above rather than left to `serde`'s "did not match any variant" —
+/// which is still what a value that is neither shape gets.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Asked {
@@ -425,11 +426,14 @@ fn trim(text: &str, context: u32) -> String {
 }
 
 /// The stretches of `placed` a trim keeps: every change, with `context` lines
-/// either side, and two that meet joined into one.
+/// either side, and two whose stretches meet joined into one.
 ///
-/// Joined when they touch as well as when they overlap, because a single
-/// unchanged line between two hunks is shorter than the header that would
-/// separate them.
+/// Joining them where they touch as well as where they overlap is what makes
+/// the rule `git`'s: two changes share a hunk when at most `2 * context`
+/// unchanged lines lie between them, and a pair further apart than that is two
+/// hunks with the lines between them dropped. Worth having because a reader
+/// counting hunks in one of these answers is counting what it would count in
+/// a patch from anywhere else.
 fn hunks(placed: &[Placed], context: usize) -> Vec<(usize, usize)> {
     let mut hunks: Vec<(usize, usize)> = Vec::new();
 
