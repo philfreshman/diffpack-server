@@ -383,6 +383,35 @@ async fn the_summary_lists_a_bounded_sample_however_much_changed() {
     );
 }
 
+/// The answer says whether it was worked out just now or remembered.
+///
+/// An agent that can tell a cold call from a warm one can reason about its
+/// own latency: the same pair asked for again is the cheap question, and a
+/// pair nobody has asked for is the one that costs two downloads. Neither is
+/// visible in a total or a file listing, so the answer says it.
+///
+/// Here it is `false`, because this is the first call of this test and the
+/// store it went to is this process's own. What makes it `true` is
+/// `tests/store.rs`, which is the suite about the cache rather than about
+/// this tool.
+#[tokio::test]
+async fn the_answer_says_whether_it_was_served_from_cache() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "diffable",
+        "from_version": "1.0.0",
+        "to_version": "2.0.0",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["cached"],
+        json!(false),
+        "a pair this process has not diffed before was computed now, got \
+         {result}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // When it cannot answer
 // ---------------------------------------------------------------------------

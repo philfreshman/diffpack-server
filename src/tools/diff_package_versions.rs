@@ -131,6 +131,11 @@ pub struct Output {
     /// listed. This is a sample and not the whole comparison: ask for the
     /// full tree if you need every file.
     pub most_changed: Vec<Changed>,
+
+    /// Whether this comparison was remembered from an earlier call rather
+    /// than worked out now. A remembered one costs no downloads, so asking
+    /// again for something you have already asked for is cheap.
+    pub cached: bool,
 }
 
 /// One file that changed, as the summary lists it.
@@ -355,6 +360,7 @@ impl Tool for DiffPackageVersions {
             to_version,
             totals,
             most_changed: changed,
+            cached: false,
         })
     }
 }
