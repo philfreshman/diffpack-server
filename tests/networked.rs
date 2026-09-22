@@ -239,6 +239,28 @@ async fn a_package_no_registry_has_is_a_failure_a_model_can_act_on() {
 /// The year is a floor rather than a value: a package that has had a release
 /// since then is one whose source is still answering with real dates, and it
 /// does not go stale the way a version number would.
+fn assert_recent(versions: &[Version], year: &str) {
+    let newest = versions.first().expect("a published package has versions");
+    let published_at = newest
+        .published_at
+        .as_deref()
+        .expect("the newest release is one the source dated");
+    assert!(
+        published_at >= year,
+        "the newest release should not predate {year}, got {} at {published_at}",
+        newest.version,
+    );
+
+    let dates: Vec<Option<&str>> = versions.iter().map(|v| v.published_at.as_deref()).collect();
+    let mut sorted = dates.clone();
+    sorted.sort_unstable();
+    sorted.reverse();
+    assert_eq!(
+        dates, sorted,
+        "the answer is newest first, with whatever the source left undated last"
+    );
+}
+
 /// The registry still names a current version, and it is one of the versions
 /// it listed.
 ///
@@ -263,28 +285,6 @@ fn assert_points_somewhere(versions: &Versions, field: &str) {
         "{field} says {current} is current and the same document does not \
          list it, which on a package this ordinary means the field this \
          server reads has moved"
-    );
-}
-
-fn assert_recent(versions: &[Version], year: &str) {
-    let newest = versions.first().expect("a published package has versions");
-    let published_at = newest
-        .published_at
-        .as_deref()
-        .expect("the newest release is one the source dated");
-    assert!(
-        published_at >= year,
-        "the newest release should not predate {year}, got {} at {published_at}",
-        newest.version,
-    );
-
-    let dates: Vec<Option<&str>> = versions.iter().map(|v| v.published_at.as_deref()).collect();
-    let mut sorted = dates.clone();
-    sorted.sort_unstable();
-    sorted.reverse();
-    assert_eq!(
-        dates, sorted,
-        "the answer is newest first, with whatever the source left undated last"
     );
 }
 
