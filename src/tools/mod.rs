@@ -55,7 +55,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use rmcp::model::{CallToolResult, JsonObject, Tool as Definition, ToolAnnotations};
+use rmcp::model::{
+    CallToolResult, ContentBlock, JsonObject, Resource, Tool as Definition, ToolAnnotations,
+};
 use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
@@ -486,6 +488,25 @@ pub trait Tool {
     /// [`call`] decides that once, for every tool, after the line describing
     /// the call has been written.
     fn call(args: Self::Args, ctx: &Ctx) -> impl Future<Output = Result<Self::Output, Failure>>;
+
+    /// What a client can read next, given this answer.
+    ///
+    /// A `resource_link` per entry, beside the structured content. Empty for
+    /// every tool but one: a link is worth carrying where it is the *way on*
+    /// from an answer, and `diff_package_versions` is the only tool here
+    /// whose answer names something a client did not already have a URI for
+    /// (#16). On a page of a tree it would be the same link on every call,
+    /// pointing back at the comparison the caller is already holding a handle
+    /// to.
+    ///
+    /// Defaulted, unlike [`Self::DESCRIPTION`] and the three hints, and the
+    /// difference is which way being wrong falls. Those are per-tool facts
+    /// where both wrong answers are spent on a person, so a tool has to say.
+    /// This one has a right answer for a tool that points nowhere, and it is
+    /// nothing.
+    fn links(_output: &Self::Output) -> Vec<Resource> {
+        Vec::new()
+    }
 }
 
 /// Run the tool `name`, and leave one line behind saying what happened.
@@ -548,13 +569,23 @@ async fn invoke<T: Tool>(
     )?;
 
     let output = T::call(args, ctx).await?;
+    let links = T::links(&output);
 
     // A tool whose own output will not serialise is a bug in this crate, not
     // something the caller did, so it takes the internal channel rather than
     // being reported as the tool failing.
-    serde_json::to_value(output)
+    let mut result = serde_json::to_value(output)
         .map(CallToolResult::structured)
         .map_err(|_| Failure::Internal {
             doing: "answering a tool call",
-        })
+        })?;
+
+    // After the structured content and the text `CallToolResult::structured`
+    // mirrors it into, so a client reading the blocks in order sees the
+    // answer before what to read next.
+    result
+        .content
+        .extend(links.into_iter().map(ContentBlock::ResourceLink));
+
+    Ok(result)
 }

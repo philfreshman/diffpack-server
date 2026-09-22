@@ -190,6 +190,40 @@ for i in $(seq 1 "$MANY"); do
 done
 targz "many-files-1.0.0.tgz" "package" "$many"
 
+# --- a package whose comparison does not fit in one answer -----------------
+#
+# `many-files` above is chosen for a count and this one for *bytes*, which is
+# a different question and the one the response ceiling actually asks:
+# `diffpack://diff/{handle}` (#16) serves a whole comparison in one document,
+# and a comparison that does not fit has to come back as its totals with a
+# pointer to the tool that pages through the tree instead. Nothing smaller can
+# exercise that, because the ceiling is megabytes and a tree of 2500 short
+# paths is a few hundred kilobytes.
+#
+# The paths are long as well as many, which is what keeps the archive small:
+# what has to be big is the *listing* of this package, and a path costs its
+# own length in the document and almost nothing in a tar of near-identical
+# names. The shape is a generated API client in a monorepo — deep, repetitive
+# and long-named — which is the kind of package this actually happens to.
+#
+# The test does not take this on trust: the answer says how many bytes the
+# comparison came to, and `tests/resources.rs` checks that against the ceiling
+# the crate exports, so a fixture that stopped being big enough fails loudly
+# rather than passing with nothing to prove.
+readonly ENORMOUS=6000
+enormous=$work/enormous
+mkdir -p "$enormous/package"
+for i in $(seq 1 "$ENORMOUS"); do
+  printf -v padded '%05d' "$i"
+  client=$((10#${padded} / 600))
+  schema=$((10#${padded} / 60))
+  printf -v client '%02d' "$client"
+  printf -v schema '%03d' "$schema"
+  write "${enormous}/package/packages/generated-client-for-the-platform-api-${client}/src/resources/schema-definitions-and-validators-${schema}/resource-descriptor-with-a-deliberately-long-generated-name-${padded}.generated.ts" "export const n = ${i};
+"
+done
+targz "enormous-1.0.0.tgz" "package" "$enormous"
+
 # --- a package whose files are awkward to hand back ------------------------
 #
 # Two files, each for a criterion #12 carries that no ordinary package can
