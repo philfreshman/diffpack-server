@@ -252,7 +252,12 @@ impl JsonSchema for ContextLines {
 /// transcription rather than an implementation: every wart below is the
 /// engine's, including the trailing `+ ` a file ending in a newline gets from
 /// splitting on `\n`.
-fn render(path: &str, from: Option<&str>, to: Option<&str>, ignore_whitespace: bool) -> (String, bool) {
+fn render(
+    path: &str,
+    from: Option<&str>,
+    to: Option<&str>,
+    ignore_whitespace: bool,
+) -> (String, bool) {
     match (from, to) {
         (None, None) => (ABSENT.to_owned(), false),
 
@@ -270,13 +275,11 @@ fn render(path: &str, from: Option<&str>, to: Option<&str>, ignore_whitespace: b
         // line here too.
         (Some(from), Some(to)) if from == to => (to.to_owned(), false),
 
-        (from, to) => (
-            engine::get_diff_content(
-                path,
-                from.unwrap_or_default(),
-                to.unwrap_or_default(),
-                ignore_whitespace,
-            ),
+        // The one case the engine renders through a function this crate can
+        // call, which is why it is the one `tests/get_file_diff.rs` holds
+        // against the engine rather than against a literal.
+        (Some(from), Some(to)) => (
+            engine::get_diff_content(path, from, to, ignore_whitespace),
             true,
         ),
     }

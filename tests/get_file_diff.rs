@@ -753,7 +753,10 @@ async fn a_one_sided_file_names_the_side_that_has_no_lines() {
     );
     assert_eq!(
         removed["text"],
-        json!("--- from/src/removed.js\n+++ /dev/null\n@@ -1,2 +0,0 @@\n- export const gone = true;\n- "),
+        json!(
+            "--- from/src/removed.js\n+++ /dev/null\n@@ -1,2 +0,0 @@\n\
+             - export const gone = true;\n- "
+        ),
         "a file the second version does not have has nothing on the right of \
          it: got {removed}"
     );
