@@ -104,6 +104,102 @@ async fn a_remembered_answer_is_the_one_that_was_computed() {
     );
 }
 
+/// An entry is two blobs, under the name the comparison has.
+///
+/// The pathnames are the contract rather than an implementation detail: #27
+/// computes the same `diff_id` in TypeScript and reads
+/// `diffs/v1/{diff_id}/meta.json` with no server in the path, so a layout
+/// this suite does not pin is a layout that can move without anything here
+/// noticing.
+///
+/// Both of them, because half an entry is not a cache hit. A `meta.json`
+/// written without its `patches.json` is a result whose patches are missing
+/// with nothing saying so.
+#[tokio::test]
+async fn a_remembered_diff_is_two_blobs_under_the_name_the_comparison_has() {
+    let store = Memory::new();
+
+    let answer = call(&store, diffable()).await;
+    let diff_id = answer["structuredContent"]["diff_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the answer names the comparison, got {answer}"));
+
+    assert_eq!(
+        store.written(),
+        vec![
+            format!("diffs/v1/{diff_id}/meta.json"),
+            format!("diffs/v1/{diff_id}/patches.json"),
+        ],
+        "one comparison is these two blobs and no others"
+    );
+}
+
+/// What `patches.json` is for: every changed file, rendered once.
+///
+/// This is the whole reason the patches are written at all. Both archives are
+/// extracted at this moment, so rendering every changed file costs almost
+/// nothing; asking for one later costs two downloads (#15).
+///
+/// The expected patches are worked out from the fixture and from the
+/// renderer's contract, not from running it — four shapes, one per case the
+/// pair reaches:
+///
+/// - a file that is only in the second version is `/dev/null` against it,
+///   every line prefixed `+`, and the trailing newline makes a last empty one
+/// - a file that is only in the first is the mirror of that
+/// - a file in both, changed, is the engine's unified diff
+/// - a file in both whose content is identical is that content and
+///   `is_diff: false`, so that a reader renders a file as a file — which is
+///   what a rename with an unchanged body is
+///
+/// `README.md` is in neither version's patch set, because it did not change.
+/// An unchanged file's patch is the file, and a cache that stored one would
+/// be storing the package.
+#[tokio::test]
+async fn every_changed_file_is_remembered_with_its_patch_already_rendered() {
+    let store = Memory::new();
+
+    let answer = call(&store, diffable()).await;
+    let diff_id = answer["structuredContent"]["diff_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the answer names the comparison, got {answer}"));
+
+    assert_eq!(
+        blob(&store, &format!("diffs/v1/{diff_id}/patches.json")),
+        json!({
+            "src/added.js": {
+                "data": "--- /dev/null\n+++ to/src/added.js\n+ export const fresh = true;\n+ ",
+                "is_diff": true,
+            },
+            "src/index.js": {
+                "data": "--- from/src/index.js\n+++ to/src/index.js\n  \
+                         export function greet(name) {\n-   return \"Hello, \" \
+                         + name;\n+   return \"Hi, \" + name;\n  }",
+                "is_diff": true,
+            },
+            "src/new-name.js": {
+                "data": "export const stable = 1;\nexport const alsoStable = 2;\n",
+                "is_diff": false,
+            },
+            "src/removed.js": {
+                "data": "--- from/src/removed.js\n+++ /dev/null\n- export const gone = true;\n- ",
+                "is_diff": true,
+            },
+        }),
+        "one patch per changed file and none for the one that did not change"
+    );
+}
+
+/// The blob at `pathname`, as the JSON it is.
+fn blob(store: &Memory, pathname: &str) -> Value {
+    let bytes = store
+        .blob(pathname)
+        .unwrap_or_else(|| panic!("`{pathname}` should be there, {:?} is", store.written()));
+
+    serde_json::from_slice(&bytes)
+        .unwrap_or_else(|e| panic!("`{pathname}` should be JSON, got {e}"))
+}
+
 /// One answer with `cached` taken out of both copies of it.
 ///
 /// `tools::invoke` puts a tool's answer on the wire twice — as

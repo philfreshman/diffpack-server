@@ -33,10 +33,13 @@
 //! *replace* that rather than add to it, which is how the tool that mints a
 //! handle ends up describing it differently from the three that take one.
 
+use std::collections::BTreeMap;
+
 use futures::try_join;
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{self, DiffFileEntry, DiffStatus, FileType};
+use crate::archive::FileMap;
+use crate::engine::{self, DiffFileEntry, DiffStatus, FileType, Patch};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
 use crate::registry::Registry;
@@ -280,6 +283,67 @@ fn walk(node: &DiffFileEntry, totals: &mut Totals, changed: &mut Vec<Changed>) {
     }
 }
 
+/// The patch for every file under `node` that changed.
+///
+/// Unchanged files are left out. An unchanged file's patch is the file, so
+/// storing one would be storing the package a second time — and the reading
+/// tool that wants it has both versions' contents to hand anyway.
+///
+/// A renamed file is diffed from where it was: its content in the first
+/// version is at `old_path`, and diffing it against itself at its new path
+/// would report every line of a moved file as added.
+fn rendered(
+    node: &DiffFileEntry,
+    from_files: &FileMap,
+    to_files: &FileMap,
+    ignore_whitespace: bool,
+) -> BTreeMap<String, Patch> {
+    let mut patches = BTreeMap::new();
+    collect(node, from_files, to_files, ignore_whitespace, &mut patches);
+    patches
+}
+
+/// Add every changed file under `node` to `patches`.
+fn collect(
+    node: &DiffFileEntry,
+    from_files: &FileMap,
+    to_files: &FileMap,
+    ignore_whitespace: bool,
+    patches: &mut BTreeMap<String, Patch>,
+) {
+    match node.file_type {
+        FileType::File => {
+            if node.status == DiffStatus::Unchanged {
+                return;
+            }
+
+            let was = node.old_path.as_deref().unwrap_or(&node.path);
+            patches.insert(
+                node.path.clone(),
+                engine::patch(
+                    &node.path,
+                    content(from_files, was),
+                    content(to_files, &node.path),
+                    ignore_whitespace,
+                ),
+            );
+        }
+        FileType::Directory => {
+            for child in node.children.iter().flatten() {
+                collect(child, from_files, to_files, ignore_whitespace, patches);
+            }
+        }
+    }
+}
+
+/// What `files` has at `path`, where that is a file at all.
+fn content<'a>(files: &'a FileMap, path: &str) -> Option<&'a str> {
+    files.get(path).and_then(|entry| match entry.file_type {
+        FileType::File => Some(entry.content.as_str()),
+        FileType::Directory => None,
+    })
+}
+
 /// How much one file moved: the number the listing is ranked by.
 fn churn(file: &Changed) -> u32 {
     file.lines_added + file.lines_removed
@@ -348,10 +412,17 @@ impl Tool for DiffPackageVersions {
                     inputs.ignore_whitespace,
                 );
 
+                // Rendered here rather than by whoever asks for one later:
+                // both archives are extracted at this moment, so a patch
+                // costs a comparison of two strings already in memory — and
+                // on the other side of this call it costs two downloads.
+                let patches = rendered(&tree, &from_files, &to_files, inputs.ignore_whitespace);
+
                 ctx.store()
                     .put(Entry {
                         key,
                         tree: tree.clone(),
+                        patches,
                     })
                     .await;
 

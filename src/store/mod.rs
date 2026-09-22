@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::cache_key::DiffKey;
-use crate::engine::DiffFileEntry;
+use crate::engine::{DiffFileEntry, Patch};
 
 /// One cached diff result: what a caller puts, and what it gets back.
 ///
@@ -45,6 +45,13 @@ pub struct Entry {
 
     /// The whole comparison, as the engine arranged it.
     pub tree: DiffFileEntry,
+
+    /// The rendered patch for each file that changed, by path.
+    ///
+    /// Written now because the extraction has already happened: rendering
+    /// every changed file at this moment costs almost nothing, where doing it
+    /// later costs two archive downloads (#15).
+    pub patches: BTreeMap<String, Patch>,
 }
 
 /// What `meta.json` holds.
@@ -122,24 +129,43 @@ impl DiffStore {
             return None;
         }
 
+        // Read rather than asked about, because the answer to "is it there"
+        // and the answer to "what is in it" are the same request. An entry
+        // whose patches are not there is a real entry and not half of one —
+        // that is what an entry over the size cap is — so a missing
+        // `patches.json` is no patches rather than no hit.
+        let patches = match self.read(&key.patches_path()).await {
+            Some(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+            None => BTreeMap::new(),
+        };
+
         Some(Entry {
             key: meta.key,
             tree: meta.tree,
+            patches,
         })
     }
 
     /// Remember `entry`.
+    ///
+    /// Both blobs or neither: the patches are serialised before anything is
+    /// written, so an entry that cannot be written whole is not written at
+    /// all rather than left as a `meta.json` whose patches never arrived.
     pub async fn put(&self, entry: Entry) {
         let meta = Meta {
             key: entry.key,
             tree: entry.tree,
         };
 
-        let Ok(bytes) = serde_json::to_vec(&meta) else {
+        let (Ok(bytes), Ok(patches)) = (
+            serde_json::to_vec(&meta),
+            serde_json::to_vec(&entry.patches),
+        ) else {
             return;
         };
 
         self.write(&meta.key.meta_path(), bytes).await;
+        self.write(&meta.key.patches_path(), patches).await;
     }
 
     /// The bytes at `pathname`, if the store holds any.
@@ -198,6 +224,24 @@ pub struct Memory(Arc<Mutex<BTreeMap<String, Vec<u8>>>>);
 impl Memory {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The blob at `pathname`, if this store holds one.
+    ///
+    /// What a `patches.json` holds is the contract #15 reads a rendered patch
+    /// out of and #27 reads a result out of, and nothing else in this process
+    /// can see it — so a suite that could only count the blobs would be
+    /// pinning where they are and not what they say.
+    pub fn blob(&self, pathname: &str) -> Option<Vec<u8>> {
+        self.read(pathname)
+    }
+
+    /// Every pathname this store holds, in the order the store keeps them.
+    pub fn written(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .map(|blobs| blobs.keys().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// The store that writes here, to hand to a [`Ctx`](crate::tools::Ctx).
