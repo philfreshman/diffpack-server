@@ -91,7 +91,13 @@ answers it: a resource needs this because the comparison is the tool's answer
 and the document is the resource's arrangement of it.
 
 The other cost is `get_file_diff`, which pays for the store and does not yet
-collect. It renders from both versions' contents and an entry holds none, so a
-remembered comparison spares it the tree and not the downloads. What would
-answer it is the entry's own patches — rendered on every write since #21 and
-read by nothing — which is #84, and this is the reader #84 was waiting for.
+collect, and it pays twice over. It renders from both versions' contents and
+an entry holds none, so a warm cache saves it a lookup it cannot spend and
+neither download. A cold one now costs it a tree build and every changed
+file's patch on top of the two downloads it already paid — work this tool did
+not do before and does not read, since it fetched two archives and rendered
+one file and built no tree at all. That is spent on the three paths that
+*can* be served out of an entry: a first call here leaves the comparison
+behind instead of forgetting it. What would pay this tool back is the entry's
+own patches — rendered on every write since #21 and read by nothing — which
+is #84, and this is the reader #84 was waiting for.

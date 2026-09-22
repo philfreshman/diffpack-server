@@ -52,20 +52,30 @@
 //!
 //! The walk from a handle to a comparison is
 //! [`super::diff_package_versions::compare`]'s (#83), and it looks in the
-//! store before it looks at a registry — so this tool no longer builds a tree
-//! it never reads, and a comparison this server has already made costs it
-//! nothing to find.
+//! store before it looks at a registry. What that is worth here is not what
+//! it is worth next door, and the difference is worth stating in full
+//! because it reads like a win from the outside.
 //!
-//! It still costs both downloads, and that is the half that is missing rather
-//! than an omission here. An entry is a tree and its patches and never the
-//! archives they were worked out from, so a remembered comparison arrives
-//! without the contents this renders from and
-//! [`super::diff_package_versions::Comparison::files`] fetches them. What
-//! would answer instead is the entry's own patches — every changed file's,
-//! rendered when the entry was written, and read by nothing in `src/` yet.
-//! #84 is where they are read and this is the call site it changes. Until
-//! then the "render it on demand" half of #15 is still the only half there
-//! is here, and the tests that hold it hold it unchanged.
+//! A remembered comparison still costs this tool both downloads. An entry is
+//! a tree and its patches and never the archives they were worked out from,
+//! so one that came out of the store arrives without the contents this
+//! renders from and
+//! [`super::diff_package_versions::Comparison::files`] fetches them anyway.
+//! On a warm cache what this tool gains is one lookup it cannot yet spend.
+//!
+//! On a cold one it pays more than it used to, and on purpose. Before #83
+//! this tool fetched two archives and rendered one file, and built no tree at
+//! all; the walk it now calls builds the tree, renders every changed file's
+//! patch and writes the entry, and this tool reads neither half of what it
+//! wrote. What that buys is not its own: a first call here leaves the
+//! comparison behind for the three paths that *can* be served out of one,
+//! rather than downloading two archives and forgetting them.
+//!
+//! What would answer this tool instead is the entry's own patches — every
+//! changed file's, rendered when the entry was written, and read by nothing
+//! in `src/` yet. #84 is where they are read and this is the call site it
+//! changes. Until then the "render it on demand" half of #15 is still the
+//! only half there is here, and the tests that hold it hold it unchanged.
 //!
 //! # Where the descriptions come from
 //!
