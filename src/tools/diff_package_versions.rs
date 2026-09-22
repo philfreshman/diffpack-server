@@ -18,6 +18,29 @@
 //! The bare `diff_id` is returned beside it anyway, because #27 looks a
 //! result up by exactly that string.
 //!
+//! # What else is here, and why it is here
+//!
+//! [`compare`] — the walk from a handle to a compared tree, with the store on
+//! this side of it. It is the whole of what a diff costs, and the three paths
+//! that *read* a comparison back go through it: [`super::get_diff_tree`],
+//! [`super::get_file_diff`] and the two resources under
+//! [`crate::resources::diff`]. It was written four times before #83, which is
+//! four places for the pair of downloads, the rename threshold and the
+//! whitespace rule to stop agreeing.
+//!
+//! Here rather than in a module of its own because this is the tool that
+//! *computes* a comparison — the other three read back what it worked out —
+//! and a shared module named after neither is the alternative [ADR
+//! 0014](../../docs/adr/0014-a-resource-is-a-projection-of-the-tools.md)
+//! rejected for the walks it lists. Leaving it in `src/resources/` and having
+//! three tools call into a resource is the alternative [ADR
+//! 0016](../../docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md)
+//! rejects, and the one 0014's own sentence forbids. [`compare`] is therefore
+//! the fifth export of a tool module with a caller outside it, which 0014
+//! names as the direction to watch: the thing it warns about is a resource
+//! doing its own work through a tool's front door, and this is work leaving a
+//! resource rather than arriving at one.
+//!
 //! # Where the descriptions come from
 //!
 //! Every doc comment on a field of [`Args`] and [`Output`] becomes a
@@ -369,6 +392,166 @@ fn churn(file: &Changed) -> u32 {
     file.lines_added + file.lines_removed
 }
 
+/// Both versions of a package, as the files each of them ships.
+///
+/// The pair rather than one and then the other: a comparison is of two
+/// versions, and a caller holding one file map has nothing it can say.
+pub struct Versions {
+    pub from_files: FileMap,
+    pub to_files: FileMap,
+}
+
+/// One comparison, as whoever asked for it holds it.
+///
+/// The tree is the whole of the comparison and is always here. Both versions'
+/// files are not, and that is the difference this type exists to carry: an
+/// entry is a tree and its patches, so a comparison that came out of the
+/// store came without the archives it was worked out from.
+pub struct Comparison {
+    /// The whole comparison, as the engine arranged it.
+    pub tree: DiffFileEntry,
+
+    /// Whether this was remembered rather than worked out now.
+    pub cached: bool,
+
+    /// Both versions' files, where this call is the one that downloaded them.
+    ///
+    /// Private, because absent here is not the question a caller is asking —
+    /// [`Comparison::files`] is — and a caller that matched on it would be a
+    /// fourth place deciding what to do about a comparison that arrived
+    /// without its archives.
+    files: Option<Versions>,
+}
+
+impl Comparison {
+    /// Both versions' files, downloaded now if this comparison was
+    /// remembered without them.
+    ///
+    /// Takes `self`, because the two file maps are much the largest thing a
+    /// comparison carries and every caller that wants them wants them whole
+    /// — each has taken what it needed from the tree first.
+    ///
+    /// A remembered comparison spares the tree and not the downloads, which
+    /// is the whole of what the store holds: what would answer one file's
+    /// diff without them is the entry's own patches, rendered when the entry
+    /// was written and read by nothing yet (#84).
+    pub async fn files(self, handle: &DiffHandle, ctx: &Ctx) -> Result<Versions, Failure> {
+        match self.files {
+            Some(files) => Ok(files),
+            None => versions(handle, ctx).await,
+        }
+    }
+}
+
+/// Both versions of what `handle` names, downloaded together.
+///
+/// The one `try_join!` in this crate, and the reason `futures` is on the list
+/// a tool may import. The two downloads do not depend on each other and a
+/// version pair is the only place this server waits on the network twice, so
+/// waiting on them one after the other would double the wait for nothing.
+async fn versions(handle: &DiffHandle, ctx: &Ctx) -> Result<Versions, Failure> {
+    let inputs = handle.inputs();
+
+    let (from_files, to_files) = try_join!(
+        ctx.archive()
+            .fetch(inputs.registry, &inputs.package, &inputs.from_version),
+        ctx.archive()
+            .fetch(inputs.registry, &inputs.package, &inputs.to_version),
+    )?;
+
+    Ok(Versions {
+        from_files,
+        to_files,
+    })
+}
+
+/// The comparison `handle` names.
+///
+/// The walk from a handle to a compared tree, in the module that owns the
+/// comparison. It used to be written four times — here, in `get_diff_tree`,
+/// in `get_file_diff` and in the `diffpack://diff/{handle}` resource — and
+/// four copies of one walk is four places for the pair of downloads, the
+/// rename threshold and the whitespace rule to stop agreeing. See [ADR
+/// 0016](../../docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md).
+///
+/// It is this module's rather than a shared one's because this is the tool
+/// that computes a comparison: `diff_package_versions` is what mints a handle
+/// and the other three read back what it worked out. A resource calling it is
+/// the shape [ADR
+/// 0014](../../docs/adr/0014-a-resource-is-a-projection-of-the-tools.md) asks
+/// for, and it is the fifth of this directory's exports to have a caller
+/// outside the module that owns it.
+///
+/// # The store is on this side of it
+///
+/// The lookup used to be in the one caller that never needed it — the tool
+/// that computes the comparison in the first place — so the three paths that
+/// exist to *read* one each paid two downloads and a tree build for a tree
+/// the store was already holding. It is here now, which is what makes a
+/// cached comparison cheap for all four.
+///
+/// The write is here for the same reason and for one more: a miss is what
+/// repairs an entry, so a reading path that recomputed and kept it to itself
+/// would leave the next reader to pay again. What that costs a cold read is
+/// the patches rendered below, which is a comparison of strings already in
+/// memory — and what it buys is that eviction is a latency question rather
+/// than a permanent one. See [ADR
+/// 0006](../../docs/adr/0006-the-handle-carries-its-inputs.md).
+///
+/// Neither half of the store can fail this. [`crate::store::DiffStore`] has
+/// no `Result` to return: a lookup that could not be made is a miss, and a
+/// write that could not be made is a note in the log ([ADR
+/// 0003](../../docs/adr/0003-the-cache-seam-is-a-store.md)). The `Failure`
+/// here is the archive seam's and nothing else's.
+pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failure> {
+    let key = handle.key();
+
+    // Everything below the cache is the same either way, because what is
+    // remembered is the tree and not an answer: every caller walks what it
+    // wants out of the tree, so a cached comparison and a fresh one cannot
+    // differ without the tree differing.
+    if let Some(entry) = ctx.store().get(&key).await {
+        return Ok(Comparison {
+            tree: entry.tree,
+            cached: true,
+            files: None,
+        });
+    }
+
+    let inputs = handle.inputs();
+    let files = versions(handle, ctx).await?;
+
+    let tree = engine::build_diff_tree(
+        &files.from_files,
+        &files.to_files,
+        inputs.similarity_threshold,
+        inputs.ignore_whitespace,
+    );
+
+    // Rendered now rather than by whoever asks for one later: both archives
+    // are extracted at this moment, so a patch costs a comparison of two
+    // strings already in memory — and on the other side of this call it
+    // costs two downloads.
+    let patches = rendered(
+        &tree,
+        &files.from_files,
+        &files.to_files,
+        inputs.ignore_whitespace,
+    );
+
+    ctx.store().put(Entry {
+        key,
+        tree: tree.clone(),
+        patches,
+    });
+
+    Ok(Comparison {
+        tree,
+        cached: false,
+        files: Some(files),
+    })
+}
+
 impl Tool for DiffPackageVersions {
     const NAME: &'static str = "diff_package_versions";
     const TITLE: &'static str = "Diff package versions";
@@ -416,53 +599,14 @@ impl Tool for DiffPackageVersions {
             similarity_threshold: args.similarity_threshold,
             ignore_whitespace: args.ignore_whitespace,
         });
-        let inputs = handle.inputs();
-        let key = handle.key();
+        let comparison = compare(&handle, ctx).await?;
 
-        // Everything below the cache is the same either way, because what is
-        // remembered is the tree and not the answer: the totals and the
-        // sample are walked out of it here, so a cached answer and a fresh
-        // one cannot differ without the tree differing.
-        let (tree, cached) = match ctx.store().get(&key).await {
-            Some(entry) => (entry.tree, true),
-            None => {
-                // Concurrently, the way the engine's wasm entry point fetches
-                // them: the two downloads do not depend on each other, and a
-                // version pair is the one place this server waits on the
-                // network twice.
-                let (from_files, to_files) = try_join!(
-                    ctx.archive()
-                        .fetch(inputs.registry, &inputs.package, &inputs.from_version),
-                    ctx.archive()
-                        .fetch(inputs.registry, &inputs.package, &inputs.to_version),
-                )?;
-
-                let tree = engine::build_diff_tree(
-                    &from_files,
-                    &to_files,
-                    inputs.similarity_threshold,
-                    inputs.ignore_whitespace,
-                );
-
-                // Rendered here rather than by whoever asks for one later:
-                // both archives are extracted at this moment, so a patch
-                // costs a comparison of two strings already in memory — and
-                // on the other side of this call it costs two downloads.
-                let patches = rendered(&tree, &from_files, &to_files, inputs.ignore_whitespace);
-
-                ctx.store().put(Entry {
-                    key,
-                    tree: tree.clone(),
-                    patches,
-                });
-
-                (tree, false)
-            }
-        };
-
+        // The totals and the sample are walked out of the tree here, on both
+        // paths, so a remembered answer and a fresh one cannot differ without
+        // the tree differing.
         let mut totals = Totals::default();
         let mut changed = Vec::new();
-        walk(&tree, &mut totals, &mut changed);
+        walk(&comparison.tree, &mut totals, &mut changed);
 
         // Most-moved first, and then by path. The second half is what makes
         // this an order rather than a tendency: a tree walk has its own
@@ -472,8 +616,8 @@ impl Tool for DiffPackageVersions {
         changed.truncate(MOST_CHANGED);
 
         let diff_id = handle.diff_id();
-        let from_version = inputs.from_version.clone();
-        let to_version = inputs.to_version.clone();
+        let from_version = handle.inputs().from_version.clone();
+        let to_version = handle.inputs().to_version.clone();
 
         Ok(Output {
             handle,
@@ -482,7 +626,7 @@ impl Tool for DiffPackageVersions {
             to_version,
             totals,
             most_changed: changed,
-            cached,
+            cached: comparison.cached,
         })
     }
 }

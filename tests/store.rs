@@ -1,12 +1,19 @@
 //! Cached diff results, driven the way an agent drives them.
 //!
-//! The cache has no surface of its own: nothing calls it, nothing reads it
-//! back, and the only thing an agent ever sees of it is that the same
-//! comparison asked for twice was cheap the second time. So every test here
-//! goes over the wire — `tools/call` on `diff_package_versions`, through the
-//! service factory `router_with` takes — and the store under it is an
-//! in-process one the test holds a handle to, the way `tests/log.rs` holds a
+//! The cache has no surface of its own: no tool names it, and the only thing
+//! an agent ever sees of it is that a comparison this server has already made
+//! is cheap to ask for again. So every test here goes over the wire —
+//! `tools/call` and `resources/read`, through the service factory
+//! `router_with` takes — and the store under it is an in-process one the test
+//! holds a handle to, the way `tests/log.rs` holds a
 //! [`Capture`](diffpack_server::log::Capture).
+//!
+//! Four paths ask for a comparison and one of them writes what the others are
+//! served, so a suite that only drove the writer could say what was put in the
+//! store and nothing about what comes out of it. What says the difference is a
+//! fixture set the comparison cannot be made through at all — see
+//! [`ONE_SIDED`]: a call that answers through it did not fetch, which is a
+//! stronger claim than a stopwatch and one a suite cannot get wrong.
 //!
 //! That handle is what lets a test say more than "it was cheap": it names the
 //! blobs an entry is, and when each of them was written. Both are the
@@ -34,6 +41,21 @@ use diffpack_server::tools::Ctx;
 use serde_json::{json, Value};
 
 const TOOL: &str = "diff_package_versions";
+
+/// A fixture set holding the first version of the pair below and not the
+/// second.
+///
+/// What proves a reading path was served rather than recomputed. A count of
+/// downloads or a stopwatch says a call was cheap; this says it did not
+/// happen — through this set the second archive is a version the registry
+/// does not publish, so a comparison that reaches the network through it
+/// cannot be made at all, and a call that answers is a call that did not
+/// reach.
+///
+/// `index.json` points the first version at the real set's tarball rather
+/// than a copy of it, so there is one `diffable` 1.0.0 in this repository and
+/// the two sets cannot come to disagree about what is in it.
+const ONE_SIDED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/one-sided");
 
 /// The pair every test here compares unless it needs another.
 ///
@@ -289,9 +311,9 @@ async fn an_entry_that_dropped_its_patches_is_still_remembered() {
 /// is not the absence above: this one says nothing was dropped, so answering
 /// with it would serve a comparison whose every patch is silently missing —
 /// a changed file that a reader of the entry would take for one with nothing
-/// to render. Nothing reads an entry back yet; `get_file_diff` renders on
-/// demand every time, so this is a wrong answer waiting rather than one
-/// being given.
+/// to render. Nothing reads an entry's *patches* back yet; `get_file_diff`
+/// renders on demand every time (#84), so this is a wrong answer waiting
+/// rather than one being given.
 ///
 /// So it is a miss, and the miss is what repairs it: the recomputed entry
 /// heads past the `meta.json` that is there and writes the blob that is not.
@@ -525,6 +547,136 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
         2 * compared,
         "one entry per comparison, and an entry is two blobs: {:?}",
         store.written()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// What a reading path is served
+// ---------------------------------------------------------------------------
+
+/// A tool that reads a diff back is handed the stored tree rather than the
+/// archives it was worked out from.
+///
+/// The half of the cache that was missing. `diff_package_versions` wrote the
+/// entry and then only `diff_package_versions` read one, so the three paths
+/// that exist to *read* a comparison each paid two archive downloads, an
+/// extraction and a tree build for a tree the store already held.
+///
+/// Driven through [`ONE_SIDED`], so the claim is that nothing was fetched
+/// rather than that fetching was quick. The control at the end is the same
+/// call against a store with nothing in it: it has to reach the network, and
+/// the network is where the second version is not.
+#[tokio::test]
+async fn a_reading_tool_is_served_the_stored_tree_rather_than_the_archives() {
+    let store = Memory::new();
+
+    let diffed = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+    let walk = json!({ "handle": diffed["structuredContent"]["handle"].clone() });
+
+    let served = one_sided(|| store.store(), "get_diff_tree", walk.clone()).await;
+    assert_eq!(
+        served["isError"],
+        json!(false),
+        "the tree was in the store, and the second version is not there to \
+         fetch: got {served}"
+    );
+    assert_eq!(
+        served,
+        call_tool(|| store.store(), "get_diff_tree", walk.clone()).await,
+        "and what it was served is the page the whole fixture set answers \
+         with, not a cheaper version of one"
+    );
+
+    let empty = Memory::new();
+    let missed = one_sided(|| empty.store(), "get_diff_tree", walk).await;
+    assert_eq!(
+        missed["isError"],
+        json!(true),
+        "with nothing to be served the same call has to fetch, and fetching \
+         is what this fixture set cannot do: got {missed}"
+    );
+}
+
+/// So is the resource that answers with the whole comparison.
+///
+/// A read is the other way an agent asks for a comparison it has already
+/// made, and it was paying the same two downloads for the same tree. It goes
+/// through the same walk as the tool now, which is what stops the two
+/// disagreeing about which of them the cache is for.
+#[tokio::test]
+async fn a_read_of_the_whole_comparison_is_served_the_stored_tree_too() {
+    let store = Memory::new();
+
+    let diffed = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+    let uri = format!(
+        "diffpack://diff/{}",
+        diffed["structuredContent"]["handle"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
+    );
+
+    let served = read(ONE_SIDED, || store.store(), &uri).await;
+    assert!(
+        served.get("error").is_none(),
+        "the tree was in the store, and the second version is not there to \
+         fetch: got {served}"
+    );
+    assert_eq!(
+        served,
+        read(FIXTURES, || store.store(), &uri).await,
+        "and it is the document the whole fixture set answers with"
+    );
+
+    let empty = Memory::new();
+    let missed = read(ONE_SIDED, || empty.store(), &uri).await;
+    assert!(
+        missed.get("error").is_some(),
+        "with nothing to be served the same read has to fetch: got {missed}"
+    );
+}
+
+/// A store that is not there does not stop a reading path either.
+///
+/// The rule the whole module is arranged around, held over the three paths
+/// that only just started asking: `DiffStore` has no `Result` to return, so a
+/// lookup that could not be made is a miss and the recompute behind it is the
+/// server that existed before there was a cache. What a caller sees is the
+/// same page; what an operator sees is a note.
+///
+/// `DiffStore::unavailable` is not a mode invented for this test — it is what
+/// `DiffStore::live` falls back to when a deployment has no credentials to
+/// reach a store with.
+#[tokio::test]
+async fn a_reading_tool_answers_the_same_with_no_store_to_read() {
+    let log = Capture::new();
+    let gone = || DiffStore::unavailable().logging_to(log.sink());
+
+    let store = Memory::new();
+    let diffed = call(|| store.store(), diffable()).await;
+    let walk = json!({ "handle": diffed["structuredContent"]["handle"].clone() });
+
+    let degraded = call_tool(gone, "get_diff_tree", walk.clone()).await;
+    let cached = call_tool(|| store.store(), "get_diff_tree", walk).await;
+
+    assert_eq!(
+        degraded["isError"],
+        json!(false),
+        "a walk with no store to read is a walk, got {degraded}"
+    );
+    assert_eq!(
+        degraded, cached,
+        "and it is the page a store would have been served"
+    );
+
+    let notes = noted(&log).await;
+    assert!(
+        notes
+            .iter()
+            .all(|note| note.contains("blob store's credentials")),
+        "what an operator reads is the store saying what was not there: got \
+         {notes:?}"
     );
 }
 
@@ -1321,7 +1473,42 @@ async fn call(store: impl Fn() -> DiffStore, arguments: Value) -> Value {
 /// builder that fills the seams it was not given. Every other seam is still
 /// the fixture set's.
 async fn call_tool(store: impl Fn() -> DiffStore, tool: &str, arguments: Value) -> Value {
-    Client::over(Ctx::fixture(FIXTURES).storing_in(store()))
+    calling(FIXTURES, store, tool, arguments).await
+}
+
+/// The same, against a server that cannot fetch the second version.
+///
+/// See [`ONE_SIDED`]: everything but the archive the comparison needs is
+/// there, so a call that answers through this is a call that was served.
+async fn one_sided(store: impl Fn() -> DiffStore, tool: &str, arguments: Value) -> Value {
+    calling(ONE_SIDED, store, tool, arguments).await
+}
+
+/// Call `tool` with `arguments`, against a server reading `fixtures` and
+/// caching in `store`.
+async fn calling(
+    fixtures: &str,
+    store: impl Fn() -> DiffStore,
+    tool: &str,
+    arguments: Value,
+) -> Value {
+    Client::over(Ctx::fixture(fixtures).storing_in(store()))
         .call(tool, arguments)
+        .await
+}
+
+/// Read `uri`, against a server reading `fixtures` and caching in `store`.
+///
+/// The whole JSON-RPC envelope rather than the `result`, because what a read
+/// that could not be made answers with is an `error` beside it — a resource
+/// has no `isError` of its own to carry a failure in (#85).
+async fn read(fixtures: &str, store: impl Fn() -> DiffStore, uri: &str) -> Value {
+    Client::over(Ctx::fixture(fixtures).storing_in(store()))
+        .post(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "resources/read",
+            "params": { "uri": uri },
+        }))
         .await
 }

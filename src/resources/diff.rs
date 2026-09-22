@@ -8,21 +8,28 @@
 //! recomputes instead, which is the same reason `get_diff_tree` takes one.
 //! See [ADR 0006](../../docs/adr/0006-the-handle-carries-its-inputs.md).
 //!
-//! # Why nothing here walks a tree
+//! # Why nothing here walks a tree, or builds one
 //!
-//! The totals are `diff_package_versions`'s and the nodes are
-//! `get_diff_tree`'s, and both are *called* rather than reproduced. A
-//! resource that walked the tree itself would be a second answer to a
-//! question a tool already answers, and the two would disagree the first time
-//! either changed — the drift ADR 0013 records for the patch renderer, in a
-//! second place. What this module owns is the document the three go into.
+//! The totals are `diff_package_versions`'s, the nodes are `get_diff_tree`'s
+//! and the comparison itself is `diff_package_versions::compare`'s. All three
+//! are *called* rather than reproduced. A resource that walked the tree
+//! itself would be a second answer to a question a tool already answers, and
+//! the two would disagree the first time either changed — the drift ADR 0013
+//! records for the patch renderer, in a second place. What this module owns
+//! is the document the three go into.
+//!
+//! The third of them used to be here: this module held the fetch, the
+//! extraction and the tree build, and three tools had a copy of the same
+//! walk. That was a resource computing what a tool computes, which is what
+//! [ADR 0014](../../docs/adr/0014-a-resource-is-a-projection-of-the-tools.md)
+//! forbids and what [ADR
+//! 0016](../../docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md) moved
+//! to the tool that owns it. Neither `futures` nor `crate::engine` is
+//! imported here any more, which is the short version of the same sentence.
 
-use futures::try_join;
 use rmcp::model::{CacheScope, ReadResourceResult, Resource, ResourceContents, ResourceTemplate};
 use serde::Serialize;
 
-use crate::archive::FileMap;
-use crate::engine::{self, DiffFileEntry};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
 use crate::page;
@@ -94,49 +101,10 @@ pub fn template() -> ResourceTemplate {
 /// rather than answering it another way.
 const TTL_MS: u64 = 24 * 60 * 60 * 1000;
 
-/// One comparison: both versions' files, and the tree they compare to.
-///
-/// What every read under `diffpack://diff/` starts with, including the one
-/// file's diff next door — which needs the tree to find where a renamed file
-/// was, and both file maps to render it. Made once here so that reading one
-/// file costs one pair of downloads rather than two.
-pub struct Comparison {
-    pub from_files: FileMap,
-    pub to_files: FileMap,
-    pub tree: DiffFileEntry,
-}
-
-/// Fetch both versions of what `handle` names and compare them.
-pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failure> {
-    let inputs = handle.inputs();
-
-    // Concurrently, the way the tool that mints a handle fetches them: the
-    // two downloads do not depend on each other.
-    let (from_files, to_files) = try_join!(
-        ctx.archive()
-            .fetch(inputs.registry, &inputs.package, &inputs.from_version),
-        ctx.archive()
-            .fetch(inputs.registry, &inputs.package, &inputs.to_version),
-    )?;
-
-    let tree = engine::build_diff_tree(
-        &from_files,
-        &to_files,
-        inputs.similarity_threshold,
-        inputs.ignore_whitespace,
-    );
-
-    Ok(Comparison {
-        from_files,
-        to_files,
-        tree,
-    })
-}
-
 /// One comparison, whole — or, when it does not fit, everything known about
 /// it and where to read the rest.
 pub async fn read(handle: &DiffHandle, ctx: &Ctx) -> Result<ReadResourceResult, Failure> {
-    let tree = compare(handle, ctx).await?.tree;
+    let tree = diff_package_versions::compare(handle, ctx).await?.tree;
     let totals = diff_package_versions::totals(&tree);
 
     let whole = write(&Document {

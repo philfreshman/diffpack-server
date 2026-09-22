@@ -23,16 +23,26 @@
 //! reason: an agent that asked what is under `src` is not asking about
 //! `src`.
 //!
-//! # Where a cached result would come in
+//! # Where a cached result comes in
 //!
-//! Nowhere yet, and that is worth saying because it looks like an omission.
-//! The DiffStore is here — #21 built it, and `diff_package_versions` reads
-//! and writes it — but #21 scopes the cache to that tool, so every call here
-//! recomputes the comparison from the inputs the handle carries. That is
-//! precisely the path a cache miss takes, so the behaviour #44 exists for —
-//! an evicted entry is recomputed and served rather than refused — is the
-//! only behaviour there is here, and the tests that hold it will go on
-//! holding it once a store is in front of it.
+//! In the first line of the handler, and out of sight in it. The walk from a
+//! handle to a comparison is [`super::diff_package_versions::compare`]'s
+//! (#83), and looking in the store is the first thing that walk does — so a
+//! tree this server has already worked out is paged here without either
+//! archive being downloaded a second time. #21 built the store and scoped it
+//! to the tool that writes entries; this is the reading half of it, and
+//! nothing about it is visible in the code below.
+//!
+//! What used to be here is the other half of the same walk and has not gone
+//! anywhere. A miss recomputes the comparison from the inputs the handle
+//! carries, which is what makes an evicted entry a slower answer rather than
+//! a refusal (#44, [ADR
+//! 0006](../../docs/adr/0006-the-handle-carries-its-inputs.md)) — and a store
+//! that could not be read is a miss like any other, so a cache failure never
+//! becomes a failure here ([ADR
+//! 0003](../../docs/adr/0003-the-cache-seam-is-a-store.md)). Both were the
+//! only behaviour this tool had before a store was in front of it, which is
+//! why the tests that held them hold them unchanged.
 //!
 //! # Where the descriptions come from
 //!
@@ -50,14 +60,13 @@
 //! *replace* those rather than add to them, which is how four tools that
 //! take one handle end up describing it four ways.
 
-use futures::try_join;
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{self, DiffFileEntry, DiffStatus, FileType};
+use crate::engine::{DiffFileEntry, DiffStatus, FileType};
 use crate::error::Failure;
 use crate::handle::DiffHandle;
 use crate::page::{self, Page};
-use crate::tools::{Ctx, Tool};
+use crate::tools::{diff_package_versions, Ctx, Tool};
 
 /// The tool.
 pub struct GetDiffTree;
@@ -352,23 +361,7 @@ impl Tool for GetDiffTree {
     type Output = Page<Node>;
 
     async fn call(args: Args, ctx: &Ctx) -> Result<Page<Node>, Failure> {
-        let inputs = args.handle.inputs();
-
-        // Concurrently, the way the tool that minted this handle fetched
-        // them: the two downloads do not depend on each other.
-        let (from_files, to_files) = try_join!(
-            ctx.archive()
-                .fetch(inputs.registry, &inputs.package, &inputs.from_version),
-            ctx.archive()
-                .fetch(inputs.registry, &inputs.package, &inputs.to_version),
-        )?;
-
-        let tree = engine::build_diff_tree(
-            &from_files,
-            &to_files,
-            inputs.similarity_threshold,
-            inputs.ignore_whitespace,
-        );
+        let tree = diff_package_versions::compare(&args.handle, ctx).await?.tree;
 
         // A trailing slash a caller may or may not have written, gone
         // either way, so `src/` and `src` are one directory. Nothing left

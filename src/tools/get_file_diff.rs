@@ -48,15 +48,34 @@
 //! order. The suite holds it over six files rather than reading it off the
 //! implementation.
 //!
-//! # Where a cached result would come in
+//! # Where a cached result comes in, and the half that is still missing
 //!
-//! Nowhere yet, and that is worth saying because it looks like an omission.
-//! The DiffStore is here — #21 built it, and `diff_package_versions` already
-//! writes every changed file's patch into an entry — but nothing reads one
-//! back, so every call re-extracts both archives from the inputs the handle
-//! carries. That is precisely the path a cache miss takes, so the "render it
-//! on demand" half of #15 is the only half there is here, and the tests that
-//! hold it will go on holding it once a store is in front of it.
+//! The walk from a handle to a comparison is
+//! [`super::diff_package_versions::compare`]'s (#83), and it looks in the
+//! store before it looks at a registry. What that is worth here is not what
+//! it is worth next door, and the difference is worth stating in full
+//! because it reads like a win from the outside.
+//!
+//! A remembered comparison still costs this tool both downloads. An entry is
+//! a tree and its patches and never the archives they were worked out from,
+//! so one that came out of the store arrives without the contents this
+//! renders from and
+//! [`super::diff_package_versions::Comparison::files`] fetches them anyway.
+//! On a warm cache what this tool gains is one lookup it cannot yet spend.
+//!
+//! On a cold one it pays more than it used to, and on purpose. Before #83
+//! this tool fetched two archives and rendered one file, and built no tree at
+//! all; the walk it now calls builds the tree, renders every changed file's
+//! patch and writes the entry, and this tool reads neither half of what it
+//! wrote. What that buys is not its own: a first call here leaves the
+//! comparison behind for the three paths that *can* be served out of one,
+//! rather than downloading two archives and forgetting them.
+//!
+//! What would answer this tool instead is the entry's own patches — every
+//! changed file's, rendered when the entry was written, and read by nothing
+//! in `src/` yet. #84 is where they are read and this is the call site it
+//! changes. Until then the "render it on demand" half of #15 is still the
+//! only half there is here, and the tests that hold it hold it unchanged.
 //!
 //! # Where the descriptions come from
 //!
@@ -75,7 +94,6 @@
 
 use std::borrow::Cow;
 
-use futures::try_join;
 use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 use serde::{de, Deserialize, Deserializer, Serialize};
 
@@ -84,7 +102,7 @@ use crate::engine::{self, FileType};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
 use crate::page::{self, Excerpt};
-use crate::tools::{Ctx, Tool};
+use crate::tools::{diff_package_versions, Ctx, Tool};
 
 /// The tool.
 pub struct GetFileDiff;
@@ -448,18 +466,17 @@ impl Tool for GetFileDiff {
     type Output = Patch;
 
     async fn call(args: Args, ctx: &Ctx) -> Result<Patch, Failure> {
-        let inputs = args.handle.inputs();
+        let files = diff_package_versions::compare(&args.handle, ctx)
+            .await?
+            .files(&args.handle, ctx)
+            .await?;
 
-        // Concurrently, the way the tool that minted this handle fetched
-        // them: the two downloads do not depend on each other.
-        let (from_files, to_files) = try_join!(
-            ctx.archive()
-                .fetch(inputs.registry, &inputs.package, &inputs.from_version),
-            ctx.archive()
-                .fetch(inputs.registry, &inputs.package, &inputs.to_version),
-        )?;
-
-        render(&from_files, &to_files, inputs, args.asked())
+        render(
+            &files.from_files,
+            &files.to_files,
+            args.handle.inputs(),
+            args.asked(),
+        )
     }
 }
 
@@ -494,10 +511,11 @@ impl Args {
 /// Everything this tool does once the archives are in hand, and public
 /// because there are two callers: this tool, and the
 /// `diffpack://diff/{handle}/file/{path}` resource (#16). That resource has
-/// already fetched both versions — it builds the comparison's tree to find
-/// where a renamed file was — so one that called the tool instead would
-/// download them a second time, which on a package of any size is the whole
-/// cost of the read paid twice.
+/// already asked for the comparison — it reads the tree to find where a
+/// renamed file was, and takes both versions' files off the same answer — so
+/// one that called the tool instead would ask for it twice and download both
+/// archives twice, which on a package of any size is the whole cost of the
+/// read paid twice.
 ///
 /// What is shared is the whole answer rather than a piece of it: the
 /// directory refusal, which of the engine's four cases this is, the trim and

@@ -196,7 +196,24 @@ _Avoid_: allowlist (unqualified), whitelist, origin, domain
 
 **Diff**:
 The comparison of one version of a package against another, in one direction.
-A→B is not B→A.
+A→B is not B→A. It is the thing itself and not a copy of it something is
+holding — that is a Comparison.
+_Avoid_: comparison (for the value a call holds), delta, changeset
+
+**Comparison**:
+One Diff in hand: its Tree, whether it was remembered or worked out, and both
+Versions' files where working it out is what put them there. It is what a
+Handle buys — `diff_package_versions::compare` takes one and answers with a
+Comparison, and all four paths that read a Diff go through it, so there is one
+walk from a Handle to a Tree rather than four ([ADR
+0016](docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md)). A remembered
+one has no files, because an Entry is a Tree and its Patches and never the
+archives those came from; asking for them anyway is two downloads and the
+Comparison says so rather than pretending. Distinct from an Entry, which is
+how a Comparison is remembered: an Entry is two Blobs in a store and a
+Comparison is what one invocation is holding, with or without an Entry behind
+it.
+_Avoid_: diff result, cached diff, comparison result, entry
 
 **Engine**:
 The `diffpack-engine` release this build computes with — the same code the
@@ -279,8 +296,12 @@ One cached Diff result: `meta.json` and `patches.json` under one diff_id,
 written together and evicted together. Half an Entry is not a cache hit, and
 a FileMap's entry is a file rather than one of these. An Entry written without
 its patches — because they were too big — is a whole Entry and says so, which
-is what distinguishes it from a comparison with nothing to patch.
-_Avoid_: record, object, blob, cached diff
+is what distinguishes it from a Diff with nothing to patch. It is what a
+Comparison is *remembered* as and not what one is: an Entry is two Blobs in a
+store, and it holds a Tree and its Patches and never the archives either was
+worked out from — which is why a Comparison served out of one arrives without
+both Versions' files.
+_Avoid_: record, object, blob, cached diff, comparison
 
 **Blob**:
 One file in the blob store: a pathname, a size in bytes, and the moment it

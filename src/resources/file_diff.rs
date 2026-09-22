@@ -38,11 +38,11 @@ use std::borrow::Cow;
 
 use rmcp::model::{CacheScope, ReadResourceResult, ResourceContents, ResourceTemplate};
 
+use crate::engine::DiffFileEntry;
 use crate::error::Failure;
 use crate::handle::DiffHandle;
-use crate::tools::get_diff_tree;
 use crate::tools::get_file_diff::{self, OneFile};
-use crate::tools::Ctx;
+use crate::tools::{diff_package_versions, get_diff_tree, Ctx};
 
 /// What stands between the handle and the path.
 const SEPARATOR: &str = "/file/";
@@ -100,15 +100,18 @@ pub async fn read(
     // out.
     let wanted = decoded(path)?;
 
-    let comparison = super::diff::compare(handle, ctx).await?;
+    let comparison = diff_package_versions::compare(handle, ctx).await?;
 
-    // Bound rather than written into the struct below, where it would be a
-    // temporary living exactly as long as the statement that reads it.
-    let moved = moved_from(&comparison, &wanted);
+    // Read off the tree before the files are asked for, because asking for
+    // them takes the comparison. Bound rather than written into the struct
+    // below, where it would be a temporary living exactly as long as the
+    // statement that reads it.
+    let moved = moved_from(&comparison.tree, &wanted);
+    let files = comparison.files(handle, ctx).await?;
 
     let patch = get_file_diff::render(
-        &comparison.from_files,
-        &comparison.to_files,
+        &files.from_files,
+        &files.to_files,
         handle.inputs(),
         OneFile {
             path: &wanted,
@@ -239,8 +242,6 @@ fn malformed(segment: &str) -> Failure {
 /// A descent rather than a walk, which is `get_diff_tree`'s and not this
 /// module's: one step per directory rather than a scan of everything above
 /// the file.
-fn moved_from(comparison: &super::diff::Comparison, path: &str) -> Option<String> {
-    get_diff_tree::node_at(&comparison.tree, path)?
-        .old_path
-        .clone()
+fn moved_from(tree: &DiffFileEntry, path: &str) -> Option<String> {
+    get_diff_tree::node_at(tree, path)?.old_path.clone()
 }
