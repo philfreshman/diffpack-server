@@ -107,7 +107,7 @@ pub async fn read(
     // below, where it would be a temporary living exactly as long as the
     // statement that reads it.
     let moved = moved_from(&comparison.tree, &wanted);
-    let files = comparison.files(handle, ctx).await?;
+    let files = comparison.files(ctx).await?;
 
     let patch = get_file_diff::render(
         &files.from_files,

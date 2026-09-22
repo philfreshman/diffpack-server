@@ -414,6 +414,20 @@ pub struct Comparison {
     /// Whether this was remembered rather than worked out now.
     pub cached: bool,
 
+    /// Which comparison this is.
+    ///
+    /// Carried rather than asked for again. [`Comparison::files`] fetches two
+    /// archives when this one was remembered without them, and a caller that
+    /// handed it a different handle from the one [`compare`] was given would
+    /// be served another comparison's versions with nothing in the answer
+    /// saying they do not belong to this tree. Both call sites pass the same
+    /// handle today; nothing made them, and the type is where that is settled
+    /// rather than in a sentence asking them to keep doing it.
+    ///
+    /// It is the handle and not the key, because what a fetch needs is the
+    /// inputs a handle carries (ADR 0006) and a key is the hash of them.
+    handle: DiffHandle,
+
     /// Both versions' files, where this call is the one that downloaded them.
     ///
     /// Private, because absent here is not the question a caller is asking —
@@ -435,10 +449,14 @@ impl Comparison {
     /// is the whole of what the store holds: what would answer one file's
     /// diff without them is the entry's own patches, rendered when the entry
     /// was written and read by nothing yet (#84).
-    pub async fn files(self, handle: &DiffHandle, ctx: &Ctx) -> Result<Versions, Failure> {
-        match self.files {
+    ///
+    /// The handle is this comparison's own and not a caller's. See the field.
+    pub async fn files(self, ctx: &Ctx) -> Result<Versions, Failure> {
+        let Self { handle, files, .. } = self;
+
+        match files {
             Some(files) => Ok(files),
-            None => versions(handle, ctx).await,
+            None => versions(&handle, ctx).await,
         }
     }
 }
@@ -514,6 +532,7 @@ pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failu
         return Ok(Comparison {
             tree: entry.tree,
             cached: true,
+            handle: handle.clone(),
             files: None,
         });
     }
@@ -548,6 +567,7 @@ pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failu
     Ok(Comparison {
         tree,
         cached: false,
+        handle: handle.clone(),
         files: Some(files),
     })
 }
