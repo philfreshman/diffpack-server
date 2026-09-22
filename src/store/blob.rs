@@ -15,11 +15,6 @@
 //! rather than from documentation — the API is private and has no other
 //! specification.
 
-// `list` and `delete` are written for #22's eviction and nothing calls them
-// yet. The client is private to this module by design — ADR 0003 — so there
-// is no public surface for the compiler to count as a use either.
-#![allow(dead_code)]
-
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -249,11 +244,13 @@ impl Api {
     }
 
     /// The same client, waiting `backoff` before its second attempt.
+    #[cfg(test)]
     pub(crate) fn with_backoff(self, backoff: Duration) -> Self {
         Self { backoff, ..self }
     }
 
     /// The same client, giving one attempt `timeout` and no more.
+    #[cfg(test)]
     pub(crate) fn with_timeout(self, timeout: Duration) -> Self {
         Self { timeout, ..self }
     }

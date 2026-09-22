@@ -145,6 +145,16 @@ pub struct DiffStore {
     /// What a sweep leaves this store at. See [`CACHE_TARGET_BYTES`].
     target_bytes: u64,
 
+    /// The prefix this store's entries live under, and the one a sweep
+    /// counts against the budget.
+    ///
+    /// This build's schema in anything that ships — a bump moves the
+    /// entries, and a sweep still reading the old prefix would be counting a
+    /// store it no longer writes to. It is a field so that the one test that
+    /// runs a sweep against the real blob store can scope itself to a prefix
+    /// of its own, rather than evicting the cache this project serves from.
+    prefix: String,
+
     /// Where this store says it could not answer.
     ///
     /// Its own rather than the one a [`Ctx`](crate::tools::Ctx) carries,
@@ -199,6 +209,7 @@ impl DiffStore {
             entry_cap: ENTRY_CAP,
             max_bytes: CACHE_MAX_BYTES,
             target_bytes: CACHE_TARGET_BYTES,
+            prefix: format!("diffs/v{}/", crate::cache_key::SCHEMA),
             log: Sink::default(),
         }
     }
@@ -243,6 +254,18 @@ impl DiffStore {
         Self {
             max_bytes: max,
             target_bytes: target,
+            ..self
+        }
+    }
+
+    /// The same store, counting and sweeping the entries under `prefix`.
+    ///
+    /// Only the networked test below, which needs a corner of the real store
+    /// that is not the one this project caches into.
+    #[cfg(test)]
+    fn sweeping(self, prefix: impl Into<String>) -> Self {
+        Self {
+            prefix: prefix.into(),
             ..self
         }
     }
@@ -408,11 +431,11 @@ impl DiffStore {
     /// Every blob this store holds, or nothing if it could not say.
     async fn listed(&self) -> Option<Vec<blob::Blob>> {
         match &self.source {
-            Source::Live(api) => match api.list(&prefix()).await {
+            Source::Live(api) => match api.list(&self.prefix).await {
                 Ok(blobs) => Some(blobs),
                 Err(_) => self.gave_up(LISTING),
             },
-            Source::Memory(memory) => Some(memory.list(&prefix()).await),
+            Source::Memory(memory) => Some(memory.list(&self.prefix).await),
             Source::Unavailable(why) => self.gave_up(why),
         }
     }
@@ -561,15 +584,6 @@ fn oldest_first(blobs: &[blob::Blob]) -> Vec<Listed<'_>> {
     });
 
     entries
-}
-
-/// Where every cached entry lives.
-///
-/// Built from the schema number rather than written out, because bumping it
-/// moves the entries and a sweep that kept looking at the old prefix would
-/// count a store it no longer writes to.
-fn prefix() -> String {
-    format!("diffs/v{}/", crate::cache_key::SCHEMA)
 }
 
 /// Run `work` after the answer has gone, and let the runtime drain it.
@@ -817,5 +831,138 @@ impl Memory {
             let uploaded_at = format!("{:020}", UPLOADS.fetch_add(1, Ordering::Relaxed));
             blobs.insert(pathname.to_owned(), Held { bytes, uploaded_at });
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Against the real store
+// ---------------------------------------------------------------------------
+//
+// The only test in this file, and it is here rather than in `tests/` for the
+// reason `src/store/blob.rs`'s are: a sweep runs against the Blob client, and
+// ADR 0003 keeps that client private to this module, so there is nowhere
+// outside it to write this from.
+//
+// Everything the sweep decides is proven at the wire in `tests/store.rs`,
+// against a store that keeps its blobs in this process. What that cannot
+// state is the half the store owns: that a real `uploadedAt` sorts the way
+// this code assumes, that a real `size` is the number the budget is counted
+// in, and that a blob a delete took is gone from a later listing. Those are
+// facts about somebody else's service, and only it can settle them.
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    /// A sweep against the real store leaves what it said it would leave.
+    ///
+    /// Seeded past the cap and summed from a real listing afterwards, which
+    /// is the criterion's own wording: a total the sweep worked out cannot
+    /// disagree with the sweep.
+    ///
+    /// Scoped to a prefix of its own. Eviction is oldest-first, so a sweep
+    /// run at the prefix this project caches under would take the oldest
+    /// real entries first and this test would be a cache flush with an
+    /// assertion on the end of it.
+    ///
+    /// The listing is polled rather than read once. A delete takes up to a
+    /// minute to propagate, which is one of the two reasons the budget keeps
+    /// a gap under its ceiling at all — so a test that read the listing once
+    /// would be asserting against the very staleness the design is built to
+    /// tolerate.
+    #[tokio::test]
+    #[ignore = "networked: writes to this project's Vercel Blob store"]
+    async fn a_sweep_against_the_real_store_leaves_the_newest_entry() {
+        let credentials = blob::Credentials::from_env()
+            .expect("VERCEL_OIDC_TOKEN with BLOB_STORE_ID, or BLOB_READ_WRITE_TOKEN");
+        let seeding = blob::Api::live(credentials);
+
+        // Unique per run: two runs at once must not sweep each other, and a
+        // write refuses to overwrite.
+        let run = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("the clock is set after 1970")
+            .as_nanos();
+
+        // Three segments before the filename, as `diffs/v1/{diff_id}/` has,
+        // because the third is what an entry is grouped by.
+        let prefix = format!("tests/sweep-{run}/");
+
+        // Four entries, oldest first, each the two blobs an entry is.
+        let half = vec![b'x'; 4096];
+        let entry = 2 * half.len() as u64;
+        let named: Vec<String> = (0..4).map(|n| format!("{n:064}")).collect();
+
+        for id in &named {
+            for file in ["meta.json", "patches.json"] {
+                seeding
+                    .put(&format!("{prefix}{id}/{file}"), half.clone())
+                    .await
+                    .expect("the store takes a write at a pathname of ours");
+            }
+        }
+
+        // Room for three, swept down to two, and a fifth arriving: the three
+        // oldest have to go.
+        let credentials = blob::Credentials::from_env().expect("the same two variables");
+        let store = DiffStore::over(Source::Live(blob::Api::live(credentials)))
+            .budgeting(3 * entry, 2 * entry)
+            .sweeping(&prefix);
+
+        assert!(
+            store.admitting(entry).await,
+            "an entry this size fits inside the budget once the sweep has run"
+        );
+
+        let reading =
+            blob::Api::live(blob::Credentials::from_env().expect("the same two variables"));
+        let survived = settled(&reading, &prefix, entry).await;
+
+        assert_eq!(
+            survived,
+            vec![
+                format!("{prefix}{}/meta.json", named[3]),
+                format!("{prefix}{}/patches.json", named[3])
+            ],
+            "the newest entry, both of its blobs, and nothing else"
+        );
+
+        for id in &named {
+            let paths = [
+                format!("{prefix}{id}/meta.json"),
+                format!("{prefix}{id}/patches.json"),
+            ];
+            let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+            let _ = reading.delete(&paths).await;
+        }
+    }
+
+    /// The pathnames under `prefix`, once the listing weighs `expected`.
+    ///
+    /// A delete is eventually consistent here, so the listing catches up
+    /// rather than being right immediately. Two minutes is twice the window
+    /// the service documents.
+    async fn settled(api: &blob::Api, prefix: &str, expected: u64) -> Vec<String> {
+        let mut listed = Vec::new();
+
+        for _ in 0..120 {
+            let blobs = api
+                .list(prefix)
+                .await
+                .expect("the store lists a prefix of ours");
+
+            let held: u64 = blobs.iter().map(|blob| blob.size).sum();
+            listed = blobs.iter().map(|blob| blob.pathname.clone()).collect();
+            listed.sort();
+
+            if held == expected {
+                return listed;
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        panic!("the listing should weigh {expected} bytes by now, it holds {listed:?}");
     }
 }

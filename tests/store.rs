@@ -852,6 +852,57 @@ async fn the_answer_does_not_wait_for_the_sweep() {
     );
 }
 
+/// A comparison the sweep took is recomputed and served, not refused.
+///
+/// This criterion was written when a bare `diff_id` was the only handle an
+/// agent had, and it said an evicted entry produced an error telling the
+/// agent to recompute. #44 changed what it means: the handle carries the
+/// inputs beside the `diff_id`, so a reading tool whose entry is gone works
+/// the comparison out again. Eviction stopped being something an agent sees.
+///
+/// Read before the sweep and after it, and the two answers compared, because
+/// "served" is the claim and "the same thing" is what makes it worth
+/// serving. It is true today because `get_diff_tree` recomputes on every
+/// call; it has to stay true when that tool looks in the store first, and
+/// this is where it would stop being true without anything else noticing.
+#[tokio::test]
+async fn a_comparison_the_sweep_took_is_recomputed_and_served() {
+    let store = Memory::new();
+
+    let diffed = call(|| store.store(), at(0)).await;
+    lands(&store, &diffed).await;
+    let entry = held(&store);
+
+    let handle = diffed["structuredContent"]["handle"].clone();
+    let walk = json!({ "handle": handle });
+    let warm = call_tool(|| store.store(), "get_diff_tree", walk.clone()).await;
+
+    // Room for one entry, so admitting the next takes this one.
+    let budgeted = || store.store().budgeting(entry + entry / 16, entry);
+    let next = call(budgeted, at(1)).await;
+    lands(&store, &next).await;
+
+    assert!(
+        !store.written().contains(&meta_of(&diffed)),
+        "the sweep should have taken the first comparison: {:?}",
+        store.written()
+    );
+
+    let evicted = call_tool(budgeted, "get_diff_tree", walk).await;
+
+    assert_eq!(
+        evicted["isError"],
+        json!(false),
+        "a handle whose entry was swept is a comparison this server can make \
+         again, got {evicted}"
+    );
+    assert_eq!(
+        evicted, warm,
+        "and it is the same walk it was before the sweep, so eviction costs \
+         a recomputation and nothing an agent can see"
+    );
+}
+
 /// The arguments of the `step`th comparison a budget test writes.
 ///
 /// One comparison at many thresholds rather than many comparisons: the
@@ -1003,14 +1054,24 @@ fn but_for_cached(mut answer: Value) -> Value {
 /// suite asks a question whose answer is a protocol error, so one arriving
 /// means the call was built wrongly.
 async fn call(store: impl Fn() -> DiffStore, arguments: Value) -> Value {
+    call_tool(store, TOOL, arguments).await
+}
+
+/// Call `tool` with `arguments`, against a server whose cache `store` builds.
+///
+/// The cache is written by one tool and read back by the three that take a
+/// handle, so a suite that could only drive the writer could not state what
+/// happens to a reader when an entry is swept.
+async fn call_tool(store: impl Fn() -> DiffStore, tool: &str, arguments: Value) -> Value {
     let answer = post(
         store,
+        tool,
         json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
             "params": {
-                "name": TOOL,
+                "name": tool,
                 "arguments": arguments,
                 "_meta": {
                     "io.modelcontextprotocol/protocolVersion": CURRENT,
@@ -1034,7 +1095,7 @@ async fn call(store: impl Fn() -> DiffStore, arguments: Value) -> Value {
 /// factory — and then has its store replaced, which is the same `..self`
 /// spread `Ctx::logging_to` is and not a builder that fills the seams it was
 /// not given. Every other seam is still the fixture set's.
-async fn post(store: impl Fn() -> DiffStore, body: Value) -> Value {
+async fn post(store: impl Fn() -> DiffStore, tool: &str, body: Value) -> Value {
     let request = Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -1043,7 +1104,7 @@ async fn post(store: impl Fn() -> DiffStore, body: Value) -> Value {
         .header("content-type", "application/json")
         .header("mcp-protocol-version", CURRENT)
         .header("mcp-method", "tools/call")
-        .header("mcp-name", TOOL)
+        .header("mcp-name", tool)
         .body(Body::from(body.to_string()))
         .expect("the request should build");
 
