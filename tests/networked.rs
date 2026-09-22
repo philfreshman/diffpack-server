@@ -19,7 +19,7 @@ use std::time::Instant;
 use diffpack_server::archive::Archive;
 use diffpack_server::catalogue::Catalogue;
 use diffpack_server::error::Failure;
-use diffpack_server::registry::{Registry, Version};
+use diffpack_server::registry::{Registry, Version, Versions};
 use diffpack_server::search::Search;
 
 /// npm, end to end: the URL `resolve_archive_url` answers with is a URL npm
@@ -139,6 +139,13 @@ async fn a_version_no_registry_has_is_a_failure_a_model_can_act_on() {
 // be a test that fails the next time somebody publishes. What is asserted is
 // what stays true: a release this server has seen is still listed, and the
 // newest is recent.
+//
+// Each one also asserts that the registry still names a current version, for
+// the reason this file exists: each registry spells that pointer its own way
+// — `dist-tags.latest`, `default_version`, an `isDefault` flag — and a
+// fixture cannot notice one of them being renamed or dropped. The value is
+// not asserted, for the same reason the newest version is not: it moves when
+// somebody publishes. That it is there at all is what a fixture cannot say.
 
 /// npm, end to end. A scoped name is the case worth a real request: it is one
 /// escaped path segment, and getting that wrong is a 404 for every `@types/*`
@@ -156,6 +163,7 @@ async fn npm_lists_the_versions_this_server_asks_it_for() {
         "a release this server has an archive fixture for is still published"
     );
     assert_recent(&versions.all, "2025");
+    assert_points_somewhere(&versions, "`dist-tags.latest`");
 }
 
 /// crates.io, end to end, from the API host rather than the static one.
@@ -172,6 +180,7 @@ async fn crates_io_lists_the_versions_this_server_asks_it_for() {
         "a release this server has an archive fixture for is still published"
     );
     assert_recent(&versions.all, "2025");
+    assert_points_somewhere(&versions, "`crate.default_version`");
 }
 
 /// PyPI through deps.dev, and the one that would have shipped wrong.
@@ -204,6 +213,7 @@ async fn pypi_versions_are_ordered_by_date_rather_than_by_the_sources_order() {
          reversing the document produces"
     );
     assert_recent(&versions.all, "2024");
+    assert_points_somewhere(&versions, "an `isDefault` version");
 }
 
 /// A package no registry has, asked for by name rather than by version.
@@ -229,6 +239,33 @@ async fn a_package_no_registry_has_is_a_failure_a_model_can_act_on() {
 /// The year is a floor rather than a value: a package that has had a release
 /// since then is one whose source is still answering with real dates, and it
 /// does not go stale the way a version number would.
+/// The registry still names a current version, and it is one of the versions
+/// it listed.
+///
+/// `field` is where this server reads it, so a failure says which document to
+/// look at rather than only that something moved. The version itself is not
+/// asserted: it changes when somebody publishes, which is what makes it a
+/// thing #61 checked by hand rather than a constant in this file.
+///
+/// That it is *in the list* is asserted here and nowhere in the fixture
+/// suite, because it is a fact about the live document rather than about this
+/// server: a registry may point past its own list — npm does, after an
+/// unpublish — and this server passes that through on purpose. On a package
+/// as ordinary as these three, the two disagreeing means the field moved.
+fn assert_points_somewhere(versions: &Versions, field: &str) {
+    let current = versions
+        .current
+        .as_deref()
+        .unwrap_or_else(|| panic!("the registry names a current version in {field}"));
+
+    assert!(
+        versions.all.iter().any(|v| v.version == current),
+        "{field} says {current} is current and the same document does not \
+         list it, which on a package this ordinary means the field this \
+         server reads has moved"
+    );
+}
+
 fn assert_recent(versions: &[Version], year: &str) {
     let newest = versions.first().expect("a published package has versions");
     let published_at = newest
