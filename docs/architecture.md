@@ -18,19 +18,19 @@ src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
 src/catalogue/      versions(registry, package) -> Versions, newest first
 src/search/         hits(registry, query, limit) -> Vec<Hit>, best match first
-src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, cap
+src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, caps
 src/store/          DiffStore: get(&DiffKey) / put(entry), inside a budget
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
 src/error.rs        Failure, the two channels, redaction
-src/log.rs          one line per tool call: what, how long, how it ended
+src/log.rs          one line per tool call: what, cache outcome, how long, how it ended
 src/engine.rs       the only importer of diffpack_engine
 src/health.rs       the /health body
 ```
 
-An issue number means the module arrives with that issue. Everything without
-one is in the tree today.
+An issue number means the module arrives with that issue. Every module in the
+map is in the tree today.
 
 ## The import rules
 
@@ -133,16 +133,19 @@ list of tools, and the generic call path where arguments are validated and
 means the seams it may reach: `Archive`, `Catalogue`, `Search` and
 `DiffStore`, while `registry`, `page` and `handle` are named directly because
 a pure module has nothing to hand over. Beside them it carries what the
-dispatch needs and a handler never touches — the log's `Sink`, and the `Spent`
-that the phases of one call add up in. `Ctx::archive()`, `Ctx::catalogue()`
-and `Ctx::search()` hand back their seam with that stopwatch already on it, so
-a wait on a registry cannot go uncounted and a handler's call is unchanged.
+dispatch needs and a handler never touches — the log's `Sink`, the `Spent`
+that the phases of one call add up in, and the `Lookup` that says what the
+call found in the store. `Ctx::archive()`, `Ctx::catalogue()` and
+`Ctx::search()` hand back their seam with that stopwatch already on it, so a
+wait on a registry cannot go uncounted and a handler's call is unchanged.
 
-`Ctx::store()` does not, and the difference is a decision rather than an
-omission: the `fetch` phase answers how long a call waited on a *registry*,
-and a cache read counted towards it would report the call that avoided two
-downloads as the one that waited longest. It hands back a clone of the handle
-rather than a borrow, because writing an entry outlives the call that produced
+`Ctx::store()` hands back a wrapper of its own rather than that one, and the
+difference is a decision rather than an omission: the `fetch` phase answers
+how long a call waited on a *registry*, and a cache read counted towards it
+would report the call that avoided two downloads as the one that waited
+longest. What that wrapper records instead is whether the lookup found its
+entry. It clones the handle where an entry is written rather than handing a
+caller one to clone, because writing an entry outlives the call that produced
 it — the work goes to `waitUntil` and the context is gone by the time it runs.
 
 `Ctx::storing_in` is the third `..self` spread beside `Ctx::logging_to`, and
@@ -341,6 +344,26 @@ somebody else's servers — which hosts may be reached, where a redirect may
 lead, what a `404` means to the seam that asked — and none of them is a rule
 about this project's own blob store, which is why `src/store/` has a client of
 its own and this module has no verb but `GET`.
+
+Two caps rather than one, and they are halves of the same guard. The size cap
+is the most one body may weigh; `DOWNLOADS_AT_ONCE` is the most bodies this
+process may be reading at all, taken as a slot before a request is sent and
+held until the body is in memory. What a package name in a tool argument can
+cost is the product of the two, so a cap on either alone bounds nothing: four
+128 MB bodies are the worst this function holds at once, and without the
+second number the worst is however many requests the platform sent this
+instance.
+
+The slots are the process's and not a request's, which is the point — a `Ctx`
+is built per request, so a cap held there would bound one caller against
+itself and leave an instance serving several of them unbounded. Four because
+two is the floor: `diff_package_versions` asks for both versions through one
+`try_join!`, and a cap below two would serialise the only call this server
+makes concurrently. A fifth body waits rather than being refused, and the
+wait is bounded by what a slot's holder can do with one — `UPSTREAM_TIMEOUT`
+covers the request and the body alike, so no slot is held past it however
+badly a registry behaves. The wait counts towards the call's fetch phase,
+because it is the same thing to whoever is waiting for the answer.
 
 A caller passes the refusals that differ between seams rather than this module
 guessing them, and the one header that differs. A `404` is a missing *version*
@@ -585,6 +608,17 @@ uncounted. One wrapper over both, because the phase answers how long the call
 waited rather than which document it waited for — and a tool that only reads
 a catalogue reporting no wait at all is the reading an operator would take
 for "this one never left the process".
+
+What the call found in the store is recorded the same way and by the same
+kind of wrapper: `Ctx::store()` hands back the seam with the lookup already
+written down, so `ctx.store().get(..)` is the call it always was and there is
+no way left to answer out of the cache without the line saying so. It is not
+`Timed`, because a cache read is deliberately outside the fetch phase — that
+phase answers how long the call waited on a *registry*, and a lookup counted
+towards it would report the call that avoided two downloads as the one that
+waited longest. What the line carries instead is `hit` or `miss`, and nothing
+at all for a tool that never asked: the two are different populations under
+one tool name, and a percentile over both describes neither.
 
 A `Note` is the other thing this module writes, and it is deliberately not a
 `Line`. A seam that must not fail a call has nowhere else to put a failure: a

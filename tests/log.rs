@@ -17,6 +17,7 @@ use axum::http::Request;
 use diffpack_server::log::{Capture, Spent};
 use diffpack_server::mcp::Diffpack;
 use diffpack_server::router;
+use diffpack_server::store::Memory;
 use diffpack_server::tools::Ctx;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -405,6 +406,72 @@ fn a_request_that_fetched_nothing_reports_no_fetch() {
 }
 
 // ---------------------------------------------------------------------------
+// What the call cost
+// ---------------------------------------------------------------------------
+
+/// Whether the answer was remembered or worked out, said in the line.
+///
+/// Two populations arrive under one tool name: a hit is a lookup, and a miss
+/// is two archive downloads and a tree built out of them. A percentile taken
+/// over a column that cannot tell them apart describes neither, which is what
+/// #26 asks this field for.
+#[tokio::test]
+async fn the_line_says_whether_the_answer_was_remembered() {
+    let log = Capture::new();
+    let store = Memory::new();
+
+    call_storing(&log, &store, "diff_package_versions", diffable()).await;
+    settles(&store).await;
+    call_storing(&log, &store, "diff_package_versions", diffable()).await;
+
+    let lines = log.lines();
+    assert_eq!(
+        lines.len(),
+        2,
+        "two calls should leave two lines, got {lines:?}"
+    );
+
+    assert_eq!(
+        parse(&lines[0])["cache"],
+        "miss",
+        "the first call had nothing to read back: {}",
+        lines[0]
+    );
+    assert_eq!(
+        parse(&lines[1])["cache"],
+        "hit",
+        "the second asked for exactly what the first stored: {}",
+        lines[1]
+    );
+}
+
+/// A tool with no store to ask says nothing about one, rather than reporting
+/// the miss it never made.
+///
+/// A guard rather than a cycle of its own, and the same one the fetch phase
+/// has: most calls this server answers are tools that never look at the
+/// cache, and a hit rate taken over a column where those rows read `miss`
+/// describes neither the cache nor the tools.
+#[tokio::test]
+async fn a_tool_that_never_asks_the_store_says_nothing_about_it() {
+    let log = Capture::new();
+
+    call(
+        &log,
+        "list_package_files",
+        json!({ "registry": "npm", "package": "@types/node", "version": "20.1.0" }),
+    )
+    .await;
+
+    let line = one(&log);
+    assert_eq!(
+        line.get("cache"),
+        None,
+        "this tool has no cache to hit or miss: {line}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // What never reaches a line
 // ---------------------------------------------------------------------------
 
@@ -518,8 +585,25 @@ fn parse(line: &str) -> Value {
 
 /// Call `tool` through the endpoint, with `log` behind every handler.
 async fn call(log: &Capture, tool: &str, arguments: Value) -> Value {
+    calling(log, None, tool, arguments).await
+}
+
+/// The same, with `store` behind every call rather than a fresh one each
+/// time.
+///
+/// What the cache outcome needs and nothing else here does: a hit is a second
+/// call finding what a first one wrote, so the two have to be asking the same
+/// store. `Ctx::fixture` gives each request one of its own, which is the
+/// right default for a suite where every other test drives a single call.
+async fn call_storing(log: &Capture, store: &Memory, tool: &str, arguments: Value) -> Value {
+    calling(log, Some(store.clone()), tool, arguments).await
+}
+
+/// Call `tool` through the endpoint, storing into `store` where one is given.
+async fn calling(log: &Capture, store: Option<Memory>, tool: &str, arguments: Value) -> Value {
     post(
         log,
+        store,
         json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -530,6 +614,40 @@ async fn call(log: &Capture, tool: &str, arguments: Value) -> Value {
     .await
 }
 
+/// The pair the cache outcome is driven with.
+///
+/// The same one `tests/store.rs` uses: one file of each status, and small
+/// enough that neither the per-file cap nor the per-entry one is anywhere
+/// near it, so a second call is a hit rather than half an entry.
+fn diffable() -> Value {
+    json!({
+        "registry": "npm",
+        "package": "diffable",
+        "from_version": "1.0.0",
+        "to_version": "2.0.0",
+    })
+}
+
+/// Wait until the entry a call wrote is in `store`.
+///
+/// The write is handed to the runtime's `waitUntil` and the answer goes
+/// first, so a second call made immediately would be racing it — and a test
+/// that asserted a hit would pass or fail depending on which won. Both blobs,
+/// because half an entry is a miss.
+async fn settles(store: &Memory) {
+    for _ in 0..400 {
+        if store.written().len() >= 2 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    panic!(
+        "the entry should be written by now, the store holds {:?}",
+        store.written()
+    );
+}
+
 /// The per-request `_meta` a `2026-07-28` client attaches. See `tests/mcp.rs`.
 fn meta() -> Value {
     json!({
@@ -538,13 +656,13 @@ fn meta() -> Value {
     })
 }
 
-/// A real request through the real router, with the fixture archives and the
-/// capturing sink behind it.
+/// A real request through the real router, with the fixture archives, the
+/// capturing sink and `store` where one is given behind it.
 ///
 /// Both arrive through the service factory `router_with` takes, which is the
 /// path production takes to build a [`Ctx`] — a test that reached around it
 /// would be testing wiring that does not exist.
-async fn post(log: &Capture, body: Value) -> Value {
+async fn post(log: &Capture, store: Option<Memory>, body: Value) -> Value {
     let method = body["method"].as_str().expect("a call names a method");
 
     let mut request = Request::builder()
@@ -567,9 +685,15 @@ async fn post(log: &Capture, body: Value) -> Value {
     let log = log.clone();
     let router = router::router_with(
         move || {
-            Ok(Diffpack::with_ctx(
-                Ctx::fixture(FIXTURES).logging_to(log.sink()),
-            ))
+            // A fresh context per request, the way the factory in
+            // `src/router.rs` builds one: the phases a line reports are that
+            // call's, and a context cloned across two calls would put the
+            // first one's fetches in the second one's window.
+            let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
+            Ok(Diffpack::with_ctx(match &store {
+                Some(memory) => ctx.storing_in(memory.store()),
+                None => ctx,
+            }))
         },
         Vec::new(),
     );

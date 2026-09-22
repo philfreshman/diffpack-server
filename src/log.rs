@@ -42,6 +42,11 @@ pub struct Line {
     /// How the call ended.
     pub result: &'static str,
 
+    /// Whether the answer was remembered or worked out, where the call asked
+    /// the store at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache: Option<&'static str>,
+
     /// How long it took, by phase.
     pub ms: Phases,
 }
@@ -57,6 +62,7 @@ impl Line {
             tool: shorten(tool),
             args: Arguments::default(),
             result: "ok",
+            cache: None,
             ms: Phases::default(),
         }
     }
@@ -76,6 +82,20 @@ impl Line {
                 total: millis(total),
                 fetch: spent.fetch().map(millis),
             },
+            ..self
+        }
+    }
+
+    /// The same line, saying whether the answer was remembered.
+    ///
+    /// The same fact `diff_package_versions` answers with, for the other
+    /// reader: an agent is told so that it knows asking twice is cheap, and
+    /// an operator is told so that a percentile over one tool's calls is not
+    /// taken over two populations at once — a hit is a lookup, and a miss is
+    /// two archive downloads and a tree built out of them.
+    pub fn cached(self, lookup: &Lookup) -> Self {
+        Self {
+            cache: lookup.outcome(),
             ..self
         }
     }
@@ -243,6 +263,49 @@ impl Spent {
 impl Default for Spent {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// What a call's lookup in the store found, while the call is still running.
+///
+/// The cache's half of what [`Spent`] does for time, and shared the same way:
+/// written where the lookup happens rather than reported by the handler that
+/// made it, so that a tool cannot answer out of the store without the line
+/// saying so.
+///
+/// One value per call and not one per lookup. A call asks once today, and a
+/// call that asked twice was either served or not — so a hit wins over a
+/// miss, which is the reading an operator makes of a call that avoided the
+/// downloads.
+#[derive(Debug, Default)]
+pub struct Lookup {
+    /// Whether the store was asked at all, which is what tells a tool that
+    /// reads no cache from one that read a cold one.
+    asked: AtomicBool,
+
+    /// Whether any lookup found its entry.
+    found: AtomicBool,
+}
+
+impl Lookup {
+    /// Record a lookup that found an entry, or did not.
+    pub fn looked(&self, found: bool) {
+        self.asked.store(true, Ordering::Relaxed);
+        self.found.fetch_or(found, Ordering::Relaxed);
+    }
+
+    /// `hit`, `miss`, or nothing where the call never asked the store.
+    ///
+    /// Absent rather than `miss` for the reason [`Phases::fetch`] is absent
+    /// rather than zero: a hit rate taken over a column where most rows are
+    /// tools with no cache to hit describes neither the cache nor the tools.
+    pub fn outcome(&self) -> Option<&'static str> {
+        self.asked
+            .load(Ordering::Relaxed)
+            .then(|| match self.found.load(Ordering::Relaxed) {
+                true => "hit",
+                false => "miss",
+            })
     }
 }
 

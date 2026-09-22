@@ -149,6 +149,16 @@ answer on the way out, and from the Budget, which is cumulative and the blob
 store's.
 _Avoid_: size limit, max size, quota, ceiling
 
+**Download slot**:
+One of the four permissions to be reading a body into this process at all.
+The Size cap's other half, and neither bounds this function's memory without
+it: one says how large a body may be, this says how many may be arriving, and
+what a package name in a tool argument can cost is the product. It belongs to
+the process rather than to a request, because a request is not what an
+instance serves several of. A call that finds none free waits rather than
+being refused.
+_Avoid_: permit, semaphore, concurrency limit, connection
+
 **Allowed host**:
 A host this server may send an outbound request to. The set is derived from
 the URLs the registry module builds, so it grows when a Registry is added and
@@ -416,6 +426,16 @@ how much of the call went on waiting, which is the question it is next to the
 total to answer; how much Registry work the call caused is a different
 question and nothing asks it yet.
 _Avoid_: span, step, stage, timing
+
+**Cache outcome**:
+Whether a call's answer was read back from the DiffStore or worked out, as a
+Line carries it: `hit` or `miss`. Absent from the Line of a tool that never
+asks the store, for the reason a Phase that did not happen is absent — a hit
+rate taken over a column where most rows are tools with no cache to hit
+describes neither the cache nor the tools. The word `hit` here is the store's
+and not a Search's Hit, which is a package; the field name is what tells them
+apart, so neither is ever written bare.
+_Avoid_: cached (that is the field an agent reads), warm, cache status
 
 **Note**:
 What a seam leaves behind when it could not do its job and that is not a

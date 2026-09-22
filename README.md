@@ -56,7 +56,8 @@ src/registry.rs  What a registry is: npm, crates.io, PyPI, described once.
 src/archive/     A version's files: fetch, size cap, extract, one interface.
 src/catalogue/   What a package has released, most recently published first.
 src/search/      A name half remembered, matched against what a registry has.
-src/fetch.rs     Every request to a registry: user agent, timeout, redirects.
+src/fetch.rs     Every request to a registry: user agent, timeout, redirects,
+                 and how many bodies this process reads at once.
 src/store/       Diff results kept between calls, over Vercel Blob.
 src/error.rs     Which channel a failure reaches the client on.
 src/log.rs       One structured line per tool call, which is what an incident
