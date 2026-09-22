@@ -120,16 +120,19 @@ list of tools, and the generic call path where arguments are validated and
 means the seams it may reach: `Archive`, `Catalogue`, `Search` and
 `DiffStore`, while `registry`, `page` and `handle` are named directly because
 a pure module has nothing to hand over. Beside them it carries what the
-dispatch needs and a handler never touches — the log's `Sink`, and the `Spent`
-that the phases of one call add up in. `Ctx::archive()`, `Ctx::catalogue()`
-and `Ctx::search()` hand back their seam with that stopwatch already on it, so
-a wait on a registry cannot go uncounted and a handler's call is unchanged.
+dispatch needs and a handler never touches — the log's `Sink`, the `Spent`
+that the phases of one call add up in, and the `Lookup` that says what the
+call found in the store. `Ctx::archive()`, `Ctx::catalogue()` and
+`Ctx::search()` hand back their seam with that stopwatch already on it, so a
+wait on a registry cannot go uncounted and a handler's call is unchanged.
 
-`Ctx::store()` does not, and the difference is a decision rather than an
-omission: the `fetch` phase answers how long a call waited on a *registry*,
-and a cache read counted towards it would report the call that avoided two
-downloads as the one that waited longest. It hands back a clone of the handle
-rather than a borrow, because writing an entry outlives the call that produced
+`Ctx::store()` hands back a wrapper of its own rather than that one, and the
+difference is a decision rather than an omission: the `fetch` phase answers
+how long a call waited on a *registry*, and a cache read counted towards it
+would report the call that avoided two downloads as the one that waited
+longest. What that wrapper records instead is whether the lookup found its
+entry. It clones the handle where an entry is written rather than handing a
+caller one to clone, because writing an entry outlives the call that produced
 it — the work goes to `waitUntil` and the context is gone by the time it runs.
 
 `Ctx::storing_in` is the third `..self` spread beside `Ctx::logging_to`, and
