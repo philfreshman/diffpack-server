@@ -225,13 +225,21 @@ impl DiffStore {
         }
 
         // Read rather than asked about, because the answer to "is it there"
-        // and the answer to "what is in it" are the same request. An entry
-        // whose patches are not there is a real entry and not half of one —
-        // that is what an entry over the size cap is — so a missing
-        // `patches.json` is no patches rather than no hit.
+        // and the answer to "what is in it" are the same request.
+        //
+        // A `patches.json` that is not there is one of two things, and the
+        // flag above is what tells them apart. An entry over the size cap
+        // says its patches were dropped and is whole without them. An entry
+        // that says nothing is half of one — a `meta.json` whose partner
+        // never arrived, which is what a write that failed between the two
+        // leaves behind — and answering with it would serve a comparison
+        // whose every patch is silently missing. So it is a miss, and the
+        // miss is what repairs it: recomputing heads past the `meta.json`
+        // that is there and writes the blob that is not.
         let patches = match self.read(&key.patches_path()).await {
-            Some(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
-            None => BTreeMap::new(),
+            Some(bytes) => serde_json::from_slice(&bytes).ok()?,
+            None if meta.patches_omitted => BTreeMap::new(),
+            None => return None,
         };
 
         Some(Entry {
@@ -501,6 +509,19 @@ impl Memory {
     /// pinning where they are and not what they say.
     pub fn blob(&self, pathname: &str) -> Option<Vec<u8>> {
         self.read(pathname)
+    }
+
+    /// Lose the blob at `pathname`.
+    ///
+    /// What a write that failed after its partner landed leaves behind, and
+    /// the one state nothing else here can put a store in: the two blobs of
+    /// an entry are written one after the other, so a `meta.json` whose
+    /// `patches.json` never arrived is a real outcome and not an invented
+    /// one.
+    pub fn forget(&self, pathname: &str) {
+        if let Ok(mut blobs) = self.blobs.lock() {
+            blobs.remove(pathname);
+        }
     }
 
     /// Every pathname this store holds, in the order the store keeps them.

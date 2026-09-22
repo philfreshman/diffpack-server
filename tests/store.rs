@@ -266,6 +266,65 @@ async fn an_entry_over_the_cap_keeps_its_tree_and_says_its_patches_are_gone() {
     );
 }
 
+/// An entry whose patches were dropped for their size is still an entry.
+///
+/// The cap takes the patches and keeps the tree, and the tree is what every
+/// answer is walked out of — so the comparison is remembered and the second
+/// call is a warm one. A `meta.json` with no `patches.json` beside it is a
+/// whole entry when it says so, which is the whole of what `patches_omitted`
+/// is for.
+#[tokio::test]
+async fn an_entry_that_dropped_its_patches_is_still_remembered() {
+    let store = Memory::new();
+    let capped = || store.store().capping_entries_at(100);
+
+    call(capped, diffable()).await;
+    settles(&store, 1).await;
+
+    let second = call(capped, diffable()).await;
+
+    assert_eq!(
+        second["structuredContent"]["cached"],
+        json!(true),
+        "an entry that says its patches were dropped is a hit, got {second}"
+    );
+}
+
+/// Half an entry is not a cache hit.
+///
+/// The two blobs are written one after the other, so a write that fails
+/// between them leaves a `meta.json` whose `patches.json` never arrived. That
+/// is not the absence above: this one says nothing was dropped, so answering
+/// with it would serve a comparison whose every patch is silently missing —
+/// which is what #15 reads as a changed file with nothing to render.
+///
+/// So it is a miss, and the miss is what repairs it: the recomputed entry
+/// heads past the `meta.json` that is there and writes the blob that is not.
+#[tokio::test]
+async fn half_an_entry_is_not_a_cache_hit() {
+    let store = Memory::new();
+
+    let answer = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+
+    store.forget(&patches_of(&answer));
+
+    let again = call(|| store.store(), diffable()).await;
+    assert_eq!(
+        again["structuredContent"]["cached"],
+        json!(false),
+        "an entry missing a half nothing said was dropped is not a hit, got \
+         {again}"
+    );
+
+    settles(&store, 2).await;
+    assert_eq!(
+        store.written(),
+        vec![meta_of(&answer), patches_of(&answer)],
+        "and the miss writes back the blob that was gone"
+    );
+}
+
 /// A store that is not there costs a recomputed diff and nothing else.
 ///
 /// This is the rule the whole module is arranged around: the cache holds a
