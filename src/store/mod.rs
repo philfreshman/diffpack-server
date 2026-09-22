@@ -409,11 +409,12 @@ impl DiffStore {
     /// that cannot be written whole is not written at all rather than left
     /// as a `meta.json` whose patches never arrived.
     async fn writing(&self, entry: Entry) {
+        let rendered = entry.patches.len();
+
         // Measured on the patch's own text rather than on the JSON it
         // becomes. The two differ by a couple of dozen bytes of punctuation
         // and escaping against a quarter of a megabyte, and the text is the
         // number a reader of this can check against a file.
-        let rendered = entry.patches.len();
         let patches: BTreeMap<String, Patch> = entry
             .patches
             .into_iter()
