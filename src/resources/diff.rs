@@ -8,14 +8,24 @@
 //! recomputes instead, which is the same reason `get_diff_tree` takes one.
 //! See [ADR 0006](../../docs/adr/0006-the-handle-carries-its-inputs.md).
 //!
-//! # Why nothing here walks a tree
+//! # Why nothing here walks a tree, or builds one
 //!
-//! The totals are `diff_package_versions`'s and the nodes are
-//! `get_diff_tree`'s, and both are *called* rather than reproduced. A
-//! resource that walked the tree itself would be a second answer to a
-//! question a tool already answers, and the two would disagree the first time
-//! either changed — the drift ADR 0013 records for the patch renderer, in a
-//! second place. What this module owns is the document the three go into.
+//! The totals are `diff_package_versions`'s, the nodes are `get_diff_tree`'s
+//! and the comparison itself is `diff_package_versions::compare`'s. All three
+//! are *called* rather than reproduced. A resource that walked the tree
+//! itself would be a second answer to a question a tool already answers, and
+//! the two would disagree the first time either changed — the drift ADR 0013
+//! records for the patch renderer, in a second place. What this module owns
+//! is the document the three go into.
+//!
+//! The third of them used to be here: this module held the fetch, the
+//! extraction and the tree build, and three tools had a copy of the same
+//! walk. That was a resource computing what a tool computes, which is what
+//! [ADR 0014](../../docs/adr/0014-a-resource-is-a-projection-of-the-tools.md)
+//! forbids and what [ADR
+//! 0016](../../docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md) moved
+//! to the tool that owns it. Neither `futures` nor `crate::engine` is
+//! imported here any more, which is the short version of the same sentence.
 
 use rmcp::model::{CacheScope, ReadResourceResult, Resource, ResourceContents, ResourceTemplate};
 use serde::Serialize;

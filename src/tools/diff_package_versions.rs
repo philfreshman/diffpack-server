@@ -18,6 +18,29 @@
 //! The bare `diff_id` is returned beside it anyway, because #27 looks a
 //! result up by exactly that string.
 //!
+//! # What else is here, and why it is here
+//!
+//! [`compare`] — the walk from a handle to a compared tree, with the store on
+//! this side of it. It is the whole of what a diff costs, and the three paths
+//! that *read* a comparison back go through it: [`super::get_diff_tree`],
+//! [`super::get_file_diff`] and the two resources under
+//! [`crate::resources::diff`]. It was written four times before #83, which is
+//! four places for the pair of downloads, the rename threshold and the
+//! whitespace rule to stop agreeing.
+//!
+//! Here rather than in a module of its own because this is the tool that
+//! *computes* a comparison — the other three read back what it worked out —
+//! and a shared module named after neither is the alternative [ADR
+//! 0014](../../docs/adr/0014-a-resource-is-a-projection-of-the-tools.md)
+//! rejected for the walks it lists. Leaving it in `src/resources/` and having
+//! three tools call into a resource is the alternative [ADR
+//! 0016](../../docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md)
+//! rejects, and the one 0014's own sentence forbids. [`compare`] is therefore
+//! the fifth export of a tool module with a caller outside it, which 0014
+//! names as the direction to watch: the thing it warns about is a resource
+//! doing its own work through a tool's front door, and this is work leaving a
+//! resource rather than arriving at one.
+//!
 //! # Where the descriptions come from
 //!
 //! Every doc comment on a field of [`Args`] and [`Output`] becomes a
