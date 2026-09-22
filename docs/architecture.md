@@ -48,7 +48,7 @@ build otherwise. See [ADR 0007](adr/0007-one-importer-of-the-engine.md).
 
 **A tool or a resource module goes through the seams, not around them.** A
 module under `src/tools/` or `src/resources/` may import the standard library,
-the MCP and serialisation crates, `futures` for the cases where one of them
+the MCP and serialisation crates, `futures` for the one file under there that
 waits on two fetches at once, and `crate::{archive, cache_key, catalogue,
 engine, error, handle, page, registry, resources, search, store, tools}`. It
 may not name an HTTP client or the blob store: those are `fetch`'s and
