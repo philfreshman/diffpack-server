@@ -18,7 +18,7 @@
 //! second place. What this module owns is the document the three go into.
 
 use futures::try_join;
-use rmcp::model::{CacheScope, ReadResourceResult, ResourceContents, ResourceTemplate};
+use rmcp::model::{CacheScope, ReadResourceResult, Resource, ResourceContents, ResourceTemplate};
 use serde::Serialize;
 
 use crate::archive::FileMap;
@@ -46,6 +46,26 @@ pub fn uri_template() -> String {
 pub fn handle_in(uri: &str) -> Option<&str> {
     let handle = uri.strip_prefix(PREFIX)?;
     (!handle.is_empty() && !handle.contains('/')).then_some(handle)
+}
+
+/// The URI one comparison is read at.
+pub fn uri_of(handle: &DiffHandle) -> String {
+    format!("{PREFIX}{}", handle.encode())
+}
+
+/// A link to the comparison `handle` names, for a tool's answer to carry.
+///
+/// Built here rather than by the tool that mints the handle, so that the URI
+/// format stays this module's: a tool that spelled it out would be the second
+/// place `diffpack://diff/` is written, and the first to be wrong when it
+/// moves.
+pub fn link(handle: &DiffHandle) -> Resource {
+    Resource::new(uri_of(handle), "diff")
+        .with_title("This comparison")
+        .with_description(
+            "The whole of the comparison this call made: what was compared, how much              changed, and every file and directory in it. Reading it is the same answer              `get_diff_tree` pages through.",
+        )
+        .with_mime_type("application/json")
 }
 
 /// The template, as `resources/templates/list` shows it.
@@ -124,7 +144,7 @@ pub async fn read(handle: &DiffHandle, ctx: &Ctx) -> Result<ReadResourceResult, 
         serde_json::to_string_pretty(&document).map_err(|_| Failure::Internal {
             doing: "answering a resource read",
         })?,
-        format!("{PREFIX}{}", handle.encode()),
+        uri_of(handle),
     )
     .with_mime_type("application/json");
 

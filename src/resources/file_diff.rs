@@ -103,11 +103,7 @@ pub async fn read(
 
     let contents = ResourceContents::text(
         patch.excerpt.text,
-        format!(
-            "{}{}{SEPARATOR}{path}",
-            super::diff::PREFIX,
-            handle.encode()
-        ),
+        format!("{}{SEPARATOR}{path}", super::diff::uri_of(handle)),
     )
     .with_mime_type(if patch.is_diff {
         "text/x-diff"

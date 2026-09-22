@@ -548,6 +548,78 @@ async fn a_directory_is_refused_rather_than_called_absent() {
 }
 
 // ---------------------------------------------------------------------------
+// Getting from a tool to a resource
+// ---------------------------------------------------------------------------
+
+/// The tool that makes a comparison links to the one that reads it back.
+///
+/// Without this a client has the handle and has to know how to build a URI
+/// out of it, which is the client writing our URI format. With it, following
+/// the answer is one hop and the format stays ours.
+#[tokio::test]
+async fn the_summary_links_to_the_comparison_it_made() {
+    let summary = call(
+        SUMMARY,
+        json!({
+            "registry": "npm",
+            "package": "diffable",
+            "from_version": "1.0.0",
+            "to_version": "2.0.0",
+        }),
+    )
+    .await;
+
+    let handle = summary["structuredContent"]["handle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the summary carries a handle, got {summary}"));
+
+    let link = summary["content"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a result carries content, got {summary}"))
+        .iter()
+        .find(|block| block["type"] == "resource_link")
+        .unwrap_or_else(|| panic!("the summary should carry a resource link, got {summary}"));
+
+    assert_eq!(
+        link["uri"],
+        json!(diff_uri(handle)),
+        "the link should point at the comparison this call made, got {link}"
+    );
+
+    // And it resolves, which is the half a URI in a string cannot promise.
+    let document = read(link["uri"].as_str().expect("a link carries a URI")).await;
+    assert_eq!(
+        document["totals"], summary["structuredContent"]["totals"],
+        "following the link should reach the comparison the summary described"
+    );
+}
+
+/// The tools that only read one back do not.
+///
+/// A link is worth carrying where it is the way on from an answer. On a page
+/// of a tree or one file's patch it would be the same URI repeated on every
+/// call, pointing back at the thing the caller already has a handle for.
+#[tokio::test]
+async fn a_tool_that_reads_a_comparison_back_carries_no_link() {
+    for tool in [TREE, FILE_DIFF] {
+        let arguments = match tool {
+            FILE_DIFF => json!({ "handle": diffable(), "path": "src/index.js" }),
+            _ => json!({ "handle": diffable() }),
+        };
+        let result = call(tool, arguments).await;
+
+        assert!(
+            !result["content"]
+                .as_array()
+                .unwrap_or(&Vec::new())
+                .iter()
+                .any(|block| block["type"] == "resource_link"),
+            "`{tool}` is already holding the handle it would link by, got {result}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // What a client may hold on to
 // ---------------------------------------------------------------------------
 

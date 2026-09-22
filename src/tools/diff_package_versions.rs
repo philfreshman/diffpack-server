@@ -36,6 +36,7 @@
 use std::collections::BTreeMap;
 
 use futures::try_join;
+use rmcp::model::Resource;
 use serde::{Deserialize, Serialize};
 
 use crate::archive::FileMap;
@@ -43,6 +44,7 @@ use crate::engine::{self, DiffFileEntry, DiffStatus, FileType, Patch};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
 use crate::registry::Registry;
+use crate::resources;
 use crate::store::Entry;
 use crate::tools::{Ctx, Tool};
 
@@ -392,6 +394,18 @@ impl Tool for DiffPackageVersions {
 
     type Args = Args;
     type Output = Output;
+
+    /// The one tool here whose answer names something a client has no URI
+    /// for yet. Every other tool either takes the handle this one minted or
+    /// is not about a comparison at all, so a link on those would be the same
+    /// URI repeated back at a caller already holding it.
+    ///
+    /// The URI is `crate::resources::diff`'s to spell. A tool that built one
+    /// out of a handle would be the second place the format is written, and
+    /// the first to be wrong when it moves.
+    fn links(output: &Output) -> Vec<Resource> {
+        vec![resources::diff::link(&output.handle)]
+    }
 
     async fn call(args: Args, ctx: &Ctx) -> Result<Output, Failure> {
         let handle = DiffHandle::mint(Inputs {

@@ -97,9 +97,16 @@ readonly ALLOWED_ROOTS=(crate self super std core alloc futures rmcp serde serde
 # where the client itself lives, is not here and must not be — it is the
 # seams' and a tool that reached it would be the thing this script is for.
 #
+# `resources` joined with #16, for the same kind of reason: a tool whose answer
+# links to a resource has to name that resource's URI, and the alternative was
+# the tool spelling `diffpack://diff/` out — a second copy of a format, in the
+# file least likely to be looked at when it moves. The two directories name
+# each other, which Rust allows and which is what it looks like when a tool's
+# answer points at a resource and a resource is built out of a tool's walk.
+#
 # Nothing checks that this list and the paragraph in `docs/architecture.md`
 # agree, so changing one means changing the other by hand.
-readonly ALLOWED_MODULES=(archive cache_key catalogue engine error handle page registry search store tools)
+readonly ALLOWED_MODULES=(archive cache_key catalogue engine error handle page registry resources search store tools)
 
 # Names that mean a seam was crossed, wherever they appear.
 readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN|BLOB_STORE_ID|VERCEL_OIDC_TOKEN'
