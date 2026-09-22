@@ -15,7 +15,7 @@ src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
 src/tools/          one module per tool: definition and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
-src/catalogue/      versions(registry, package) -> Vec<Version>, newest first
+src/catalogue/      versions(registry, package) -> Versions, newest first
 src/search/         hits(registry, query, limit) -> Vec<Hit>, best match first
 src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, cap
 src/store/          DiffStore: get(&DiffKey) / put(entry)                   #21 #22
@@ -208,9 +208,10 @@ the registry chooses.
 
 ### `src/catalogue/` — what a package has released
 
-`versions(registry, package) -> Vec<Version>`, newest first. The second seam
-over the network, beside `archive` and shaped the same way: one interface, two
-adapters, and a fixture set keyed by the URL `registry` builds.
+`versions(registry, package) -> Versions`: every version newest first, and
+the one the registry itself points at. The second seam over the network,
+beside `archive` and shaped the same way: one interface, two adapters, and a
+fixture set keyed by the URL `registry` builds.
 
 It is not part of `archive` because that seam *is* a `FileMap` ([ADR
 0001](adr/0001-the-archive-seam-is-a-filemap.md)) and this is none of it: a
@@ -226,6 +227,15 @@ this crate sees it, because its versions are a JSON object and `serde_json`'s
 map here is a `BTreeMap`. A version the source gives no date for — one of
 `requests`' 161, thirty-seven of `numpy`'s — is still a published version, so
 it is listed last rather than dropped.
+
+**The current version is the other answer in the same document**, and it is
+read out of it rather than picked from the list: npm's `dist-tags.latest`,
+crates.io's `default_version`, the `isDefault` deps.dev puts on a PyPI
+version. Which of crates.io's four pointers, and why, is argued in
+`src/registry.rs` beside the read. It is not checked against the versions
+listed with it — a registry pointing past its own list is answered as the
+registry spelled it, because the alternative reports no current release for a
+package that has one.
 
 Nothing here is cached. The 256 MB budget is for diff results, and a package's
 version list goes stale the moment somebody publishes.
