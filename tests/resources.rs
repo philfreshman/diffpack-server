@@ -13,6 +13,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use diffpack_server::handle::{DiffHandle, Inputs};
 use diffpack_server::mcp::Diffpack;
+use diffpack_server::page;
 use diffpack_server::registry::{ArchiveSource, Registry, VERSION_RULE};
 use diffpack_server::router;
 use diffpack_server::tools::Ctx;
@@ -438,6 +439,88 @@ async fn a_segment_that_is_not_a_handle_is_invalid_params() {
     }
 }
 
+/// A comparison too large to serve whole says so, and says what to call.
+///
+/// The half of this resource that cannot be a shorter answer. A tree is whole
+/// or it is misleading — an agent handed the first nine tenths of one has no
+/// way to know the file it is looking for is in the last tenth — so what does
+/// not fit comes back as what is *known* about it, with the tool that pages
+/// through the same tree named beside it.
+///
+/// The fixture is not taken on trust. The answer carries the size it came to
+/// and the ceiling it was measured against, and both are checked here against
+/// the number the crate exports — so a fixture that stopped being big enough
+/// fails rather than passing with nothing to prove.
+#[tokio::test]
+async fn a_comparison_too_large_to_serve_whole_says_so_and_says_what_to_call() {
+    let handle = enormous();
+    let document = read(&diff_uri(&handle)).await;
+    let too_large = &document["tree_too_large"];
+
+    assert!(
+        too_large.is_object(),
+        "this comparison does not fit in one answer, so it should say so: got {}",
+        &document["totals"]
+    );
+    assert!(
+        too_large["bytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > page::PAYLOAD_CEILING as u64),
+        "the fixture should be over the ceiling, or this test proves nothing: got {too_large}"
+    );
+    assert_eq!(
+        too_large["ceiling"],
+        json!(page::PAYLOAD_CEILING),
+        "the answer should name the number it was measured against, got {too_large}"
+    );
+
+    // The part the criterion is actually about: not a short tree that reads
+    // as a whole one.
+    assert!(
+        document["tree"].is_null(),
+        "a tree that did not fit is absent, never cut and presented as complete"
+    );
+
+    // And what a reader has instead is enough to go on: what was compared,
+    // how much changed, and the call that walks the rest.
+    assert_eq!(document["inputs"]["package"], json!("enormous"));
+    assert!(
+        document["totals"]["unchanged"]
+            .as_u64()
+            .is_some_and(|files| files > 0),
+        "the totals are what fits and should still be here, got {document}"
+    );
+    assert_eq!(too_large["read_with"], json!(TREE), "got {too_large}");
+
+    // The pointer resolves. A tool named in a sentence is a sentence; one
+    // that answers is a way forward.
+    let page = call(TREE, json!({ "handle": handle, "limit": 1 })).await;
+    assert!(
+        page["structuredContent"]["total"]
+            .as_u64()
+            .is_some_and(|nodes| nodes > 0),
+        "the tool the answer points at should walk this comparison, got {page}"
+    );
+}
+
+/// A comparison that does fit carries no such statement.
+///
+/// The other half, and worth its own test: a document that always said the
+/// tree was too large would pass the one above.
+#[tokio::test]
+async fn a_comparison_that_fits_is_served_whole() {
+    let document = read(&diff_uri(&diffable())).await;
+
+    assert!(
+        document["tree_too_large"].is_null(),
+        "this comparison fits, so nothing should be standing in for it: got {document}"
+    );
+    assert!(
+        document["tree"].is_array(),
+        "a comparison that fits is served whole, got {document}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // One file of one comparison
 // ---------------------------------------------------------------------------
@@ -681,6 +764,15 @@ fn file_uri(handle: &str, path: &str) -> String {
 /// The tool that renders one file of a comparison.
 const FILE_DIFF: &str = "get_file_diff";
 
+/// A handle for the comparison that does not fit in one answer.
+///
+/// A version against itself: what makes this package large is the number and
+/// the length of its paths, and a second copy of it checked in would be a
+/// second copy of exactly that.
+fn enormous() -> String {
+    handle("enormous", "1.0.0", "1.0.0")
+}
+
 /// A handle for `diffable` 1.0.0 → 2.0.0, minted rather than fetched.
 ///
 /// The tool that mints one is called where the *agreement* between the two is
@@ -688,11 +780,17 @@ const FILE_DIFF: &str = "get_file_diff";
 /// minting it here is no calls rather than one. The same helper
 /// `tests/get_diff_tree.rs` has, for the same reason.
 fn diffable() -> String {
+    handle("diffable", "1.0.0", "2.0.0")
+}
+
+/// A handle for one npm comparison, at the defaults `diff_package_versions`
+/// would have used.
+fn handle(package: &str, from: &str, to: &str) -> String {
     DiffHandle::mint(Inputs {
         registry: Registry::Npm,
-        package: "diffable".to_owned(),
-        from_version: "1.0.0".to_owned(),
-        to_version: "2.0.0".to_owned(),
+        package: package.to_owned(),
+        from_version: from.to_owned(),
+        to_version: to.to_owned(),
         similarity_threshold: 0.75,
         ignore_whitespace: false,
     })

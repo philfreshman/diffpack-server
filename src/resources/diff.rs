@@ -25,8 +25,9 @@ use crate::archive::FileMap;
 use crate::engine::{self, DiffFileEntry};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
+use crate::page;
 use crate::tools::get_diff_tree::{self, Node};
-use crate::tools::{diff_package_versions, Ctx};
+use crate::tools::{diff_package_versions, Ctx, Tool};
 
 /// Everything before the handle. The template below is built from it, so
 /// there is one spelling of this prefix and the matcher and the template
@@ -130,23 +131,38 @@ pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failu
     })
 }
 
-/// One comparison, whole.
+/// One comparison, whole — or, when it does not fit, everything known about
+/// it and where to read the rest.
 pub async fn read(handle: &DiffHandle, ctx: &Ctx) -> Result<ReadResourceResult, Failure> {
     let tree = compare(handle, ctx).await?.tree;
+    let totals = diff_package_versions::totals(&tree);
 
-    let document = Document {
+    let whole = write(&Document {
         inputs: handle.inputs(),
-        totals: diff_package_versions::totals(&tree),
-        tree: get_diff_tree::nodes(&tree),
+        totals: &totals,
+        tree: Some(get_diff_tree::nodes(&tree)),
+        tree_too_large: None,
+    })?;
+
+    // Measured after it is built rather than guessed at from a node count,
+    // for the reason `page` measures a page the same way: the difference
+    // between a guess and the answer is a package whose paths are long, and
+    // this is exactly such a package.
+    let text = if page::fits(&whole) {
+        whole
+    } else {
+        write(&Document {
+            inputs: handle.inputs(),
+            totals: &totals,
+            // Absent, not cut. A tree is whole or it is misleading: the first
+            // nine tenths of one reads exactly like all of it, and an agent
+            // looking for a file in the last tenth is told it is not there.
+            tree: None,
+            tree_too_large: Some(TooLarge::at(whole.len())),
+        })?
     };
 
-    let contents = ResourceContents::text(
-        serde_json::to_string_pretty(&document).map_err(|_| Failure::Internal {
-            doing: "answering a resource read",
-        })?,
-        uri_of(handle),
-    )
-    .with_mime_type("application/json");
+    let contents = ResourceContents::text(text, uri_of(handle)).with_mime_type("application/json");
 
     Ok(ReadResourceResult::new(vec![contents])
         .with_ttl_ms(TTL_MS)
@@ -154,6 +170,11 @@ pub async fn read(handle: &DiffHandle, ctx: &Ctx) -> Result<ReadResourceResult, 
 }
 
 /// What a reader is handed.
+///
+/// Exactly one of `tree` and `tree_too_large` is there. Both are skipped when
+/// absent rather than written as `null`, so a reader that finds no `tree` and
+/// no statement about one has been handed something this module did not
+/// build.
 #[derive(Serialize)]
 struct Document<'d> {
     /// What was compared. A URI carries an opaque handle and a document read
@@ -161,10 +182,71 @@ struct Document<'d> {
     /// for, so without this the totals are a comparison of something.
     inputs: &'d Inputs,
 
-    /// How much changed, in files and in lines.
-    totals: diff_package_versions::Totals,
+    /// How much changed, in files and in lines. Always here — it is a handful
+    /// of numbers however large the comparison is, and it is most of what a
+    /// reader wanted.
+    totals: &'d diff_package_versions::Totals,
 
     /// Every file and directory in the comparison, in the order
     /// `get_diff_tree` walks them.
-    tree: Vec<Node>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tree: Option<Vec<Node>>,
+
+    /// Why the tree is not here, when it is not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tree_too_large: Option<TooLarge>,
+}
+
+/// What stands in for a tree that does not fit in one answer.
+///
+/// A statement about the tree rather than a piece of it: how big it came to,
+/// the ceiling it was measured against, and the tool that walks the same tree
+/// a page at a time. The numbers are here as well as the sentence because a
+/// reader that has to parse prose to learn it got less than everything will
+/// eventually not parse it.
+#[derive(Serialize)]
+struct TooLarge {
+    /// How many bytes this comparison came to with its tree in it.
+    bytes: usize,
+
+    /// The most one answer can carry.
+    ceiling: usize,
+
+    /// The tool that walks the same tree, a page at a time.
+    read_with: &'static str,
+
+    /// The same thing in a sentence, for a reader that has only this
+    /// document.
+    note: String,
+}
+
+impl TooLarge {
+    fn at(bytes: usize) -> Self {
+        Self {
+            bytes,
+            ceiling: page::PAYLOAD_CEILING,
+            read_with: TREE_TOOL,
+            note: format!(
+                "This comparison's tree is {bytes} bytes and one answer carries at most \
+                 {}, so it is not in this document — none of it, rather than as much as \
+                 fits, because part of a tree reads exactly like all of one. Call \
+                 `{TREE_TOOL}` with the same handle to walk it a page at a time; the \
+                 totals above are the whole comparison's either way.",
+                page::PAYLOAD_CEILING,
+            ),
+        }
+    }
+}
+
+/// The tool that pages through what this document could not carry.
+///
+/// Its own name, taken from the tool rather than written out, so that a tool
+/// renamed is not a resource pointing at a call that does not exist.
+const TREE_TOOL: &str = <get_diff_tree::GetDiffTree as Tool>::NAME;
+
+/// `document`, as the text a read answers with.
+fn write(document: &Document<'_>) -> Result<String, Failure> {
+    serde_json::to_string_pretty(document).map_err(|_| Failure::Internal {
+        doing: "answering a resource read",
+    })
 }
