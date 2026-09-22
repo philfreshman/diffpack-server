@@ -429,13 +429,23 @@ cursor format and the "this is a page of N" shape, so that there is one
 implementation of staying under it rather than one per tool. See [ADR
 0005](adr/0005-one-module-owns-the-response-ceiling.md).
 
-Two interfaces, because a tool's answer comes in two shapes. `paginate` takes
-a sequence and returns a `Page`: the items that fit, the next cursor, and the
+Three interfaces, because an answer comes in three shapes. `paginate` takes a
+sequence and returns a `Page`: the items that fit, the next cursor, and the
 total. `truncate` takes one blob — a file's content, a file's diff — and
 returns an `Excerpt`: as much as fits, a marker saying it was cut, and the
 whole thing's real byte count. Truncation lives here rather than in a module
 of its own because what the two share is the subtle part and what they differ
 in is one field; ADR 0005 records the choice and its cost.
+
+`fits` is the third, and the one with no smaller version of itself. A
+sequence too long is paged and a blob too long is cut, because half a file is
+still a readable half; a comparison's tree is neither, since the first nine
+tenths of one reads exactly like all of it. So what does not fit is
+*replaced*, and `diffpack://diff/{handle}` writes the statement that stands in
+for it. `PAYLOAD_CEILING` is conservative there rather than exact — that
+number is a third of the platform's because a tool's answer crosses the wire
+twice and a resource read carries its document once — and the margin is left
+where it is deliberately.
 
 `limit`, `cursor` and `max_bytes` are types this module owns — `page::Limit`,
 `page::Cursor` and `page::MaxBytes` — rather than two numbers and a string a

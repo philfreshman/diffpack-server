@@ -530,8 +530,10 @@ pub fn truncate(text: &str, max_bytes: Option<MaxBytes>) -> Excerpt {
 /// How many bytes `text` costs once escaped into the field that carries it.
 ///
 /// The measurement [`truncate`] makes while it cuts, for the caller that only
-/// needs the answer. See [`fits`].
-pub fn encoded_len(text: &str) -> usize {
+/// needs the answer. Private because [`fits`] is that caller and there is no
+/// other: a `pub` with nothing on the other side of it is surface this crate
+/// would have to keep working.
+fn encoded_len(text: &str) -> usize {
     text.chars().map(encoded_cost).sum()
 }
 
