@@ -14,6 +14,17 @@
 //! have to decide what to do about it, and the only correct answer is the
 //! one this module gives, which is to recompute.
 //!
+//! The exception is the entry that says a patch is missing from it, and it
+//! is the flag's rather than a gap in the rule. An entry over `entry_cap` is
+//! whole without a `patches.json` at all, so a reader that recomputed on the
+//! absence that entry declares would never serve one — and since #84 an
+//! entry the per-patch cap trimmed says the same thing while having the
+//! blob. Losing *that* blob is served as a hit with no patches in it. What
+//! it costs is the patches that did fit, until the entry is evicted; what it
+//! cannot cost is an answer, because what reads patches back asks for one
+//! file's and renders that file when the entry has none. See
+//! [`DiffStore::get`].
+//!
 //! # A cache failure is never a diff failure
 //!
 //! Every way this module can fail ends in a miss. The store being down costs
