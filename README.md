@@ -5,10 +5,11 @@ An MCP server in Rust, deployed to Vercel, exposing what
 tools an agent can call: resolve a package on npm, crates.io or PyPI, fetch and
 extract its archives, and diff one version against another.
 
-**Status: transport, the tools that read a package, and the one that diffs
-two.** The crate builds, tests and deploys, and `/mcp` speaks Streamable
-HTTP: a client connects, negotiates a protocol revision, lists tools and
-calls one. There are six. `search_packages` finds a package from a name half
+**Status: transport, the tools that read a package, the one that diffs two,
+and the first that reads a diff back.** The crate builds, tests and deploys,
+and `/mcp` speaks Streamable HTTP: a client connects, negotiates a protocol
+revision, lists tools and calls one. There are seven. `search_packages` finds
+a package from a name half
 remembered, which is where an agent with no exact name to start from starts;
 `resolve_archive_url` answers from its arguments and fetches nothing;
 `list_package_versions` says what a package has released, most recently
@@ -16,9 +17,10 @@ published first; `list_package_files` downloads a published version and lists
 what is inside it, a page at a time; `get_file_content` returns one of those
 files, cut short if it is longer than a response can carry; and
 `diff_package_versions` compares two versions and answers with totals, a
-sample of the files that moved most, and a handle. The tools that read a diff
-back arrive with
-[#14](https://github.com/philfreshman/diffpack-server/issues/14) onward.
+sample of the files that moved most, and a handle; and `get_diff_tree` takes
+that handle and lists the comparison's files and directories a page at a
+time. The rest of the tools that read a diff back arrive with
+[#15](https://github.com/philfreshman/diffpack-server/issues/15) onward.
 `/health` is the other route and is what a monitor watches.
 
 Production serves whatever was last merged to `main`, so a branch merged into
