@@ -23,6 +23,8 @@
 //! happens when the store is not there — and that policy is the same code
 //! whichever adapter is underneath.
 
+use std::time::{Duration, Instant};
+
 use axum::body::Body;
 use axum::http::Request;
 use diffpack_server::log::Capture;
@@ -70,6 +72,7 @@ async fn the_same_diff_asked_for_twice_is_remembered_the_second_time() {
         json!(false),
         "nothing had been diffed yet, got {first}"
     );
+    settles(&store, 2).await;
 
     let second = call(|| store.store(), diffable()).await;
     assert_eq!(
@@ -96,6 +99,8 @@ async fn a_remembered_answer_is_the_one_that_was_computed() {
     let store = Memory::new();
 
     let computed = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+
     let remembered = call(|| store.store(), diffable()).await;
 
     assert_eq!(
@@ -121,6 +126,8 @@ async fn a_remembered_diff_is_two_blobs_under_the_name_the_comparison_has() {
     let store = Memory::new();
 
     let answer = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+
     let diff_id = answer["structuredContent"]["diff_id"]
         .as_str()
         .unwrap_or_else(|| panic!("the answer names the comparison, got {answer}"));
@@ -161,6 +168,7 @@ async fn every_changed_file_is_remembered_with_its_patch_already_rendered() {
     let store = Memory::new();
 
     let answer = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
 
     assert_eq!(
         blob(&store, &patches_of(&answer)),
@@ -205,6 +213,8 @@ async fn a_patch_over_the_cap_is_left_out_and_the_others_are_kept() {
     let store = Memory::new();
 
     let answer = call(|| store.store().capping_patches_at(100), diffable()).await;
+    settles(&store, 2).await;
+
     let patches = blob(&store, &patches_of(&answer));
 
     assert_eq!(
@@ -232,6 +242,7 @@ async fn an_entry_over_the_cap_keeps_its_tree_and_says_its_patches_are_gone() {
     let store = Memory::new();
 
     let answer = call(|| store.store().capping_entries_at(100), diffable()).await;
+    settles(&store, 1).await;
 
     assert_eq!(
         store.written(),
@@ -246,6 +257,7 @@ async fn an_entry_over_the_cap_keeps_its_tree_and_says_its_patches_are_gone() {
 
     let whole = Memory::new();
     let answer = call(|| whole.store(), diffable()).await;
+    settles(&whole, 2).await;
 
     assert_eq!(
         blob(&whole, &meta_of(&answer))["patches_omitted"],
@@ -309,6 +321,42 @@ async fn a_store_that_is_not_there_costs_a_recomputed_diff_and_nothing_else() {
     );
 }
 
+/// The answer does not wait for the entry to be written.
+///
+/// A caller is waiting on a diff, not on a cache: the store holds a copy of
+/// something this call has already worked out, so making the caller wait for
+/// it to be filed is spending their latency on somebody else's next call.
+///
+/// Measured rather than assumed, which is what the store being slow is for.
+/// A write that takes half a second and an answer that arrives in a fraction
+/// of it is the only way to tell "written afterwards" from "written quickly"
+/// — and the entry still lands, because a write nobody waits for is still a
+/// write.
+#[tokio::test]
+async fn the_answer_does_not_wait_for_the_entry_to_be_written() {
+    let store = Memory::new().stalling(Duration::from_millis(500));
+
+    let began = Instant::now();
+    let answer = call(|| store.store(), diffable()).await;
+    let answered = began.elapsed();
+
+    assert_eq!(
+        answer["isError"],
+        json!(false),
+        "the comparison is the answer, got {answer}"
+    );
+    assert!(
+        answered < Duration::from_millis(250),
+        "the answer waited {answered:?} on a store that takes 500ms a blob"
+    );
+
+    settles(&store, 2).await;
+    assert!(
+        began.elapsed() >= Duration::from_millis(500),
+        "a write this fast was not the slow store's, which would make the          measurement above meaningless"
+    );
+}
+
 /// A comparison is named by every argument, not by the package and the pair.
 ///
 /// Each variation below changes one field of the cache key and nothing else,
@@ -325,6 +373,8 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
     let store = Memory::new();
 
     let first = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+
     let named = |answer: &Value| answer["structuredContent"]["diff_id"].clone();
 
     // One field each, against the same baseline. `diffable` publishes two
@@ -341,6 +391,7 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
     ];
 
     let compared = 1 + variations.len();
+    let mut written = 1;
 
     for (field, change) in variations {
         let mut arguments = diffable();
@@ -349,6 +400,8 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
         }
 
         let answer = call(|| store.store(), arguments).await;
+        settles(&store, 2 * (written + 1)).await;
+        written += 1;
 
         assert_eq!(
             answer["structuredContent"]["cached"],
@@ -366,6 +419,26 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
         store.written().len(),
         2 * compared,
         "one entry per comparison, and an entry is two blobs: {:?}",
+        store.written()
+    );
+}
+
+/// Wait until `store` holds `blobs` of them, or give up.
+///
+/// A write happens after the answer, so "it was written" is something that
+/// becomes true rather than something that is true when the answer arrives.
+/// Polling is what a second caller does, and it is what the criterion means:
+/// the entry lands, and the call did not wait for it.
+async fn settles(store: &Memory, blobs: usize) {
+    for _ in 0..400 {
+        if store.written().len() >= blobs {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    panic!(
+        "the store should hold {blobs} blobs by now, it holds {:?}",
         store.written()
     );
 }

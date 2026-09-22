@@ -418,13 +418,11 @@ impl Tool for DiffPackageVersions {
                 // on the other side of this call it costs two downloads.
                 let patches = rendered(&tree, &from_files, &to_files, inputs.ignore_whitespace);
 
-                ctx.store()
-                    .put(Entry {
-                        key,
-                        tree: tree.clone(),
-                        patches,
-                    })
-                    .await;
+                ctx.store().put(Entry {
+                    key,
+                    tree: tree.clone(),
+                    patches,
+                });
 
                 (tree, false)
             }

@@ -20,6 +20,7 @@
 //! than waiting for the day it is live.
 
 use std::path::Path;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::Request;
@@ -245,8 +246,16 @@ async fn call(fixtures: &'static str, seam: &Seam) -> Value {
     let ctx = Ctx::fixture(fixtures);
 
     let mut answer = Value::Null;
-    for _ in 0..seam.calls {
+    for request in 0..seam.calls {
         answer = post(ctx.clone(), seam.tool, seam.arguments.clone()).await;
+
+        // A seam is allowed to leave work running after it has answered, and
+        // one does: the cache writes its entry after the response, which is
+        // the whole of what `waitUntil` is for. So a call that follows
+        // another gives it a moment rather than racing it.
+        if request + 1 < seam.calls {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
     answer
 }

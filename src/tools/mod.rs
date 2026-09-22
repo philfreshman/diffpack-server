@@ -304,8 +304,13 @@ impl Ctx {
     /// `fetch` phase answers how long a call waited on a *registry*, and a
     /// cache read that counted towards it would report the call that avoided
     /// two downloads as the one that waited longest.
-    pub fn store(&self) -> &DiffStore {
-        &self.store
+    ///
+    /// The handle is cloned out rather than borrowed, because writing an
+    /// entry outlives the call that produced it: the work goes to the
+    /// runtime's `waitUntil` and the context it came from is gone by the
+    /// time it runs.
+    pub fn store(&self) -> Arc<DiffStore> {
+        Arc::clone(&self.store)
     }
 
     /// A version's files.

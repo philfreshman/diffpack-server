@@ -26,7 +26,11 @@
 mod blob;
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use vercel_runtime::{AppState, LogContext};
 
 use serde::{Deserialize, Serialize};
 
@@ -236,12 +240,27 @@ impl DiffStore {
         })
     }
 
-    /// Remember `entry`.
+    /// Remember `entry`, after the answer has already gone.
     ///
-    /// Both blobs or neither: the patches are serialised before anything is
-    /// written, so an entry that cannot be written whole is not written at
-    /// all rather than left as a `meta.json` whose patches never arrived.
-    pub async fn put(&self, entry: Entry) {
+    /// Not `async`, and that is the whole of it: a caller is waiting on a
+    /// diff and not on a cache, so the work is handed to the runtime's
+    /// `waitUntil` and this returns. What the caller spends on the cache is
+    /// the lookup that missed.
+    ///
+    /// The registration is the platform's rather than a bare `tokio::spawn`,
+    /// which is what it would otherwise be: the runtime drains what it was
+    /// given at shutdown, so an entry whose write is still in flight when
+    /// the function is stopped is still written.
+    pub fn put(self: Arc<Self>, entry: Entry) {
+        in_background(async move { self.writing(entry).await });
+    }
+
+    /// Write `entry`, both blobs or neither.
+    ///
+    /// The patches are serialised before anything is written, so an entry
+    /// that cannot be written whole is not written at all rather than left
+    /// as a `meta.json` whose patches never arrived.
+    async fn writing(&self, entry: Entry) {
         // Measured on the patch's own text rather than on the JSON it
         // becomes. The two differ by a couple of dozen bytes of punctuation
         // and escaping against a quarter of a megabyte, and the text is the
@@ -302,7 +321,7 @@ impl DiffStore {
                     self.gave_up(WRITING);
                 }
             }
-            Source::Memory(memory) => memory.write(pathname, bytes),
+            Source::Memory(memory) => memory.write(pathname, bytes).await,
             Source::Unavailable(why) => {
                 self.gave_up(why);
             }
@@ -322,6 +341,20 @@ impl DiffStore {
         });
         None
     }
+}
+
+/// Run `work` after the answer has gone, and let the runtime drain it.
+///
+/// `AppState` is the runtime's own handle on the process-global collector
+/// `run` waits on at shutdown, so this is `waitUntil` and not an imitation
+/// of it. Built here rather than taken from the request because `VercelLayer`
+/// drops the state on its way into `axum`: nothing on this side of that layer
+/// is ever handed one, and the collector is the process's regardless.
+fn in_background(work: impl Future<Output = ()> + Send + 'static) {
+    // Three arguments on every platform this deploys or builds on. The
+    // runtime gives the type a different constructor off unix, which this
+    // repository has no target for.
+    AppState::new(LogContext::new(None, None, None)).wait_until(work);
 }
 
 /// What a store with no credentials to reach one with says it was doing.
@@ -363,11 +396,29 @@ impl std::fmt::Debug for DiffStore {
 /// contract #27 reads a result back from, so a map keyed by anything else
 /// would be a suite that passes while the layout is wrong.
 #[derive(Debug, Clone, Default)]
-pub struct Memory(Arc<Mutex<BTreeMap<String, Vec<u8>>>>);
+pub struct Memory {
+    blobs: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+
+    /// How long this store takes over one blob.
+    ///
+    /// Nothing, unless a test asks for otherwise. It is what makes "the
+    /// answer did not wait for the write" a measurement: an in-process map
+    /// is written faster than a response can be built, so without it the two
+    /// orderings look the same.
+    stall: Duration,
+}
 
 impl Memory {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The same store, taking `delay` over every blob it writes.
+    pub fn stalling(self, delay: Duration) -> Self {
+        Self {
+            stall: delay,
+            ..self
+        }
     }
 
     /// The blob at `pathname`, if this store holds one.
@@ -382,7 +433,7 @@ impl Memory {
 
     /// Every pathname this store holds, in the order the store keeps them.
     pub fn written(&self) -> Vec<String> {
-        self.0
+        self.blobs
             .lock()
             .map(|blobs| blobs.keys().cloned().collect())
             .unwrap_or_default()
@@ -394,11 +445,15 @@ impl Memory {
     }
 
     fn read(&self, pathname: &str) -> Option<Vec<u8>> {
-        self.0.lock().ok()?.get(pathname).cloned()
+        self.blobs.lock().ok()?.get(pathname).cloned()
     }
 
-    fn write(&self, pathname: &str, bytes: Vec<u8>) {
-        if let Ok(mut blobs) = self.0.lock() {
+    async fn write(&self, pathname: &str, bytes: Vec<u8>) {
+        if !self.stall.is_zero() {
+            tokio::time::sleep(self.stall).await;
+        }
+
+        if let Ok(mut blobs) = self.blobs.lock() {
             blobs.insert(pathname.to_owned(), bytes);
         }
     }
