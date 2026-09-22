@@ -785,13 +785,13 @@ must not reach a model are one definition. Argument values are redacted and
 `?` and stops looking like one.
 
 Where a call's time goes is accumulated in `Spent`, which a `Ctx` holds for
-the length of one request and the seams write into. `Ctx::archive()` and
-`Ctx::catalogue()` both hand back their seam with the stopwatch already on
-it, so a handler is unchanged and there is no way to wait on a registry
-uncounted. One wrapper over both, because the phase answers how long the call
-waited rather than which document it waited for — and a tool that only reads
-a catalogue reporting no wait at all is the reading an operator would take
-for "this one never left the process".
+the length of one request and the seams write into. `Ctx::archive()`,
+`Ctx::catalogue()` and `Ctx::search()` each hand back their seam with the
+stopwatch already on it, so a handler is unchanged and there is no way to
+wait on a registry uncounted. One wrapper over all three, because the phase
+answers how long the call waited rather than which document it waited for —
+and a tool that only reads a catalogue reporting no wait at all is the
+reading an operator would take for "this one never left the process".
 
 What the call found in the store is recorded the same way and by the same
 kind of wrapper: `Ctx::store()` hands back the seam with the lookup already
