@@ -423,6 +423,12 @@ impl Failure {
     /// The code is [`Self::channel`]'s and not this function's. A read that
     /// re-coded a failure on arrival is exactly how "this version does not
     /// exist" and "this URI is not ours" became one answer.
+    ///
+    /// The [`redact`] here is a second pass and not the only one — every field
+    /// that carries text from elsewhere is already redacted by
+    /// [`Self::message`], which is why [`Self::respond`] needs none. It stays
+    /// because this is the last thing a read's message passes through, and a
+    /// redactor that runs twice costs a walk over a sentence.
     pub fn refuse(self) -> ErrorData {
         ErrorData::new(self.channel().code(), redact(&self.message()), None)
     }
