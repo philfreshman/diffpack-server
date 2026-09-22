@@ -17,7 +17,7 @@ use axum::http::Request;
 use diffpack_server::log::{Capture, Spent};
 use diffpack_server::mcp::Diffpack;
 use diffpack_server::router;
-use diffpack_server::store::Memory;
+use diffpack_server::store::{DiffStore, Memory};
 use diffpack_server::tools::Ctx;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -445,6 +445,34 @@ async fn the_line_says_whether_the_answer_was_remembered() {
     );
 }
 
+/// A deployment with no store says so, rather than reporting a miss it had
+/// no store to make.
+///
+/// `DiffStore::live()` resolves to no store at all when there are no
+/// credentials to build a client from — the server that existed before there
+/// was a cache, correct and slower. Every lookup on one answers nothing, so
+/// counted as a miss that deployment reads as a flat hundred percent miss:
+/// which is exactly what a cache that is working and cold reads as, and the
+/// one state an operator most needs to tell it from.
+///
+/// The third value rather than an absent field, which would also keep the
+/// rate honest. Absent already means "this tool has no cache to hit", and a
+/// deployment with no store would then be indistinguishable from
+/// `diff_package_versions` having quietly stopped asking — a code question
+/// wearing the shape of a configuration one.
+#[tokio::test]
+async fn a_deployment_with_no_store_says_so_rather_than_missing() {
+    let log = Capture::new();
+
+    call_without_a_store(&log, "diff_package_versions", diffable()).await;
+
+    let line = one(&log);
+    assert_eq!(
+        line["cache"], "no_store",
+        "there was no cache here to miss: {line}"
+    );
+}
+
 /// A tool with no store to ask says nothing about one, rather than reporting
 /// the miss it never made.
 ///
@@ -583,9 +611,26 @@ fn parse(line: &str) -> Value {
         .unwrap_or_else(|e| panic!("a log line should be one JSON object: {e}, got {line}"))
 }
 
+/// Which store a call is made against.
+///
+/// The three a deployment can have, and the cache outcome is the one column
+/// that tells them apart: a store nobody else shares, a store this process
+/// holds across two calls, and no store at all.
+#[derive(Clone)]
+enum Store {
+    /// A fresh one per request, which is what `Ctx::fixture` builds.
+    Fresh,
+
+    /// One this process holds, so a second call can find what a first wrote.
+    Held(Memory),
+
+    /// None, as a deployment with no credentials to reach one with has.
+    Absent,
+}
+
 /// Call `tool` through the endpoint, with `log` behind every handler.
 async fn call(log: &Capture, tool: &str, arguments: Value) -> Value {
-    calling(log, None, tool, arguments).await
+    calling(log, Store::Fresh, tool, arguments).await
 }
 
 /// The same, with `store` behind every call rather than a fresh one each
@@ -596,11 +641,20 @@ async fn call(log: &Capture, tool: &str, arguments: Value) -> Value {
 /// store. `Ctx::fixture` gives each request one of its own, which is the
 /// right default for a suite where every other test drives a single call.
 async fn call_storing(log: &Capture, store: &Memory, tool: &str, arguments: Value) -> Value {
-    calling(log, Some(store.clone()), tool, arguments).await
+    calling(log, Store::Held(store.clone()), tool, arguments).await
 }
 
-/// Call `tool` through the endpoint, storing into `store` where one is given.
-async fn calling(log: &Capture, store: Option<Memory>, tool: &str, arguments: Value) -> Value {
+/// The same, against a deployment that has no store at all.
+///
+/// `DiffStore::unavailable()` is what `DiffStore::live()` falls back to with
+/// no credentials to build a client from, so this is that deployment and not
+/// an adapter invented to stand in for one.
+async fn call_without_a_store(log: &Capture, tool: &str, arguments: Value) -> Value {
+    calling(log, Store::Absent, tool, arguments).await
+}
+
+/// Call `tool` through the endpoint, against `store`.
+async fn calling(log: &Capture, store: Store, tool: &str, arguments: Value) -> Value {
     post(
         log,
         store,
@@ -657,12 +711,12 @@ fn meta() -> Value {
 }
 
 /// A real request through the real router, with the fixture archives, the
-/// capturing sink and `store` where one is given behind it.
+/// capturing sink and `store` behind it.
 ///
 /// Both arrive through the service factory `router_with` takes, which is the
 /// path production takes to build a [`Ctx`] — a test that reached around it
 /// would be testing wiring that does not exist.
-async fn post(log: &Capture, store: Option<Memory>, body: Value) -> Value {
+async fn post(log: &Capture, store: Store, body: Value) -> Value {
     let method = body["method"].as_str().expect("a call names a method");
 
     let mut request = Request::builder()
@@ -691,8 +745,16 @@ async fn post(log: &Capture, store: Option<Memory>, body: Value) -> Value {
             // first one's fetches in the second one's window.
             let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
             Ok(Diffpack::with_ctx(match &store {
-                Some(memory) => ctx.storing_in(memory.store()),
-                None => ctx,
+                Store::Fresh => ctx,
+                Store::Held(memory) => ctx.storing_in(memory.store()),
+                // Left writing to stderr, which is the store's own default
+                // and where its notes go in production. A store pointed at
+                // this buffer would put a note in it for every lookup it
+                // could not make, and `one` counts what is in the buffer —
+                // so the suite that asserts one call leaves one line would
+                // be reading the note instead. What a store says it could
+                // not do is `tests/store.rs`'s question.
+                Store::Absent => ctx.storing_in(DiffStore::unavailable()),
             }))
         },
         Vec::new(),

@@ -270,6 +270,24 @@ impl DiffStore {
         }
     }
 
+    /// Whether this deployment has a store at all.
+    ///
+    /// Not whether a lookup will find anything, and not whether one will
+    /// succeed: a store that is there can still fail a read, and that failure
+    /// is a miss like any other by the rule in the module header. This is the
+    /// narrower fact settled when the store was built — whether there were
+    /// credentials to build a client from — and it is the same answer for
+    /// every call this instance serves.
+    ///
+    /// It exists for the log and nothing else. A caller acts identically
+    /// either way, which is the whole of why [`DiffStore::get`] has no
+    /// `Result`; what an operator needs is to tell a cache that is cold from
+    /// a deployment that has none, and those two are the same flat hundred
+    /// percent miss without it.
+    pub fn is_available(&self) -> bool {
+        !matches!(self.source, Source::Unavailable(_))
+    }
+
     /// The entry for `key`, if this store holds one.
     ///
     /// `None` covers both of the answers a caller can act on identically:
