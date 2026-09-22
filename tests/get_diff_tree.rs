@@ -268,22 +268,58 @@ async fn a_node_carries_its_path_its_kind_its_status_and_what_moved() {
     );
 }
 
-/// Every node appears exactly once, however small the pages are.
+/// Every node appears exactly once, however small the pages are, and
+/// whatever the walk was narrowed to first.
 ///
-/// The property a cursor is for. Two page sizes rather than one: a walk that
-/// agrees with itself at one size and not another has a cursor that names a
-/// position in an arrangement built for that request.
+/// The property a cursor is for. Several page sizes rather than one: a walk
+/// that agrees with itself at one size and not another has a cursor that
+/// names a position in an arrangement built for that request.
+///
+/// And each narrowing rather than the whole comparison alone, which is the
+/// half that would break separately. A cursor is an offset into whatever
+/// sequence this tool handed `page::paginate`, so `path`, `depth` and
+/// `status` decide what that sequence *is* before a cursor names a position
+/// in it. If any of the three produced a different sequence on the call that
+/// resumes than on the call that started — a `path` resolved by walking in
+/// some other order, a filter applied to a page rather than to the walk —
+/// then a node would be served twice or not at all, and only at a page size
+/// small enough to cross the seam. All three together as well, because they
+/// compose and the composition is what an agent actually sends.
 #[tokio::test]
 async fn every_node_appears_exactly_once_across_the_pages() {
-    let whole = walk(json!({ "handle": diffable() })).await;
+    let narrowings = [
+        json!({}),
+        json!({ "path": "src" }),
+        json!({ "depth": 1 }),
+        json!({ "status": ["added", "removed", "renamed"] }),
+        json!({ "path": "src", "depth": 1, "status": ["added", "renamed"] }),
+    ];
 
-    for limit in [1, 2, 5] {
-        let paged = walk(json!({ "handle": diffable(), "limit": limit })).await;
-        assert_eq!(
-            paged, whole,
-            "a walk at {limit} to a page should cover the same nodes in the \
-             same order as one that took them all at once"
+    for narrowing in narrowings {
+        let mut arguments = json!({ "handle": diffable() });
+        for (field, value) in narrowing.as_object().expect("an object of arguments") {
+            arguments[field] = value.clone();
+        }
+
+        let whole = walk(arguments.clone()).await;
+        assert!(
+            !whole.is_empty(),
+            "{arguments} should select something, or the page sizes below \
+             agree about nothing"
         );
+
+        for limit in [1, 2, 5] {
+            let mut asked = arguments.clone();
+            asked["limit"] = json!(limit);
+
+            assert_eq!(
+                walk(asked).await,
+                whole,
+                "a walk at {limit} to a page should cover the same nodes in \
+                 the same order as one that took them all at once, and {arguments} \
+                 is what it was narrowed to"
+            );
+        }
     }
 }
 
@@ -369,6 +405,70 @@ async fn a_trailing_slash_on_a_path_makes_no_difference() {
     let slashed = walk(json!({ "handle": diffable(), "path": "src/" })).await;
 
     assert_eq!(bare, slashed);
+}
+
+/// A path is matched at the separator, so one directory's name cannot be the
+/// beginning of another's and swallow it.
+///
+/// The "and nothing outside it" half, and the one a string comparison gets
+/// wrong. `path` is resolved by descending — at each level the walk follows
+/// the one child the path lies inside — so a comparison that asked only
+/// whether the path *begins with* a child's would take the wrong branch the
+/// moment two siblings share a beginning, and then find nothing at the bottom
+/// of it. A directory that exists would come back as an empty page.
+///
+/// TensorFlow's wheel is that package. Its two top-level directories are
+/// `tensorflow` and `tensorflow-2.16.1.dist-info`, the first a strict prefix
+/// of the second and sorted before it — the `src/legacy` against
+/// `src/legacy-old` case, in a fixture the set already had. Asking for the
+/// longer one has to answer with what is in it and not with a walk that went
+/// into the shorter one and gave up.
+///
+/// The other direction below it: a name shorter than a real one, and a name
+/// that is a real one with more on the end, neither of which is a directory.
+/// The sibling of `list_package_files`' own test, against the tool that
+/// documents the same rule.
+#[tokio::test]
+async fn a_path_is_matched_at_the_separator_and_not_by_its_characters() {
+    let wheel = DiffHandle::mint(Inputs {
+        registry: Registry::PyPi,
+        package: "tensorflow".to_owned(),
+        from_version: "2.16.1".to_owned(),
+        to_version: "2.16.1".to_owned(),
+        similarity_threshold: 0.75,
+        ignore_whitespace: false,
+    })
+    .encode();
+
+    let shadowed = walk(json!({ "handle": &wheel, "path": "tensorflow-2.16.1.dist-info" })).await;
+    assert_eq!(
+        paths(&shadowed),
+        ["tensorflow-2.16.1.dist-info/METADATA"],
+        "`tensorflow` begins this path and is not this path, so the descent \
+         has to pass it by rather than turn into it and come back empty"
+    );
+
+    let deep = handle("many-files", "1.0.0", "1.0.0");
+    for path in ["sr", "src/0", "src/070"] {
+        let result = call(TOOL, json!({ "handle": &deep, "path": path })).await;
+
+        assert_eq!(
+            result["structuredContent"]["total"],
+            json!(0),
+            "`{path}` is not a directory of this package's, and a match on \
+             characters rather than on path components would have answered \
+             with one that is: got {result}"
+        );
+    }
+
+    // And a file's path is not reached by a prefix of it either: `src/index`
+    // names nothing, where `src/index.js` names a file with nothing under it.
+    let partial = call(TOOL, json!({ "handle": diffable(), "path": "src/index" })).await;
+    assert_eq!(
+        partial["structuredContent"]["total"],
+        json!(0),
+        "got {partial}"
+    );
 }
 
 /// A directory the comparison does not have is an empty page, not a refusal.
