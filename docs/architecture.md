@@ -472,7 +472,7 @@ is built per request, so a cap held there would bound one caller against
 itself and leave an instance serving several of them unbounded. Four because
 two is the floor: `diff_package_versions::compare` asks for both archives of
 a comparison through one `try_join!`, and a cap below two would serialise the
-only shape of call this server makes concurrently. There used to be three
+only shape of call this server makes concurrently. There used to be four
 copies of that call and the number did not depend on which of them was
 running: each `bytes()` takes one slot and gives it back before returning, so
 no caller holds a slot while waiting on another, and there is no hold-and-wait
@@ -710,11 +710,12 @@ a package whose paths are long.
 ### `src/handle.rs` — the handle a diff is asked for again by
 
 What passes between the tool that computes a diff and the ones that read one
-back — `get_diff_tree` and `get_file_diff` today, the diff resources (#16)
-beside them later. It carries the `diff_id` — the cache lookup,
-and the string #27 needs — and beside it the inputs that `diff_id` was minted
-from, so that a reading tool whose entry has been evicted recomputes rather
-than refusing. See [ADR 0006](adr/0006-the-handle-carries-its-inputs.md).
+back — `get_diff_tree` and `get_file_diff`, and the two resources under
+`diffpack://diff/`, which take the same handle out of their URI rather than a
+`diff_id`. It carries the `diff_id` — the cache lookup, and the string #27
+needs — and beside it the inputs that `diff_id` was minted from, so that a
+reading tool whose entry has been evicted recomputes rather than refusing.
+See [ADR 0006](adr/0006-the-handle-carries-its-inputs.md).
 
 It travels as one opaque string. `DiffHandle` serialises as that string and
 deserialises by decoding it, which is what makes a tool's `-32602` automatic:
@@ -785,13 +786,13 @@ must not reach a model are one definition. Argument values are redacted and
 `?` and stops looking like one.
 
 Where a call's time goes is accumulated in `Spent`, which a `Ctx` holds for
-the length of one request and the seams write into. `Ctx::archive()` and
-`Ctx::catalogue()` both hand back their seam with the stopwatch already on
-it, so a handler is unchanged and there is no way to wait on a registry
-uncounted. One wrapper over both, because the phase answers how long the call
-waited rather than which document it waited for — and a tool that only reads
-a catalogue reporting no wait at all is the reading an operator would take
-for "this one never left the process".
+the length of one request and the seams write into. `Ctx::archive()`,
+`Ctx::catalogue()` and `Ctx::search()` each hand back their seam with the
+stopwatch already on it, so a handler is unchanged and there is no way to
+wait on a registry uncounted. One wrapper over all three, because the phase
+answers how long the call waited rather than which document it waited for —
+and a tool that only reads a catalogue reporting no wait at all is the
+reading an operator would take for "this one never left the process".
 
 What the call found in the store is recorded the same way and by the same
 kind of wrapper: `Ctx::store()` hands back the seam with the lookup already
