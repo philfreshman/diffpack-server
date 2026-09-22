@@ -27,7 +27,7 @@ mod blob;
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -466,8 +466,11 @@ impl DiffStore {
                 }
             },
             Source::Memory(memory) => {
-                memory.delete(pathnames).await;
-                true
+                let gone = memory.delete(pathnames).await;
+                if !gone {
+                    self.gave_up::<()>(DELETING);
+                }
+                gone
             }
             Source::Unavailable(why) => {
                 self.gave_up::<()>(why);
@@ -685,6 +688,19 @@ pub struct Memory {
     /// a write over an entry that is already there, which is the one thing
     /// the head before a put is there to stop.
     lose_reads: bool,
+
+    /// How many more deletes this store takes, if it is refusing them.
+    ///
+    /// `None` unless a test asks for otherwise, and then it is the number of
+    /// deletes that still work before every one after them fails. What a
+    /// real store does now and then, and the one state a test cannot reach
+    /// through the wire: an in-process map cannot fail to forget a blob, so
+    /// without this nothing can tell a sweep that credited itself bytes it
+    /// never freed from one that did not.
+    ///
+    /// Shared between the stores a view hands out, because a sweep's deletes
+    /// are one run against one allowance.
+    lose_deletes: Option<Arc<AtomicUsize>>,
 }
 
 /// One blob this store holds.
@@ -727,6 +743,28 @@ impl Memory {
     pub fn losing_reads(store: &Self) -> Self {
         Self {
             lose_reads: true,
+            ..store.clone()
+        }
+    }
+
+    /// `store`'s blobs, refusing every delete of them.
+    ///
+    /// What the budget does with a delete it did not get is the half of a
+    /// sweep nothing else can state: bytes credited to a delete that never
+    /// happened are room the store does not have, and an entry admitted
+    /// against them is the ceiling exceeded by the code that keeps it.
+    pub fn losing_deletes(store: &Self) -> Self {
+        Self::losing_deletes_after(store, 0)
+    }
+
+    /// `store`'s blobs, taking `kept` deletes and refusing every one after.
+    ///
+    /// A sweep that freed some of what it needed and not all of it, which is
+    /// the likelier failure than none of it: the store is smaller afterwards
+    /// and still has no room.
+    pub fn losing_deletes_after(store: &Self, kept: usize) -> Self {
+        Self {
+            lose_deletes: Some(Arc::new(AtomicUsize::new(kept))),
             ..store.clone()
         }
     }
@@ -805,15 +843,31 @@ impl Memory {
             .collect()
     }
 
-    /// Lose every blob at `pathnames`.
-    async fn delete(&self, pathnames: &[&str]) {
+    /// Lose every blob at `pathnames`, and say whether they are gone.
+    ///
+    /// The answer a real store gives, because a sweep counts in it. A store
+    /// refusing deletes hands out its allowance until there is none left and
+    /// says no from then on, leaving the blobs where they are.
+    async fn delete(&self, pathnames: &[&str]) -> bool {
         self.stalled().await;
+
+        if let Some(allowance) = &self.lose_deletes {
+            let taken = allowance.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                left.checked_sub(1)
+            });
+
+            if taken.is_err() {
+                return false;
+            }
+        }
 
         if let Ok(mut blobs) = self.blobs.lock() {
             for pathname in pathnames {
                 blobs.remove(*pathname);
             }
         }
+
+        true
     }
 
     /// Take as long over this as the store was asked to.

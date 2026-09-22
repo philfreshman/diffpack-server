@@ -720,6 +720,139 @@ async fn an_entry_too_big_for_the_whole_budget_is_refused_without_a_sweep() {
     );
 }
 
+/// A sweep whose deletes all fail admits nothing.
+///
+/// The one thing about a sweep the wire cannot answer, and the reason the
+/// store this suite writes to is allowed to refuse a delete at all: an
+/// in-process map cannot fail to forget a blob, and a real store refuses
+/// now and then. What the budget does with that refusal is the whole of the
+/// ceiling — bytes credited to a delete that did not happen are room the
+/// store does not have, and an entry admitted against them is the one
+/// number this issue is written around, exceeded by the code that keeps it.
+///
+/// So the store here loses every delete. The sweep runs and frees nothing,
+/// and what is left is exactly what was there before: the entry is refused
+/// rather than written into room that was never made.
+#[tokio::test]
+async fn a_sweep_whose_deletes_all_fail_admits_nothing() {
+    let store = Memory::new();
+
+    let first = call(|| store.store(), at(0)).await;
+    lands(&store, &first).await;
+    let entry = held(&store);
+
+    // Room for one entry, over a store that will not let go of anything.
+    let log = Capture::new();
+    let stubborn = Memory::losing_deletes(&store);
+    let budgeted = || {
+        stubborn
+            .store()
+            .budgeting(entry + entry / 16, entry)
+            .logging_to(log.sink())
+    };
+
+    let second = call(budgeted, at(1)).await;
+    let notes = noted(&log).await;
+    stays_out(&store, &second).await;
+
+    assert_eq!(
+        store.written(),
+        vec![meta_of(&first), patches_of(&first)],
+        "a sweep that freed nothing made no room to admit anything into"
+    );
+    assert!(
+        notes.iter().all(|note| note.contains("evicting an entry")),
+        "a sweep that could not delete says so, and says: {notes:?}"
+    );
+}
+
+/// A sweep that freed less than it needed admits nothing either.
+///
+/// The likelier half of the same failure, and the one that says the
+/// arithmetic is per delete rather than per sweep: the store is smaller
+/// afterwards and still has no room. A sweep that counted the entries it
+/// tried would read this as room for the incoming one and be wrong by
+/// everything the refused deletes weigh.
+///
+/// Five entries under a ceiling with space for three, so the sweep needs
+/// three of them; it is given one. What survives is the four the store kept
+/// — the single delete that worked took the oldest — and the comparison the
+/// sweep was making room for is not among them.
+#[tokio::test]
+async fn a_sweep_that_freed_less_than_it_needed_admits_nothing() {
+    let store = Memory::new();
+
+    let first = call(|| store.store(), at(0)).await;
+    lands(&store, &first).await;
+    let entry = held(&store);
+
+    let mut seeded = vec![first];
+    for step in 1..5 {
+        let answer = call(|| store.store(), at(step)).await;
+        lands(&store, &answer).await;
+        seeded.push(answer);
+    }
+
+    assert_eq!(
+        held(&store),
+        5 * entry,
+        "the five weigh the same, which is what makes what a sweep frees a          number this test can state"
+    );
+
+    // Room for three of the five, swept down to two, over a store that takes
+    // one delete and refuses every one after it.
+    let log = Capture::new();
+    let stubborn = Memory::losing_deletes_after(&store, 1);
+    let budgeted = || {
+        stubborn
+            .store()
+            .budgeting(3 * entry, 2 * entry)
+            .logging_to(log.sink())
+    };
+
+    let sixth = call(budgeted, at(5)).await;
+    let notes = noted(&log).await;
+    stays_out(&store, &sixth).await;
+
+    let mut survived: Vec<String> = seeded[1..]
+        .iter()
+        .flat_map(|answer| [meta_of(answer), patches_of(answer)])
+        .collect();
+    survived.sort();
+
+    assert_eq!(
+        store.written(),
+        survived,
+        "the one delete that worked took the oldest entry, and the entry it          was making room for was refused"
+    );
+    assert!(
+        notes.iter().all(|note| note.contains("evicting an entry")),
+        "every delete after the first says it could not happen: {notes:?}"
+    );
+}
+
+/// Fail if `store` ever writes the entry `answer` is about.
+///
+/// A refusal is an absence, and an absence is not something to wait for: it
+/// is true when the call returns and stays true. What this waits out is the
+/// other possibility — a store that was going to write after all and had not
+/// reached it yet — so the window is far longer than the microseconds an
+/// in-process write costs, and it is entered only once the sweep has already
+/// said something. A failure here is the refusal not having happened, rather
+/// than a machine being slow.
+async fn stays_out(store: &Memory, answer: &Value) {
+    let meta = meta_of(answer);
+    let giving_up = Instant::now() + Duration::from_secs(1);
+
+    while Instant::now() < giving_up {
+        assert!(
+            !store.written().contains(&meta),
+            "the entry at `{meta}` was admitted into room the sweep never freed"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 /// Wait until `log` carries a note from the store, or give up.
 ///
 /// A refusal happens where a write happens — after the answer — so it is
