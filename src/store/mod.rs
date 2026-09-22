@@ -71,9 +71,24 @@ struct Meta {
     tree: DiffFileEntry,
 }
 
+/// The most one file's patch may weigh before an entry is written without it.
+///
+/// A file this big is one nobody reads in an answer anyway — the response
+/// ceiling cuts it long before this — so what keeping it buys is a download
+/// saved for a patch that will be truncated. #15 renders it on demand, which
+/// is the same work the entry would have done and is only done if somebody
+/// asks.
+pub const PATCH_CAP: usize = 256 * 1024;
+
 /// The interface the rest of the crate has to cached results.
 pub struct DiffStore {
     source: Source,
+
+    /// The most one patch may weigh. A field rather than the constant read
+    /// where it is used, for the reason `Archive` carries its size limit: a
+    /// cap can then be exercised with a small number and a real comparison
+    /// instead of with a file nobody wants in a fixture set.
+    patch_cap: usize,
 }
 
 /// Where a store's blobs actually live.
@@ -109,7 +124,23 @@ impl DiffStore {
             Err(_) => Source::Unavailable("reading the blob store's credentials"),
         };
 
-        Self { source }
+        Self::over(source)
+    }
+
+    /// A store over `source`, with the caps this project runs.
+    fn over(source: Source) -> Self {
+        Self {
+            source,
+            patch_cap: PATCH_CAP,
+        }
+    }
+
+    /// The same store, leaving out any patch over `bytes`.
+    pub fn capping_patches_at(self, bytes: usize) -> Self {
+        Self {
+            patch_cap: bytes,
+            ..self
+        }
     }
 
     /// The entry for `key`, if this store holds one.
@@ -152,15 +183,23 @@ impl DiffStore {
     /// written, so an entry that cannot be written whole is not written at
     /// all rather than left as a `meta.json` whose patches never arrived.
     pub async fn put(&self, entry: Entry) {
+        // Measured on the patch's own text rather than on the JSON it
+        // becomes. The two differ by a couple of dozen bytes of punctuation
+        // and escaping against a quarter of a megabyte, and the text is the
+        // number a reader of this can check against a file.
+        let patches: BTreeMap<String, Patch> = entry
+            .patches
+            .into_iter()
+            .filter(|(_, patch)| patch.data.len() <= self.patch_cap)
+            .collect();
+
         let meta = Meta {
             key: entry.key,
             tree: entry.tree,
         };
 
-        let (Ok(bytes), Ok(patches)) = (
-            serde_json::to_vec(&meta),
-            serde_json::to_vec(&entry.patches),
-        ) else {
+        let (Ok(bytes), Ok(patches)) = (serde_json::to_vec(&meta), serde_json::to_vec(&patches))
+        else {
             return;
         };
 
@@ -246,9 +285,7 @@ impl Memory {
 
     /// The store that writes here, to hand to a [`Ctx`](crate::tools::Ctx).
     pub fn store(&self) -> DiffStore {
-        DiffStore {
-            source: Source::Memory(self.clone()),
-        }
+        DiffStore::over(Source::Memory(self.clone()))
     }
 
     fn read(&self, pathname: &str) -> Option<Vec<u8>> {

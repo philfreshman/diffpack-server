@@ -27,7 +27,7 @@ use axum::body::Body;
 use axum::http::Request;
 use diffpack_server::mcp::Diffpack;
 use diffpack_server::router;
-use diffpack_server::store::Memory;
+use diffpack_server::store::{DiffStore, Memory};
 use diffpack_server::tools::Ctx;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -63,14 +63,14 @@ fn diffable() -> Value {
 async fn the_same_diff_asked_for_twice_is_remembered_the_second_time() {
     let store = Memory::new();
 
-    let first = call(&store, diffable()).await;
+    let first = call(|| store.store(), diffable()).await;
     assert_eq!(
         first["structuredContent"]["cached"],
         json!(false),
         "nothing had been diffed yet, got {first}"
     );
 
-    let second = call(&store, diffable()).await;
+    let second = call(|| store.store(), diffable()).await;
     assert_eq!(
         second["structuredContent"]["cached"],
         json!(true),
@@ -94,8 +94,8 @@ async fn the_same_diff_asked_for_twice_is_remembered_the_second_time() {
 async fn a_remembered_answer_is_the_one_that_was_computed() {
     let store = Memory::new();
 
-    let computed = call(&store, diffable()).await;
-    let remembered = call(&store, diffable()).await;
+    let computed = call(|| store.store(), diffable()).await;
+    let remembered = call(|| store.store(), diffable()).await;
 
     assert_eq!(
         but_for_cached(remembered),
@@ -119,7 +119,7 @@ async fn a_remembered_answer_is_the_one_that_was_computed() {
 async fn a_remembered_diff_is_two_blobs_under_the_name_the_comparison_has() {
     let store = Memory::new();
 
-    let answer = call(&store, diffable()).await;
+    let answer = call(|| store.store(), diffable()).await;
     let diff_id = answer["structuredContent"]["diff_id"]
         .as_str()
         .unwrap_or_else(|| panic!("the answer names the comparison, got {answer}"));
@@ -159,13 +159,10 @@ async fn a_remembered_diff_is_two_blobs_under_the_name_the_comparison_has() {
 async fn every_changed_file_is_remembered_with_its_patch_already_rendered() {
     let store = Memory::new();
 
-    let answer = call(&store, diffable()).await;
-    let diff_id = answer["structuredContent"]["diff_id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("the answer names the comparison, got {answer}"));
+    let answer = call(|| store.store(), diffable()).await;
 
     assert_eq!(
-        blob(&store, &format!("diffs/v1/{diff_id}/patches.json")),
+        blob(&store, &patches_of(&answer)),
         json!({
             "src/added.js": {
                 "data": "--- /dev/null\n+++ to/src/added.js\n+ export const fresh = true;\n+ ",
@@ -190,6 +187,34 @@ async fn every_changed_file_is_remembered_with_its_patch_already_rendered() {
     );
 }
 
+/// A patch too big to be worth keeping is left out, and the rest are kept.
+///
+/// The cap is a guard against pathological patch volume rather than a
+/// property of a normal entry, so it is driven at a size the fixture can
+/// reach instead of with a generated file: 100 bytes here, 256 KiB in
+/// production, and the same code either way.
+///
+/// `src/index.js` has the only patch over it — it is the one file the pair
+/// modifies, so its patch carries both versions of the line — and the three
+/// smaller ones are still there. Omitting the whole entry because one file in
+/// it was large would throw away the patches that fit, and #15 renders a
+/// missing one on demand either way.
+#[tokio::test]
+async fn a_patch_over_the_cap_is_left_out_and_the_others_are_kept() {
+    let store = Memory::new();
+
+    let answer = call(|| store.store().capping_patches_at(100), diffable()).await;
+    let patches = blob(&store, &patches_of(&answer));
+
+    assert_eq!(
+        patches
+            .as_object()
+            .map(|patches| patches.keys().map(String::as_str).collect::<Vec<&str>>()),
+        Some(vec!["src/added.js", "src/new-name.js", "src/removed.js"]),
+        "the one patch over the cap is the only one missing, got {patches}"
+    );
+}
+
 /// A comparison is named by every argument, not by the package and the pair.
 ///
 /// Each variation below changes one field of the cache key and nothing else,
@@ -205,7 +230,7 @@ async fn every_changed_file_is_remembered_with_its_patch_already_rendered() {
 async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
     let store = Memory::new();
 
-    let first = call(&store, diffable()).await;
+    let first = call(|| store.store(), diffable()).await;
     let named = |answer: &Value| answer["structuredContent"]["diff_id"].clone();
 
     // One field each, against the same baseline. `diffable` publishes two
@@ -229,7 +254,7 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
             arguments[key] = value.clone();
         }
 
-        let answer = call(&store, arguments).await;
+        let answer = call(|| store.store(), arguments).await;
 
         assert_eq!(
             answer["structuredContent"]["cached"],
@@ -249,6 +274,15 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
         "one entry per comparison, and an entry is two blobs: {:?}",
         store.written()
     );
+}
+
+/// Where the patches of the comparison `answer` is about live.
+fn patches_of(answer: &Value) -> String {
+    let diff_id = answer["structuredContent"]["diff_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the answer names the comparison, got {answer}"));
+
+    format!("diffs/v1/{diff_id}/patches.json")
 }
 
 /// The blob at `pathname`, as the JSON it is.
@@ -297,12 +331,16 @@ fn but_for_cached(mut answer: Value) -> Value {
 // ---------------------------------------------------------------------------
 
 /// Call `diff_package_versions` with `arguments`, against a server whose
-/// cache is `store`.
+/// cache `store` builds.
+///
+/// A builder rather than a store, because a request gets its context from
+/// the factory and a test makes several of them. It is where a test that
+/// cares about a cap says so, and every other one says `|| store.store()`.
 ///
 /// Panics with the JSON-RPC error rather than returning it: nothing in this
 /// suite asks a question whose answer is a protocol error, so one arriving
 /// means the call was built wrongly.
-async fn call(store: &Memory, arguments: Value) -> Value {
+async fn call(store: impl Fn() -> DiffStore, arguments: Value) -> Value {
     let answer = post(
         store,
         json!({
@@ -334,7 +372,7 @@ async fn call(store: &Memory, arguments: Value) -> Value {
 /// factory — and then has its store replaced, which is the same `..self`
 /// spread `Ctx::logging_to` is and not a builder that fills the seams it was
 /// not given. Every other seam is still the fixture set's.
-async fn post(store: &Memory, body: Value) -> Value {
+async fn post(store: impl Fn() -> DiffStore, body: Value) -> Value {
     let request = Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -347,7 +385,7 @@ async fn post(store: &Memory, body: Value) -> Value {
         .body(Body::from(body.to_string()))
         .expect("the request should build");
 
-    let ctx = Ctx::fixture(FIXTURES).storing_in(store.store());
+    let ctx = Ctx::fixture(FIXTURES).storing_in(store());
     let router = router::router_with(move || Ok(Diffpack::with_ctx(ctx.clone())), Vec::new());
 
     let response = router
