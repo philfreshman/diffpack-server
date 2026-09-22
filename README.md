@@ -13,9 +13,10 @@ a package from a name half
 remembered, which is where an agent with no exact name to start from starts;
 `resolve_archive_url` answers from its arguments and fetches nothing;
 `list_package_versions` says what a package has released, most recently
-published first, and which of them the registry itself installs; `list_package_files` downloads a published version and lists
-what is inside it, a page at a time; `get_file_content` returns one of those
-files, cut short if it is longer than a response can carry; and
+published first, and which of them the registry itself installs;
+`list_package_files` downloads a published version and lists what is inside
+it, a page at a time; `get_file_content` returns one of those files, cut
+short if it is longer than a response can carry; and
 `diff_package_versions` compares two versions and answers with totals, a
 sample of the files that moved most, and a handle; and `get_diff_tree` takes
 that handle and lists the comparison's files and directories a page at a
