@@ -61,6 +61,10 @@ pub async fn read(uri: &str, ctx: &Ctx) -> Result<ReadResourceResult, Failure> {
         return Ok(registries::read());
     }
 
+    if let Some((handle, path)) = file_diff::parts_in(uri) {
+        return file_diff::read(&DiffHandle::decode(handle)?, path, ctx).await;
+    }
+
     if let Some(handle) = diff::handle_in(uri) {
         return diff::read(&DiffHandle::decode(handle)?, ctx).await;
     }

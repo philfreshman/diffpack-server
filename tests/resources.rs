@@ -439,6 +439,115 @@ async fn a_segment_that_is_not_a_handle_is_invalid_params() {
 }
 
 // ---------------------------------------------------------------------------
+// One file of one comparison
+// ---------------------------------------------------------------------------
+
+/// Reading one file's diff is what the tool returns at its defaults.
+///
+/// Three lines of context around each change, cut at the response ceiling if
+/// it comes to that — the settings a caller gets by passing nothing but a
+/// handle and a path, which is all a URI has room for.
+#[tokio::test]
+async fn reading_one_files_diff_is_what_the_tool_returns() {
+    let handle = diffable();
+    let path = "src/index.js";
+
+    let contents = contents(&file_uri(&handle, path)).await;
+    let patch = call(FILE_DIFF, json!({ "handle": handle, "path": path })).await;
+
+    assert_eq!(
+        contents[0]["text"], patch["structuredContent"]["text"],
+        "the resource and the tool should render one file the same way, \
+         got {contents:?} against {patch}"
+    );
+}
+
+/// Whether the text is a patch is carried by the media type.
+///
+/// What the tool says in `isDiff`, a resource says in the one field a client
+/// already reads to decide how to render something. A file both versions ship
+/// byte for byte is its own content and a path neither version has is a
+/// sentence; rendering either as a patch is how a reader ends up parsing
+/// `@@` out of a file that has none.
+#[tokio::test]
+async fn a_text_that_is_not_a_patch_says_so_in_its_media_type() {
+    let handle = diffable();
+
+    for (path, media_type, is_diff) in [
+        ("src/index.js", "text/x-diff", true),
+        ("README.md", "text/plain", false),
+        ("nowhere/at/all.js", "text/plain", false),
+    ] {
+        let contents = contents(&file_uri(&handle, path)).await;
+        let patch = call(FILE_DIFF, json!({ "handle": handle, "path": path })).await;
+
+        assert_eq!(
+            contents[0]["mimeType"], media_type,
+            "`{path}` should be served as {media_type}, got {contents:?}"
+        );
+        assert_eq!(
+            patch["structuredContent"]["isDiff"],
+            json!(is_diff),
+            "the tool and the media type should agree about `{path}`, got {patch}"
+        );
+    }
+}
+
+/// A file that moved is diffed from where it was.
+///
+/// The tool takes `old_path` beside the path, and its own description tells a
+/// caller to pass the one the tree gives. A URI has room for one path, so the
+/// resource looks the other up in the comparison it already built — the
+/// alternative being an answer that reports every line of a moved file as
+/// added, which is confidently wrong about a file the package still ships and
+/// which a reader has nothing in the answer to doubt with.
+#[tokio::test]
+async fn a_renamed_file_is_diffed_from_where_it_was() {
+    let handle = diffable();
+    let contents = contents(&file_uri(&handle, "src/new-name.js")).await;
+
+    let patch = call(
+        FILE_DIFF,
+        json!({
+            "handle": handle,
+            "path": "src/new-name.js",
+            "old_path": "src/old-name.js",
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        contents[0]["text"], patch["structuredContent"]["text"],
+        "a rename should read as a rename, got {contents:?} against {patch}"
+    );
+}
+
+/// A directory is refused rather than called absent.
+///
+/// The departure `get_file_diff` makes from the engine, inherited here: a
+/// directory has no content, so the engine reads one as absent on both sides
+/// and renders the sentence saying it is in neither version. That is false
+/// about a path the package ships.
+#[tokio::test]
+async fn a_directory_is_refused_rather_than_called_absent() {
+    let answer = reading(&file_uri(&diffable(), "src")).await;
+
+    assert_eq!(
+        answer["error"]["code"], -32602,
+        "a directory has no diff to read, got {answer}"
+    );
+    // The message and not only the code: "no resource at this URI" is what a
+    // path that never reached the comparison gets, and it would let this test
+    // pass against a server that had not implemented the template at all.
+    assert!(
+        answer["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("`src`") && message.contains("directory")),
+        "the refusal should say the path is a directory, got {answer}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // What a client may hold on to
 // ---------------------------------------------------------------------------
 
@@ -478,13 +587,27 @@ async fn every_read_says_how_fresh_it_is_and_who_may_cache_it() {
 /// One list, so that a resource added without a freshness hint or without a
 /// refusal of its own fails rather than going unasserted.
 async fn readable() -> Vec<String> {
-    vec![REGISTRIES.to_owned(), diff_uri(&diffable())]
+    vec![
+        REGISTRIES.to_owned(),
+        diff_uri(&diffable()),
+        file_uri(&diffable(), "src/index.js"),
+    ]
 }
 
 /// The URI one whole comparison is read at.
 fn diff_uri(handle: &str) -> String {
     DIFF_TEMPLATE.replace("{handle}", handle)
 }
+
+/// The URI one file of one comparison is read at.
+fn file_uri(handle: &str, path: &str) -> String {
+    FILE_TEMPLATE
+        .replace("{handle}", handle)
+        .replace("{path}", path)
+}
+
+/// The tool that renders one file of a comparison.
+const FILE_DIFF: &str = "get_file_diff";
 
 /// A handle for `diffable` 1.0.0 → 2.0.0, minted rather than fetched.
 ///

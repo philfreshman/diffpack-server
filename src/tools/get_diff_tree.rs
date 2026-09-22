@@ -292,6 +292,12 @@ fn flatten(parent: &DiffFileEntry, left: u32, wanted: &[Status], nodes: &mut Vec
 
 /// The node `path` names, or nothing if the comparison has no node there.
 ///
+/// Public because there are two callers: this tool, which roots a listing at
+/// it, and the `diffpack://diff/{handle}/file/{path}` resource (#16), which
+/// reads a renamed file's `old_path` off it. A descent is what both want —
+/// see below — and a resource with a walk of its own would be a second way
+/// of finding a node in a tree.
+///
 /// A descent rather than a scan: at each level only the child whose path is
 /// `path` or a directory `path` lies inside is followed, so a subtree of a
 /// package with ten thousand files costs one step per directory rather than
@@ -301,7 +307,7 @@ fn flatten(parent: &DiffFileEntry, left: u32, wanted: &[Status], nodes: &mut Vec
 /// is what makes `sr` unable to narrow to `src/lib.rs` and `lib` unable to
 /// swallow `libs/` — the same distinction `list_package_files` draws, where
 /// it is the whole of what makes the argument name a directory.
-fn subtree<'t>(root: &'t DiffFileEntry, path: &str) -> Option<&'t DiffFileEntry> {
+pub fn node_at<'t>(root: &'t DiffFileEntry, path: &str) -> Option<&'t DiffFileEntry> {
     if root.path == path {
         return Some(root);
     }
@@ -310,7 +316,7 @@ fn subtree<'t>(root: &'t DiffFileEntry, path: &str) -> Option<&'t DiffFileEntry>
         .iter()
         .flatten()
         .find(|child| path == child.path || path.starts_with(&format!("{}/", child.path)))
-        .and_then(|child| subtree(child, path))
+        .and_then(|child| node_at(child, path))
 }
 
 impl Tool for GetDiffTree {
@@ -369,7 +375,7 @@ impl Tool for GetDiffTree {
         // over is the whole comparison, which is what `/` means and what
         // omitting the argument means.
         let rooted_at = match args.path.as_deref().map(|path| path.trim_end_matches('/')) {
-            Some(path) if !path.is_empty() => subtree(&tree, path),
+            Some(path) if !path.is_empty() => node_at(&tree, path),
             _ => Some(&tree),
         };
 

@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 #
-# A tool module goes through the seams, not around them.
+# A tool or a resource module goes through the seams, not around them.
 #
 # Every module under `src/tools/` is one MCP tool: its definition and its
-# handler, together (ADR 0002). What it may reach for is deliberately small —
+# handler, together (ADR 0002). Every module under `src/resources/` is one
+# resource, in the same shape and for the same reason — a URI, and the handler
+# that answers it. Both are held to this rule, because both are the outermost
+# code in the crate and both are written months apart by whoever is adding the
+# next one. What either may reach for is deliberately small —
 # `archive` to get a package's files, `catalogue` to ask what a package has
 # released, `search` to ask which packages a registry has, `registry` to know
 # what a registry is, `store` to cache a result, `page` to stay inside the
@@ -27,8 +31,9 @@
 #      this script to have guessed at.
 #
 #      `src/tools/mod.rs` is exempt from this one, because it is the only file
-#      here that is not a tool: it is the collection, the `Ctx` every handler
-#      is given, and the dispatch that runs one. Those need things a tool must
+#      under either directory that is not a tool or a resource: it is the
+#      collection, the `Ctx` every handler is given, and the dispatch that
+#      runs one. Those need things a tool must
 #      not have
 #      — `crate::log`, for one, because the single line per call is written by
 #      the dispatch and a tool that wrote its own would make "one line per
@@ -40,6 +45,9 @@
 #      grows one, and `src/tools/thing/mod.rs` is then a tool like any other —
 #      so the exemption is written as the path it is about rather than as a
 #      file name, which would hand every such tool the collection's licence.
+#      `src/resources/mod.rs` is a collection too and is deliberately *not*
+#      exempt: it needs nothing a resource may not have, and an exemption
+#      granted before it is needed is a rule weakened for free.
 #   2. A deny-list over the whole file, for the names that mean a seam was
 #      crossed even when there is no `use` to catch: `reqwest::get(..)` spelled
 #      out in full, a blob token read from the environment. This one covers
@@ -63,9 +71,10 @@
 set -uo pipefail
 
 readonly TOOLS="src/tools"
+readonly RESOURCES="src/resources"
 
-# What a tool module may import. Not a list of what is convenient: a list of
-# what a tool's job needs. Adding to it is a decision about the shape of the
+# What a guarded module may import. Not a list of what is convenient: a list
+# of what the job needs. Adding to it is a decision about the shape of the
 # crate, which is why it is one line in a checked-in file rather than an
 # import someone adds on a Friday.
 #
@@ -77,7 +86,7 @@ readonly TOOLS="src/tools"
 # cannot see.
 readonly ALLOWED_ROOTS=(crate self super std core alloc futures rmcp serde serde_json schemars)
 
-# The crate's own modules a tool may reach. The seams, plus `error` because
+# The crate's own modules a tool or a resource may reach. The seams, plus `error` because
 # every handler ends in one, `handle` because minting one is how a diff-taking
 # tool answers at all, and `cache_key` because a tool may still need the key a
 # handle names.
@@ -95,8 +104,13 @@ readonly ALLOWED_MODULES=(archive cache_key catalogue engine error handle page r
 # Names that mean a seam was crossed, wherever they appear.
 readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN|BLOB_STORE_ID|VERCEL_OIDC_TOKEN'
 
-if [[ ! -d "$TOOLS" ]]; then
-  echo "ok: no tool modules yet (${TOOLS}/ does not exist)"
+guarded=()
+for directory in "$TOOLS" "$RESOURCES"; do
+  [[ -d "$directory" ]] && guarded+=("$directory")
+done
+
+if [[ ${#guarded[@]} -eq 0 ]]; then
+  echo "ok: nothing to guard yet (neither ${TOOLS}/ nor ${RESOURCES}/ exists)"
   exit 0
 fi
 
@@ -111,7 +125,7 @@ contains() {
   return 1
 }
 
-# Rule 1: every `use` in a tool module, held to the allow-list.
+# Rule 1: every `use` in a guarded module, held to the allow-list.
 while IFS= read -r hit; do
   [[ -z "$hit" ]] && continue
 
@@ -120,8 +134,10 @@ while IFS= read -r hit; do
   line=${rest#*:}
   where="${where}:${rest%%:*}"
 
-  # The collection is not a tool. See the header: this is the one path, and a
-  # tool that becomes a directory does not inherit it.
+  # The tool collection is not a tool. See the header: this is the one path,
+  # and a tool that becomes a directory does not inherit it. The resource
+  # collection is not exempt — it needs nothing a resource may not have, and
+  # an exemption granted before it is needed is a rule weakened for free.
   [[ "${where%%:*}" == "${TOOLS}/mod.rs" ]] && continue
 
   path=${line#*use }
@@ -134,7 +150,7 @@ while IFS= read -r hit; do
   root=${root%% *}
 
   if ! contains "$root" "${ALLOWED_ROOTS[@]}"; then
-    offenders+=("${where}: imports \`${root}\`, which is not a tool's to reach")
+    offenders+=("${where}: imports \`${root}\`, which is not a tool's or a resource's to reach")
     continue
   fi
 
@@ -163,7 +179,7 @@ while IFS= read -r hit; do
       offenders+=("${where}: imports \`crate::${module}\`, which is not a seam a tool goes through")
     fi
   done
-done < <(grep -rnE '^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]' --include='*.rs' "$TOOLS")
+done < <(grep -rnE '^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]' --include='*.rs' "${guarded[@]}")
 
 # Rule 2: the names, wherever they are written.
 while IFS= read -r hit; do
@@ -173,14 +189,15 @@ while IFS= read -r hit; do
   where="${where}:${rest%%:*}"
   name=$(grep -oE "$FORBIDDEN" <<<"${rest#*:}" | head -n 1)
   offenders+=("${where}: names \`${name}\`, which lives behind a seam")
-done < <(grep -rnE "$FORBIDDEN" --include='*.rs' "$TOOLS")
+done < <(grep -rnE "$FORBIDDEN" --include='*.rs' "${guarded[@]}")
 
 if [[ ${#offenders[@]} -gt 0 ]]; then
-  echo "error: a tool module reaches past its seams:" >&2
+  echo "error: a module reaches past its seams:" >&2
   printf '  %s\n' "${offenders[@]}" >&2
   cat >&2 <<EOF
 
-A module under ${TOOLS}/ is one tool and nothing else. It gets a package's
+A module under ${TOOLS}/ is one tool and a module under ${RESOURCES}/ is one
+resource, and neither is anything else. Each gets a package's
 files from \`crate::archive\`, asks \`crate::catalogue\` what a package has
 released and \`crate::search\` which packages a registry has, asks
 \`crate::registry\` what a registry is, caches through \`crate::store\`, names
@@ -196,4 +213,4 @@ EOF
   exit 1
 fi
 
-echo "ok: no tool module reaches past its seams"
+echo "ok: no tool or resource module reaches past its seams"

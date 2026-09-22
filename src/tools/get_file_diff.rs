@@ -82,7 +82,7 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 use crate::archive::FileMap;
 use crate::engine::{self, FileType};
 use crate::error::Failure;
-use crate::handle::DiffHandle;
+use crate::handle::{DiffHandle, Inputs};
 use crate::page::{self, Excerpt};
 use crate::tools::{Ctx, Tool};
 
@@ -459,51 +459,75 @@ impl Tool for GetFileDiff {
                 .fetch(inputs.registry, &inputs.package, &inputs.to_version),
         )?;
 
-        let from_path = args.old_path.as_deref().unwrap_or(&args.path);
-
-        // A directory has no content, so the engine reads one as absent on
-        // both sides and renders the sentence that says it is in neither
-        // version. That sentence is false about a path the package ships,
-        // and an agent has nothing in the answer to doubt it with — the
-        // failure `get_file_content` refuses a directory to avoid. The
-        // second version first, because that is the one a caller's path
-        // usually names.
-        let directory = [
-            (&to_files, args.path.as_str(), &inputs.to_version),
-            (&from_files, from_path, &inputs.from_version),
-        ]
-        .into_iter()
-        .find(|(files, path, _)| {
-            files
-                .get(*path)
-                .is_some_and(|entry| matches!(entry.file_type, FileType::Directory))
-        });
-
-        if let Some((_, path, version)) = directory {
-            return Err(Failure::PathIsDirectory {
-                package: inputs.package.clone(),
-                version: version.clone(),
-                path: path.to_owned(),
-            });
-        }
-
-        let from = content(&from_files, from_path);
-        let to = content(&to_files, &args.path);
-
-        let rendered = engine::patch(&args.path, from, to, inputs.ignore_whitespace);
-        let is_diff = rendered.is_diff;
-
-        // Only a diff is trimmed. The other two answers are a file's own
-        // content and a sentence, and neither has a header to keep or a
-        // change to keep lines around.
-        let text = match args.context_lines {
-            ContextLines::Around(lines) if is_diff => trim(&rendered.data, lines),
-            _ => rendered.data,
-        };
-
-        Ok(Patch {
-            excerpt: page::truncate(&text, args.max_bytes),
-            is_diff,
-        })
+        render(&from_files, &to_files, inputs, &args)
     }
+}
+
+/// One file's patch, given both versions' files.
+///
+/// Everything this tool does once the archives are in hand, and public
+/// because there are two callers: this tool, and the
+/// `diffpack://diff/{handle}/file/{path}` resource (#16). That resource has
+/// already fetched both versions — it builds the comparison's tree to find
+/// where a renamed file was — so one that called the tool instead would
+/// download them a second time, which on a package of any size is the whole
+/// cost of the read paid twice.
+///
+/// What is shared is the whole answer rather than a piece of it: the
+/// directory refusal, which of the engine's four cases this is, the trim and
+/// the cut. A resource that reused only the renderer would still have to
+/// decide the other three, which is the drift ADR 0013 records for the
+/// renderer itself, one level up.
+pub fn render(
+    from_files: &FileMap,
+    to_files: &FileMap,
+    inputs: &Inputs,
+    args: &Args,
+) -> Result<Patch, Failure> {
+    let from_path = args.old_path.as_deref().unwrap_or(&args.path);
+
+    // A directory has no content, so the engine reads one as absent on
+    // both sides and renders the sentence that says it is in neither
+    // version. That sentence is false about a path the package ships,
+    // and an agent has nothing in the answer to doubt it with — the
+    // failure `get_file_content` refuses a directory to avoid. The
+    // second version first, because that is the one a caller's path
+    // usually names.
+    let directory = [
+        (to_files, args.path.as_str(), &inputs.to_version),
+        (from_files, from_path, &inputs.from_version),
+    ]
+    .into_iter()
+    .find(|(files, path, _)| {
+        files
+            .get(*path)
+            .is_some_and(|entry| matches!(entry.file_type, FileType::Directory))
+    });
+
+    if let Some((_, path, version)) = directory {
+        return Err(Failure::PathIsDirectory {
+            package: inputs.package.clone(),
+            version: version.clone(),
+            path: path.to_owned(),
+        });
+    }
+
+    let from = content(from_files, from_path);
+    let to = content(to_files, &args.path);
+
+    let rendered = engine::patch(&args.path, from, to, inputs.ignore_whitespace);
+    let is_diff = rendered.is_diff;
+
+    // Only a diff is trimmed. The other two answers are a file's own
+    // content and a sentence, and neither has a header to keep or a
+    // change to keep lines around.
+    let text = match args.context_lines {
+        ContextLines::Around(lines) if is_diff => trim(&rendered.data, lines),
+        _ => rendered.data,
+    };
+
+    Ok(Patch {
+        excerpt: page::truncate(&text, args.max_bytes),
+        is_diff,
+    })
 }

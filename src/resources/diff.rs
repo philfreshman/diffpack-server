@@ -21,7 +21,8 @@ use futures::try_join;
 use rmcp::model::{CacheScope, ReadResourceResult, ResourceContents, ResourceTemplate};
 use serde::Serialize;
 
-use crate::engine;
+use crate::archive::FileMap;
+use crate::engine::{self, DiffFileEntry};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
 use crate::tools::get_diff_tree::{self, Node};
@@ -70,8 +71,20 @@ pub fn template() -> ResourceTemplate {
 /// rather than answering it another way.
 const TTL_MS: u64 = 24 * 60 * 60 * 1000;
 
-/// One comparison, whole.
-pub async fn read(handle: &DiffHandle, ctx: &Ctx) -> Result<ReadResourceResult, Failure> {
+/// One comparison: both versions' files, and the tree they compare to.
+///
+/// What every read under `diffpack://diff/` starts with, including the one
+/// file's diff next door — which needs the tree to find where a renamed file
+/// was, and both file maps to render it. Made once here so that reading one
+/// file costs one pair of downloads rather than two.
+pub struct Comparison {
+    pub from_files: FileMap,
+    pub to_files: FileMap,
+    pub tree: DiffFileEntry,
+}
+
+/// Fetch both versions of what `handle` names and compare them.
+pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failure> {
     let inputs = handle.inputs();
 
     // Concurrently, the way the tool that mints a handle fetches them: the
@@ -90,8 +103,19 @@ pub async fn read(handle: &DiffHandle, ctx: &Ctx) -> Result<ReadResourceResult, 
         inputs.ignore_whitespace,
     );
 
-    let document = Comparison {
-        inputs,
+    Ok(Comparison {
+        from_files,
+        to_files,
+        tree,
+    })
+}
+
+/// One comparison, whole.
+pub async fn read(handle: &DiffHandle, ctx: &Ctx) -> Result<ReadResourceResult, Failure> {
+    let tree = compare(handle, ctx).await?.tree;
+
+    let document = Document {
+        inputs: handle.inputs(),
         totals: diff_package_versions::totals(&tree),
         tree: get_diff_tree::nodes(&tree),
     };
@@ -111,11 +135,11 @@ pub async fn read(handle: &DiffHandle, ctx: &Ctx) -> Result<ReadResourceResult, 
 
 /// What a reader is handed.
 #[derive(Serialize)]
-struct Comparison<'c> {
+struct Document<'d> {
     /// What was compared. A URI carries an opaque handle and a document read
     /// out of a resource browser has no call beside it saying what was asked
     /// for, so without this the totals are a comparison of something.
-    inputs: &'c Inputs,
+    inputs: &'d Inputs,
 
     /// How much changed, in files and in lines.
     totals: diff_package_versions::Totals,
