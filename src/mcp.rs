@@ -46,6 +46,7 @@ use rmcp::service::{NotificationContext, RequestContext, SubscriptionContext};
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 
+use crate::error::Failure;
 use crate::resources;
 use crate::tools::{self, Ctx};
 
@@ -189,6 +190,21 @@ impl ServerHandler for Diffpack {
                 .with_ttl_ms(TOOL_LIST_TTL_MS)
                 .with_cache_scope(CacheScope::Public),
         )
+    }
+
+    /// Hand the read to the module that owns that URI.
+    ///
+    /// The same shape as [`Self::call_tool`] and for the same reason: which
+    /// URI resolves to what, and which channel a refusal takes, is decided
+    /// once in [`crate::resources`] rather than here.
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        resources::read(&request.uri)
+            .map(ReadResourceResponse::from)
+            .map_err(Failure::refuse)
     }
 
     /// Hand the call to the module that owns that name.

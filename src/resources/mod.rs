@@ -22,7 +22,9 @@ pub mod diff;
 pub mod file_diff;
 pub mod registries;
 
-use rmcp::model::{Resource, ResourceTemplate};
+use rmcp::model::{ReadResourceResult, Resource, ResourceTemplate};
+
+use crate::error::Failure;
 
 /// Every resource a client can read by name, in a fixed order.
 pub fn catalogue() -> Vec<Resource> {
@@ -36,4 +38,18 @@ pub fn catalogue() -> Vec<Resource> {
 /// second.
 pub fn templates() -> Vec<ResourceTemplate> {
     vec![diff::template(), file_diff::template()]
+}
+
+/// Read the resource `uri` names, or refuse a URI that is not one of ours.
+///
+/// A [`Failure::NoSuchResource`] is `-32602` on the protocol channel: a URI
+/// that resolves to nothing is something a client built, and there is no
+/// resource to have failed.
+pub fn read(uri: &str) -> Result<ReadResourceResult, Failure> {
+    match uri {
+        registries::URI => Ok(ReadResourceResult::new(vec![registries::read()])),
+        unknown => Err(Failure::NoSuchResource {
+            uri: unknown.to_owned(),
+        }),
+    }
 }
