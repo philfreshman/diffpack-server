@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cache_key::DiffKey;
 use crate::engine::{DiffFileEntry, Patch};
+use crate::log::{Note, Sink};
 
 /// One cached diff result: what a caller puts, and what it gets back.
 ///
@@ -114,6 +115,15 @@ pub struct DiffStore {
 
     /// The most one entry may weigh, and a field for the same reason.
     entry_cap: usize,
+
+    /// Where this store says it could not answer.
+    ///
+    /// Its own rather than the one a [`Ctx`](crate::tools::Ctx) carries,
+    /// because a store outlives the call that reached it: a write is
+    /// backgrounded, so its failure happens once the call's line is written
+    /// and the context that carried it is gone. Both are the runtime logs in
+    /// production, which is the only place either of them goes.
+    log: Sink,
 }
 
 /// Where a store's blobs actually live.
@@ -146,7 +156,7 @@ impl DiffStore {
     pub fn live() -> Self {
         let source = match blob::Credentials::from_env() {
             Ok(credentials) => Source::Live(blob::Api::live(credentials)),
-            Err(_) => Source::Unavailable("reading the blob store's credentials"),
+            Err(_) => Source::Unavailable(NO_CREDENTIALS),
         };
 
         Self::over(source)
@@ -158,7 +168,22 @@ impl DiffStore {
             source,
             patch_cap: PATCH_CAP,
             entry_cap: ENTRY_CAP,
+            log: Sink::default(),
         }
+    }
+
+    /// No store at all, naming why.
+    ///
+    /// What [`DiffStore::live`] falls back to: a deployment with no
+    /// credentials to reach a store with is a server that computes every
+    /// diff, which is the server that existed before there was a cache.
+    pub fn unavailable() -> Self {
+        Self::over(Source::Unavailable(NO_CREDENTIALS))
+    }
+
+    /// The same store, saying what it could not do to `log`.
+    pub fn logging_to(self, log: Sink) -> Self {
+        Self { log, ..self }
     }
 
     /// The same store, leaving out any patch over `bytes`.
@@ -260,9 +285,12 @@ impl DiffStore {
     /// The bytes at `pathname`, if the store holds any.
     async fn read(&self, pathname: &str) -> Option<Vec<u8>> {
         match &self.source {
-            Source::Live(api) => api.read(pathname).await.ok().flatten(),
+            Source::Live(api) => match api.read(pathname).await {
+                Ok(found) => found,
+                Err(_) => self.gave_up(READING),
+            },
             Source::Memory(memory) => memory.read(pathname),
-            Source::Unavailable(_) => None,
+            Source::Unavailable(why) => self.gave_up(why),
         }
     }
 
@@ -270,13 +298,40 @@ impl DiffStore {
     async fn write(&self, pathname: &str, bytes: Vec<u8>) {
         match &self.source {
             Source::Live(api) => {
-                let _ = api.put(pathname, bytes).await;
+                if api.put(pathname, bytes).await.is_err() {
+                    self.gave_up(WRITING);
+                }
             }
             Source::Memory(memory) => memory.write(pathname, bytes),
-            Source::Unavailable(_) => {}
+            Source::Unavailable(why) => {
+                self.gave_up(why);
+            }
         }
     }
+
+    /// Say that the cache could not do `doing`, and answer nothing.
+    ///
+    /// Returns the miss rather than only writing the note, so that the two
+    /// cannot come apart: a path that gave up without saying so is a cache
+    /// that has quietly stopped working, which looks exactly like a cache
+    /// that is working and cold.
+    fn gave_up(&self, doing: &'static str) -> Option<Vec<u8>> {
+        self.log.note(&Note {
+            seam: "store",
+            doing,
+        });
+        None
+    }
 }
+
+/// What a store with no credentials to reach one with says it was doing.
+const NO_CREDENTIALS: &str = "reading the blob store's credentials";
+
+/// What a failed read says it was doing.
+const READING: &str = "reading a cached result from the blob store";
+
+/// What a failed write says it was doing.
+const WRITING: &str = "writing to the blob store";
 
 /// Names the adapter and nothing else.
 ///

@@ -25,6 +25,7 @@
 
 use axum::body::Body;
 use axum::http::Request;
+use diffpack_server::log::Capture;
 use diffpack_server::mcp::Diffpack;
 use diffpack_server::router;
 use diffpack_server::store::{DiffStore, Memory};
@@ -250,6 +251,61 @@ async fn an_entry_over_the_cap_keeps_its_tree_and_says_its_patches_are_gone() {
         blob(&whole, &meta_of(&answer))["patches_omitted"],
         json!(false),
         "the same comparison under the real caps keeps them"
+    );
+}
+
+/// A store that is not there costs a recomputed diff and nothing else.
+///
+/// This is the rule the whole module is arranged around: the cache holds a
+/// copy of an answer this server can work out again, so storage being down
+/// degrades it to the server it was before #21 — correct, and slower. A
+/// caller sees the same answer, and every call is a cold one.
+///
+/// The failure goes in the log instead, where an operator reads it. Nowhere
+/// else is available to it: a `Failure` would reach the model, and the one
+/// line a call leaves behind is the dispatch's and already written by the
+/// time a backgrounded write has failed.
+///
+/// `DiffStore::unavailable` is not a mode invented for this test — it is
+/// what `DiffStore::live` falls back to when a deployment has no credentials
+/// to reach a store with.
+#[tokio::test]
+async fn a_store_that_is_not_there_costs_a_recomputed_diff_and_nothing_else() {
+    let log = Capture::new();
+    let gone = || DiffStore::unavailable().logging_to(log.sink());
+
+    let degraded = call(gone, diffable()).await;
+    let again = call(gone, diffable()).await;
+
+    let working = Memory::new();
+    let cold = call(|| working.store(), diffable()).await;
+
+    assert_eq!(
+        degraded, cold,
+        "a diff computed with no store is the diff computed with one"
+    );
+    assert_eq!(
+        again["structuredContent"]["cached"],
+        json!(false),
+        "and it stays cold, because nothing was ever written: got {again}"
+    );
+
+    let notes: Vec<String> = log
+        .lines()
+        .into_iter()
+        .filter(|line| line.contains(r#""seam":"store""#))
+        .collect();
+
+    assert!(
+        !notes.is_empty(),
+        "the store saying it could not answer is what an operator reads: got {:?}",
+        log.lines()
+    );
+    assert!(
+        notes
+            .iter()
+            .all(|note| note.contains("blob store's credentials")),
+        "and it says what was not there: got {notes:?}"
     );
 }
 
