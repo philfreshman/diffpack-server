@@ -350,20 +350,43 @@ is the most one body may weigh; `DOWNLOADS_AT_ONCE` is the most bodies this
 process may be reading at all, taken as a slot before a request is sent and
 held until the body is in memory. What a package name in a tool argument can
 cost is the product of the two, so a cap on either alone bounds nothing: four
-128 MB bodies are the worst this function holds at once, and without the
+128 MB bodies are the worst this function holds *in flight*, and without the
 second number the worst is however many requests the platform sent this
 instance.
+
+In flight is not all it holds. A slot is released once the body is in memory
+and before it is extracted, so archives already downloaded and still being
+read into `FileMap`s sit beside those four. That is deliberate — extraction
+is this process's own work and queueing it behind a download slot would cap
+CPU with a network cap — but it means the product above is the bound on
+*arriving* bytes rather than on the function's memory, and the two are not
+the same number.
 
 The slots are the process's and not a request's, which is the point — a `Ctx`
 is built per request, so a cap held there would bound one caller against
 itself and leave an instance serving several of them unbounded. Four because
-two is the floor: `diff_package_versions` asks for both versions through one
-`try_join!`, and a cap below two would serialise the only call this server
-makes concurrently. A fifth body waits rather than being refused, and the
-wait is bounded by what a slot's holder can do with one — `UPSTREAM_TIMEOUT`
+two is the floor: three callers ask for two archives through one `try_join!`
+— `diff_package_versions`, `get_file_diff`, and `resources::diff::compare`,
+which both diff resources read through — and a cap below two would serialise
+the only shape of call this server makes concurrently. The third arrived
+after the number was chosen and does not move it: each `bytes()` takes one
+slot and gives it back before returning, so no caller holds a slot while
+waiting on another, and there is no hold-and-wait among them to deadlock on
+however many arrive at once.
+
+A fifth body waits rather than being refused, and the wait has a budget of
+its own: `SLOT_WAIT`, which is `UPSTREAM_TIMEOUT` again for a different
+reason. That constant bounds what a slot's *holder* can do with one — it
 covers the request and the body alike, so no slot is held past it however
-badly a registry behaves. The wait counts towards the call's fetch phase,
-because it is the same thing to whoever is waiting for the answer.
+badly a registry behaves — and that argument is per slot. It says nothing
+about how many turns are queued ahead of a caller: at depth `n` the wait is
+`⌈n/4⌉` upstream timeouts, and none of that answers to the 300 seconds
+`vercel.json` gives the function. So a caller still queued after one full
+turn is behind a queue rather than a turn, and is refused as `Busy` — this
+server being full, which is what it is, rather than a `TimedOut` naming a
+registry nothing asked. The two budgets added are what bounds the whole of
+`bytes()`. The wait counts towards the call's fetch phase, because it is the
+same thing to whoever is waiting for the answer.
 
 A caller passes the refusals that differ between seams rather than this module
 guessing them, and the one header that differs. A `404` is a missing *version*
