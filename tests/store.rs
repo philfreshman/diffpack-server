@@ -57,6 +57,17 @@ const TOOL: &str = "diff_package_versions";
 /// the two sets cannot come to disagree about what is in it.
 const ONE_SIDED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/one-sided");
 
+/// The JSON-RPC code a read gets when it reaches [`ONE_SIDED`] for the second
+/// version and the registry publishes nothing there.
+///
+/// Spelled out rather than imported, because it is a wire contract and a
+/// constant taken from the crate would agree with whatever the crate said.
+/// `tests/resources.rs` is where this code is held to being a different one
+/// from the code a URI that resolves to nothing gets; what it is for here is
+/// that a read which had stopped resolving cannot pass as a fetch that
+/// failed.
+const NOT_PUBLISHED: i64 = -32001;
+
 /// The pair every test here compares unless it needs another.
 ///
 /// `diffable` 1.0.0 → 2.0.0 is the same pair `tests/diff_package_versions.rs`
@@ -744,6 +755,13 @@ async fn a_reading_tool_is_served_the_stored_tree_rather_than_the_archives() {
 /// made, and it was paying the same two downloads for the same tree. It goes
 /// through the same walk as the tool now, which is what stops the two
 /// disagreeing about which of them the cache is for.
+///
+/// A read has no `isError` to answer with, so served and missed are told
+/// apart by the JSON-RPC envelope: a `result`, or an `error`. The miss names
+/// its code as well as its presence — since #85 that code is the failure's
+/// own, so "this fetch found nothing published" and "this URI is not ours"
+/// are not one answer, and a read that had quietly stopped resolving could no
+/// longer pass here as a fetch that failed.
 #[tokio::test]
 async fn a_read_of_the_whole_comparison_is_served_the_stored_tree_too() {
     let store = Memory::new();
@@ -771,9 +789,10 @@ async fn a_read_of_the_whole_comparison_is_served_the_stored_tree_too() {
 
     let empty = Memory::new();
     let missed = read(ONE_SIDED, || empty.store(), &uri).await;
-    assert!(
-        missed.get("error").is_some(),
-        "with nothing to be served the same read has to fetch: got {missed}"
+    assert_eq!(
+        missed["error"]["code"], NOT_PUBLISHED,
+        "with nothing to be served the same read has to fetch, and the version \
+         it goes for is not published in this set: got {missed}"
     );
 }
 
@@ -875,6 +894,10 @@ async fn a_renamed_file_is_served_only_the_patch_it_was_asked_for() {
 /// about what the cache is for. It takes the same two steps in the same
 /// order: the entry's patch, and both archives only for a file the entry has
 /// none for.
+///
+/// Served and missed are the envelope's two shapes, for the reason the whole
+/// comparison's read above gives, and the miss names its code for the same
+/// reason.
 #[tokio::test]
 async fn a_read_of_one_files_diff_is_served_the_stored_patch_too() {
     let store = Memory::new();
@@ -904,9 +927,10 @@ async fn a_read_of_one_files_diff_is_served_the_stored_patch_too() {
 
     let empty = Memory::new();
     let missed = read(ONE_SIDED, || empty.store(), &uri).await;
-    assert!(
-        missed.get("error").is_some(),
-        "with nothing to be served the same read has to fetch: got {missed}"
+    assert_eq!(
+        missed["error"]["code"], NOT_PUBLISHED,
+        "with nothing to be served the same read has to fetch, and the version \
+         it goes for is not published in this set: got {missed}"
     );
 }
 

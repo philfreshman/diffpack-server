@@ -26,7 +26,7 @@ src/store/          DiffStore: get(&DiffKey) / put(entry), inside a budget
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
-src/error.rs        Failure, the two channels, redaction
+src/error.rs        Failure, the two channels, the code each earns, redaction
 src/log.rs          one line per tool call: what, cache outcome, how long, how it ended
 src/engine.rs       the only importer of diffpack_engine
 src/health.rs       the /health body
@@ -251,6 +251,12 @@ else, so there is no `isError` half to put a message in and every failure is a
 JSON-RPC error — `Failure::refuse`, beside `respond`, which keeps the message
 for the failures that have one rather than answering "no resource at this URI"
 to a version that does not exist.
+
+Which is why the code has to be worth reading. One channel means the code is
+most of what a client gets, so it is the failure's own and not the read's to
+choose: a version the registry does not have is `-32001` where a URI that
+resolves to nothing is `-32602`, and the two stopped being one answer. See
+[ADR 0017](adr/0017-a-failure-carries-the-code-it-earned.md).
 
 What a tool cannot carry, a resource can: `ttlMs` and `cacheScope` are
 `CacheableResult`'s fields, and `CallToolResult` extends plain `Result`. Each
@@ -742,6 +748,17 @@ model never sees, and a tool error that is a *successful* response carrying
 returns exactly a tool handler's type, so a handler that ends in
 `failure.respond()` cannot put a failure on the wrong channel by accident.
 Redaction over anything that leaves the process lives here too.
+
+`Failure::channel` is the one place either fact is decided, and it is decided
+per variant: which channel this failure takes, and which JSON-RPC code it
+carries when there is no model channel to put it on. Both come out of one
+exhaustive match, so a variant added without an answer does not compile. The
+three implementation codes are the three remedies the message already writes
+out in prose — `-32001` ask for something else, `-32003` try again, `-32004`
+ask for less — beside `-32000` for a fault of this server's and `-32602` for
+the caller's to fix. A `resources/read` is the surface that needs them: it has
+no second channel, so the code is all a client has. See [ADR
+0017](adr/0017-a-failure-carries-the-code-it-earned.md).
 
 ### `src/log.rs` — one line per tool call
 

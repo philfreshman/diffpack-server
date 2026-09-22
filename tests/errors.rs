@@ -108,19 +108,59 @@ fn a_resource_that_does_not_resolve_is_invalid_params() {
 /// use. `-32020`..`-32099` is reserved for the specification — rmcp already
 /// has three codes there — so allocating into it would collide with a
 /// revision nobody has written yet.
+///
+/// All four of them since #85, not only the internal one: a failure that is a
+/// tool error on a `tools/call` still needs a code for the `resources/read`
+/// that has nowhere else to put it, and the three remedies are three codes.
+/// `-32602` is not among them and is not meant to be — it is JSON-RPC's own
+/// for invalid parameters, which is what a URI that resolves to nothing is.
+///
+/// `-32002` is excluded by name as well as by range. It is
+/// `RESOURCE_NOT_FOUND`, and rmcp reads it rather than passing it on: a peer
+/// below `2026-07-28` is sent it unchanged, so a code of ours there would
+/// arrive as "no such resource" — the sentence the other four exist to stop
+/// being said about a version that was never published — and a peer on
+/// `2026-07-28` or newer has it rewritten to `-32602` before the wire, so it
+/// would not arrive as ours at all.
+///
+/// Through `refuse`, which is the one place every failure is a code. The wire
+/// shows one code per read, so `tests/resources.rs` is where the codes a
+/// client sees are held; this is the claim about the whole allocation at once,
+/// and there is no single read that can make it.
 #[test]
 fn our_own_codes_stay_inside_the_implementation_range() {
-    let error = Failure::Internal {
-        doing: "reading the cache",
-    }
-    .respond()
-    .expect_err("an internal failure belongs in the protocol channel");
+    for failure in [
+        Failure::Internal {
+            doing: "reading the cache",
+        },
+        Failure::NoSuchPackage {
+            registry: "npm".to_owned(),
+            package: "nope".to_owned(),
+        },
+        Failure::Busy {
+            waited: error::UPSTREAM_TIMEOUT,
+        },
+        Failure::TooLarge {
+            package: "zod".to_owned(),
+            version: "4.0.0".to_owned(),
+            bytes: 90_000_000,
+            limit: 40_000_000,
+        },
+    ] {
+        let cause = failure.kind();
+        let code = failure.refuse().code.0;
 
-    assert!(
-        (-32019..=-32000).contains(&error.code.0),
-        "{} is outside the -32000..-32019 an implementation may allocate",
-        error.code.0
-    );
+        assert!(
+            (-32019..=-32000).contains(&code),
+            "`{cause}` is {code}, outside the -32000..-32019 an implementation \
+             may allocate"
+        );
+        assert_ne!(
+            code, -32002,
+            "`{cause}` took RESOURCE_NOT_FOUND, which a client below \
+             2026-07-28 reads as a URI this server does not serve"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

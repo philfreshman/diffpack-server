@@ -21,6 +21,22 @@
 //! upwards — which is what lets the same value be named in a log line before
 //! it becomes an answer.
 //!
+//! # Where there is only one place to read it
+//!
+//! A `resources/read` has no second channel. `ReadResourceResult` carries
+//! contents and nothing else, so there is no `isError` half and every failure
+//! is a JSON-RPC error — which means every failure needs a code worth reading,
+//! not only the four that were never going to be a tool error.
+//!
+//! [`Failure::channel`] is where that is decided, and it is decided per
+//! variant. It used to be decided by the call site: a read re-coded anything
+//! that would have been a tool error as `-32602`, so "this version does not
+//! exist" and "this URI is not ours" arrived as one answer and a client had
+//! only the prose to separate them. The codes now say what the sentence says
+//! — ask for something else, try again, ask for less — for the reader that
+//! never gets the sentence. See [ADR
+//! 0017](../docs/adr/0017-a-failure-carries-the-code-it-earned.md).
+//!
 //! # What does not appear in a message
 //!
 //! No token, no signed URL, no path inside the function. The defence is
@@ -46,14 +62,55 @@ use rmcp::model::{CallToolResult, ContentBlock, ErrorCode, ErrorData};
 /// `tests/errors.rs` holds it to.
 pub const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The JSON-RPC code for a failure of ours.
+/// The JSON-RPC code for a failure that is nobody's fault but ours.
 ///
 /// JSON-RPC reserves `-32768..-32000`; within it the MCP specification has
 /// taken `-32020..-32099` for itself — rmcp already carries three codes there
-/// — leaving `-32000..-32019` to an implementation. One code is enough while
-/// there is one kind of failure that is nobody's fault but ours; a second
-/// goes beside it rather than outside the range.
+/// — leaving `-32000..-32019` to an implementation. The three below sit beside
+/// this one rather than outside the range, for the reason this comment already
+/// gave when there was one.
+///
+/// `-32002` is the hole in the run, and deliberately: it is
+/// [`ErrorCode::RESOURCE_NOT_FOUND`], and rmcp reads that code on the way out
+/// rather than passing it through. A peer that negotiated a revision below
+/// `2026-07-28` is sent it unchanged, so a code of ours in that slot arrives
+/// as *no such resource* — the one sentence these four exist to stop being
+/// said about a version that was simply never published. A peer on
+/// `2026-07-28` or newer does not even get that far: SEP-2164 moved
+/// resource-not-found to `-32602`, and rmcp rewrites the code to match before
+/// it reaches the wire. Either way the slot is not ours to mean anything in.
 const INTERNAL_FAILURE: ErrorCode = ErrorCode(-32000);
+
+/// The request was understood, and there is no answer to it.
+///
+/// The registry has no such package or version, the archive will not extract,
+/// the path names a directory, a release history has no shorter form to ask
+/// for. Nothing here is transient and nothing here is a malformed request, so
+/// neither `-32602` nor a retry is the right thing to tell a client: what is
+/// left is to ask for something else. See [`Failure::message`], which says the
+/// same thing in a sentence, for the reader that gets one.
+const ASK_FOR_SOMETHING_ELSE: ErrorCode = ErrorCode(-32001);
+
+/// Nothing was served, and another attempt might be.
+///
+/// A rate limit, a timeout, a registry that could not be reached or answered
+/// with something unusable, this server's own download queue. The request was
+/// fine and so is the thing it asked about; what failed was the attempt.
+const TRY_AGAIN: ErrorCode = ErrorCode(-32003);
+
+/// The answer exists, is larger than this server will serve, and has a
+/// narrower form.
+///
+/// Distinct from [`ASK_FOR_SOMETHING_ELSE`] because the remedy is different
+/// and a client can act on the difference: the thing asked about is there, and
+/// a narrower request for the same thing is the way to it. Distinct from
+/// [`TRY_AGAIN`] because asking again unchanged will fail identically.
+///
+/// All three clauses have to hold, which is why being over a limit is not on
+/// its own enough to earn this code. A client reads it as *narrow and ask
+/// again*, so a failure with nothing narrower behind it would send that client
+/// round the same call for as long as it kept obeying.
+const ASK_FOR_LESS: ErrorCode = ErrorCode(-32004);
 
 /// Everything this server can fail at.
 ///
@@ -287,6 +344,41 @@ pub enum Failure {
     Internal { doing: &'static str },
 }
 
+/// Which of MCP's channels a [`Failure`] takes, and the code it carries when
+/// it travels as a JSON-RPC error.
+///
+/// Two facts, answered in one match so that they cannot come apart: whether a
+/// model can act on this failure, and which code a client reads when there is
+/// no model channel to put it on. The code is not conditional on the channel
+/// — every failure has one, because every failure can reach a `resources/read`
+/// — which is the whole of what #85 changed. It used to be the call site's,
+/// and a call site cannot know what went wrong.
+#[derive(Debug, Clone, Copy)]
+enum Channel {
+    /// The model's: a successful response carrying `isError: true`.
+    ///
+    /// A `tools/call` has that half. A `resources/read` does not, so a failure
+    /// that would take this channel and arrives at a read travels as the code
+    /// beside it instead, with its message intact.
+    Model(ErrorCode),
+
+    /// The client's: a JSON-RPC error, on every surface there is.
+    ///
+    /// The model does not see one, so the code is most of what is left. These
+    /// are the failures a model could do nothing with anyway — a URI that is
+    /// not ours, arguments that did not validate, a fault of this server's.
+    Protocol(ErrorCode),
+}
+
+impl Channel {
+    /// The JSON-RPC code, whichever channel this is.
+    const fn code(self) -> ErrorCode {
+        match self {
+            Self::Model(code) | Self::Protocol(code) => code,
+        }
+    }
+}
+
 impl Failure {
     /// Put this failure on the channel it belongs to.
     ///
@@ -296,32 +388,16 @@ impl Failure {
     /// failure and the answer it becomes — and directly from the suite,
     /// where the channel a failure takes is the thing under test.
     pub fn respond(self) -> Result<CallToolResult, ErrorData> {
-        match self {
+        match self.channel() {
+            // Something happened to a tool that ran, and it is something the
+            // model can do something about.
+            Channel::Model(_) => Ok(CallToolResult::error(vec![ContentBlock::text(
+                self.message(),
+            )])),
+
             // The caller's fault, or nobody's: there is nothing a model can
             // do with these, so they do not go where a model would read them.
-            Self::InvalidParams { ref message } => Err(ErrorData::invalid_params(
-                format!("Invalid parameters: {}", redact(message)),
-                None,
-            )),
-            Self::NoSuchResource { ref uri } => Err(ErrorData::invalid_params(
-                format!("No resource at `{}`.", redact(uri)),
-                None,
-            )),
-            Self::NoSuchTool { ref name } => Err(ErrorData::invalid_params(
-                format!("No tool named `{}`.", redact(name)),
-                None,
-            )),
-            Self::Internal { doing } => Err(ErrorData::new(
-                INTERNAL_FAILURE,
-                format!("diffpack failed while {doing}."),
-                None,
-            )),
-
-            // Everything else happened to a tool that ran, and is something
-            // the model can do something about.
-            other => Ok(CallToolResult::error(vec![ContentBlock::text(
-                other.message(),
-            )])),
+            Channel::Protocol(code) => Err(ErrorData::new(code, self.message(), None)),
         }
     }
 
@@ -339,15 +415,79 @@ impl Failure {
     /// carried anyway for the failures that have one. A read of a comparison
     /// can fail the way the tool that computes it fails — a version the
     /// registry does not have — and "no resource at this URI" would be a
-    /// worse answer to that than the sentence naming the version.
+    /// worse answer to that than the sentence naming the version. That
+    /// argument outlived the function that used to make it: what changed in
+    /// #85 is the code beside the message, not the decision to keep the
+    /// message.
+    ///
+    /// The code is [`Self::channel`]'s and not this function's. A read that
+    /// re-coded a failure on arrival is exactly how "this version does not
+    /// exist" and "this URI is not ours" became one answer.
+    ///
+    /// The [`redact`] here is a second pass and not the only one — every field
+    /// that carries text from elsewhere is already redacted by
+    /// [`Self::message`], which is why [`Self::respond`] needs none. It stays
+    /// because this is the last thing a read's message passes through, and a
+    /// redactor that runs twice costs a walk over a sentence.
     pub fn refuse(self) -> ErrorData {
-        let message = self.message();
-        match self.respond() {
-            Err(error) => error,
-            // A tool error, arriving where there is no tool. Its message is
-            // the part worth keeping; `invalid_params` is the code, because
-            // what the client can act on is the URI it sent.
-            Ok(_) => ErrorData::invalid_params(redact(&message), None),
+        ErrorData::new(self.channel().code(), redact(&self.message()), None)
+    }
+
+    /// Where this failure goes, and under which code.
+    ///
+    /// The match is exhaustive for the reason [`Self::kind`]'s is: a variant
+    /// added without a channel here does not compile, which is the only way a
+    /// new failure cannot arrive on somebody else's.
+    ///
+    /// The three codes are the three remedies, and they are the ones
+    /// [`Self::message`] already writes out in prose — "try again" for what is
+    /// transient, nothing of the sort for what is not, a narrower request for
+    /// what is merely too big. A read's client never sees that prose, so the
+    /// code has to carry it or the distinction is lost.
+    fn channel(&self) -> Channel {
+        match self {
+            // The registry answered, and the answer is no. Asking again
+            // changes nothing; asking for something else might.
+            //
+            // `VersionsTooLarge` is here and not with the other two limits,
+            // because the remedy and not the cause is what a code carries. A
+            // package's release history has no narrower form to ask for —
+            // [`Self::message`] says so in as many words — so telling a
+            // client to ask for less would send it back with the same call.
+            Self::NoSuchPackage { .. }
+            | Self::NoSuchVersion { .. }
+            | Self::MalformedArchive { .. }
+            | Self::UnreadableVersions { .. }
+            | Self::VersionsTooLarge { .. }
+            | Self::UnreadableSearch { .. }
+            | Self::NoSuchFile { .. }
+            | Self::PathIsDirectory { .. }
+            | Self::UnresolvableArchiveUrl { .. } => Channel::Model(ASK_FOR_SOMETHING_ELSE),
+
+            // Nothing was served. The request was fine and so is the thing it
+            // asked about — what failed was the attempt.
+            Self::RateLimited { .. }
+            | Self::TimedOut { .. }
+            | Self::Busy { .. }
+            | Self::Unreachable { .. }
+            | Self::Unavailable { .. } => Channel::Model(TRY_AGAIN),
+
+            // The thing asked about is there and is over a limit. A narrower
+            // request for the same thing is the way to it — a single file
+            // instead of a tree, a tighter query, the cursor past one entry.
+            Self::TooLarge { .. } | Self::SearchTooLarge { .. } | Self::ItemTooLarge { .. } => {
+                Channel::Model(ASK_FOR_LESS)
+            }
+
+            // Invalid method parameter(s), in the JSON-RPC specification's own
+            // words: a URI that resolves to nothing, a tool nothing answers
+            // to, arguments a schema refused. Each is the caller's to fix out
+            // of what it was already told.
+            Self::InvalidParams { .. } | Self::NoSuchTool { .. } | Self::NoSuchResource { .. } => {
+                Channel::Protocol(ErrorCode::INVALID_PARAMS)
+            }
+
+            Self::Internal { .. } => Channel::Protocol(INTERNAL_FAILURE),
         }
     }
 
@@ -557,10 +697,11 @@ impl Failure {
                 message
             }
 
-            // These four never reach a model — `respond` sends them down the
-            // protocol channel — but a `message` that lied about them would
-            // be a trap for the next person to add a variant.
-            Self::InvalidParams { message } => redact(message),
+            // These four never reach a model — they take the protocol
+            // channel, whichever surface they were raised on — but they are
+            // still the text a client is shown, and `respond` and `refuse`
+            // both take it from here so there is one spelling of each.
+            Self::InvalidParams { message } => format!("Invalid parameters: {}", redact(message)),
             Self::NoSuchResource { uri } => format!("No resource at `{}`.", redact(uri)),
             Self::Internal { doing } => format!("diffpack failed while {doing}."),
             Self::NoSuchTool { name } => format!("No tool named `{}`.", redact(name)),
