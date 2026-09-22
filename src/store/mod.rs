@@ -68,6 +68,19 @@ pub struct Entry {
 struct Meta {
     #[serde(flatten)]
     key: DiffKey,
+
+    /// Whether this entry was written without its patches.
+    ///
+    /// The difference between a comparison whose patches were dropped and
+    /// one with nothing to patch, which is otherwise the same absent blob.
+    /// #15 needs to tell them apart: one means render it on demand, and the
+    /// other means there is nothing to render.
+    ///
+    /// Defaulted rather than required, because a blob written before this
+    /// field existed is an entry whose patches are where they should be.
+    #[serde(default)]
+    patches_omitted: bool,
+
     tree: DiffFileEntry,
 }
 
@@ -80,6 +93,15 @@ struct Meta {
 /// asks.
 pub const PATCH_CAP: usize = 256 * 1024;
 
+/// The most one entry may weigh before its patches are dropped from it.
+///
+/// A guard against pathological patch volume rather than against trees: a
+/// package with four thousand files is a few hundred KB of tree, and the
+/// tree is what is expensive to work out again. What this stops is one
+/// comparison taking a thirtieth of the 256 MB budget and everything else's
+/// place in it.
+pub const ENTRY_CAP: usize = 8 * 1024 * 1024;
+
 /// The interface the rest of the crate has to cached results.
 pub struct DiffStore {
     source: Source,
@@ -89,6 +111,9 @@ pub struct DiffStore {
     /// cap can then be exercised with a small number and a real comparison
     /// instead of with a file nobody wants in a fixture set.
     patch_cap: usize,
+
+    /// The most one entry may weigh, and a field for the same reason.
+    entry_cap: usize,
 }
 
 /// Where a store's blobs actually live.
@@ -132,6 +157,7 @@ impl DiffStore {
         Self {
             source,
             patch_cap: PATCH_CAP,
+            entry_cap: ENTRY_CAP,
         }
     }
 
@@ -139,6 +165,14 @@ impl DiffStore {
     pub fn capping_patches_at(self, bytes: usize) -> Self {
         Self {
             patch_cap: bytes,
+            ..self
+        }
+    }
+
+    /// The same store, dropping the patches from any entry over `bytes`.
+    pub fn capping_entries_at(self, bytes: usize) -> Self {
+        Self {
+            entry_cap: bytes,
             ..self
         }
     }
@@ -193,8 +227,9 @@ impl DiffStore {
             .filter(|(_, patch)| patch.data.len() <= self.patch_cap)
             .collect();
 
-        let meta = Meta {
+        let mut meta = Meta {
             key: entry.key,
+            patches_omitted: false,
             tree: entry.tree,
         };
 
@@ -202,6 +237,21 @@ impl DiffStore {
         else {
             return;
         };
+
+        // Both blobs together, because the cap is on the entry. A tree that
+        // is over it on its own keeps nothing by dropping its patches — but
+        // the patches are the only half of an entry there is to drop, and
+        // the tree is the half that is expensive to work out again.
+        if bytes.len() + patches.len() > self.entry_cap {
+            meta.patches_omitted = true;
+
+            let Ok(bytes) = serde_json::to_vec(&meta) else {
+                return;
+            };
+
+            self.write(&meta.key.meta_path(), bytes).await;
+            return;
+        }
 
         self.write(&meta.key.meta_path(), bytes).await;
         self.write(&meta.key.patches_path(), patches).await;

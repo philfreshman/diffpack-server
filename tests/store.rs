@@ -215,6 +215,44 @@ async fn a_patch_over_the_cap_is_left_out_and_the_others_are_kept() {
     );
 }
 
+/// An entry too big to keep whole keeps its tree and says its patches are gone.
+///
+/// The tree is the expensive half to recompute and the small half to store,
+/// so it stays; the patches are what a pathological comparison makes
+/// enormous, and they go. `patches_omitted` is the difference between an
+/// entry whose patches are missing and an entry with nothing to patch —
+/// without it, #15 would have to guess which of the two it was looking at.
+///
+/// Driven at 100 bytes for the same reason the patch cap is, and shown
+/// against a store with the real caps, because a flag that is always true
+/// says nothing.
+#[tokio::test]
+async fn an_entry_over_the_cap_keeps_its_tree_and_says_its_patches_are_gone() {
+    let store = Memory::new();
+
+    let answer = call(|| store.store().capping_entries_at(100), diffable()).await;
+
+    assert_eq!(
+        store.written(),
+        vec![meta_of(&answer)],
+        "the tree is written and the patches are not"
+    );
+    assert_eq!(
+        blob(&store, &meta_of(&answer))["patches_omitted"],
+        json!(true),
+        "an entry whose patches were dropped says so"
+    );
+
+    let whole = Memory::new();
+    let answer = call(|| whole.store(), diffable()).await;
+
+    assert_eq!(
+        blob(&whole, &meta_of(&answer))["patches_omitted"],
+        json!(false),
+        "the same comparison under the real caps keeps them"
+    );
+}
+
 /// A comparison is named by every argument, not by the package and the pair.
 ///
 /// Each variation below changes one field of the cache key and nothing else,
@@ -278,11 +316,21 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
 
 /// Where the patches of the comparison `answer` is about live.
 fn patches_of(answer: &Value) -> String {
+    format!("{}/patches.json", under(answer))
+}
+
+/// Where the tree of the comparison `answer` is about lives.
+fn meta_of(answer: &Value) -> String {
+    format!("{}/meta.json", under(answer))
+}
+
+/// The prefix the comparison `answer` is about is kept under.
+fn under(answer: &Value) -> String {
     let diff_id = answer["structuredContent"]["diff_id"]
         .as_str()
         .unwrap_or_else(|| panic!("the answer names the comparison, got {answer}"));
 
-    format!("diffs/v1/{diff_id}/patches.json")
+    format!("diffs/v1/{diff_id}")
 }
 
 /// The blob at `pathname`, as the JSON it is.
