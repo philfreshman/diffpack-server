@@ -1,7 +1,74 @@
 //! `get_file_diff` — one file's patch out of a comparison already made.
 //!
-//! What an agent is actually after once `get_diff_tree` has told it which
-//! files moved: the unified diff for one of them.
+//! The question an agent asks after [`super::get_diff_tree`] has told it
+//! which files moved: what did this one actually change. That tool says a
+//! file is `modified` and how many lines it gained and lost; this is the
+//! lines.
+//!
+//! # The renderer is transcribed, not called
+//!
+//! `diffpack-engine` decides which of five things one file's answer is, in a
+//! function that is private to it and reachable only through a
+//! `wasm_bindgen` entry point — so [`render`] below is that function written
+//! out rather than a call to it. The output has to stay byte-identical to
+//! what the browser shows, which makes every wart in it deliberate: the
+//! trailing `+ ` a file ending in a newline gets from being split on `\n`,
+//! the `--- from/` header naming the *new* path on a rename, and the byte
+//! comparison that decides "unchanged" even under a handle that says to
+//! ignore whitespace.
+//!
+//! Only the fourth case — both versions have the file and it changed — goes
+//! through anything public, so it is the only one `tests/get_file_diff.rs`
+//! can hold against the engine directly. The rest are held against #15's
+//! table.
+//!
+//! # One departure, on purpose
+//!
+//! A directory is refused. The engine reads one as having no content, which
+//! puts it in the fifth case and answers that a directory both versions ship
+//! is in neither of them. That is false about a path the package has and an
+//! agent has nothing in the answer to doubt it with, so it takes the
+//! refusal [`super::get_file_content`] gives a directory, for the same
+//! reason.
+//!
+//! # Why `context_lines` is this tool's and not the engine's
+//!
+//! The engine emits every line of a file, unchanged ones included, because
+//! the browser renders the whole file in a scrollable pane. An agent reading
+//! a three-line change does not want the other three thousand nine hundred,
+//! so [`trim`] cuts them here — and adds the `@@` headers the engine has no
+//! need for, because once lines are missing there is no other way to know
+//! where the rest of them sat.
+//!
+//! That is presentation over the engine's output and not a second way of
+//! computing a diff, which is a property rather than an intention: every line
+//! a trimmed answer carries is a line of the full one, in the full one's
+//! order. The suite holds it over six files rather than reading it off the
+//! implementation.
+//!
+//! # Where a cached result would come in
+//!
+//! Nowhere yet, and that is worth saying because it looks like an omission.
+//! The DiffStore arrives with #21; until it does, every call re-extracts both
+//! archives from the inputs the handle carries. That is precisely the path a
+//! cache miss takes, so the "render it on demand" half of #15 is the only
+//! half there is here, and the tests that hold it will go on holding it once
+//! a store is in front of it.
+//!
+//! # Where the descriptions come from
+//!
+//! Every doc comment on a field of [`Args`] and [`Patch`] becomes a
+//! `description` in a schema a model reads, so it is written for that reader
+//! and names nothing in this repository. Why a field is shaped the way it is
+//! belongs here or in an ordinary comment beside the code.
+//!
+//! Two fields have no doc comment at all, deliberately. `handle` is
+//! [`crate::handle`]'s type and `max_bytes` is [`crate::page`]'s, and those
+//! modules write their descriptions. A doc comment here would *replace*
+//! those rather than add to them, which is how four tools that take one
+//! handle end up describing it four ways. [`ContextLines`] is this module's
+//! own type and writes its own for the same reason: the rule is this tool's,
+//! so the schema carrying it is too.
 
 use std::borrow::Cow;
 
@@ -43,8 +110,12 @@ pub struct Args {
 
     // No doc comment: the type writes its own, for the reason `page`'s types
     // do. See `ContextLines`.
+    //
+    // Not an `Option`, so that the schema a model reads is the two shapes
+    // this argument takes rather than those wrapped in an `anyOf` with a
+    // null beside them. Absent means the default, which the type answers for.
     #[serde(default)]
-    pub context_lines: Option<ContextLines>,
+    pub context_lines: ContextLines,
 
     // No doc comment, on purpose: `page` writes this field's description,
     // and a sentence here would replace the one carrying the number that
@@ -95,6 +166,15 @@ pub enum ContextLines {
 /// four thousand lines to communicate a three-line change spends its context
 /// and this server's response budget on what did not happen.
 pub const DEFAULT_CONTEXT: u32 = 3;
+
+/// An absent argument is [`DEFAULT_CONTEXT`], here rather than at the point
+/// of use so that the number in the schema and the number the handler applies
+/// are one constant.
+impl Default for ContextLines {
+    fn default() -> Self {
+        Self::Around(DEFAULT_CONTEXT)
+    }
+}
 
 /// The word that turns trimming off.
 const FULL: &str = "full";
@@ -385,9 +465,23 @@ impl Tool for GetFileDiff {
     const NAME: &'static str = "get_file_diff";
     const TITLE: &'static str = "Get file diff";
     const DESCRIPTION: &'static str = "\
-        Read the unified diff for one file of a comparison you have already \
-        made. Takes the handle `diff_package_versions` gave you and a path \
-        from the comparison's tree.";
+        Read one file's diff out of a comparison you have already made, so \
+        you can see what actually changed in it. Takes the handle \
+        `diff_package_versions` gave you and a path from that comparison's \
+        tree. Answers with a unified diff: a `--- from` / `+++ to` header, \
+        `@@` hunks, and one line per change written as a sign, a space and \
+        the line. Three things are worth knowing before you read one. \
+        `isDiff` is false when the text is not a diff at all — a file both \
+        versions ship byte for byte comes back as itself, and a path neither \
+        version has comes back as a sentence saying so; read a false as a \
+        file rather than parsing it as a patch. A file that was renamed needs \
+        `old_path` as well, which the tree gives you beside it — without it \
+        there is no file at that path in the first version and the answer is \
+        the whole file, added. And `context_lines` is how many unchanged \
+        lines come with each change, three by default: a short answer usually \
+        means the rest of the file was left out rather than that little \
+        changed, and `full` is how you ask for all of it. A long diff is cut \
+        short, and the answer says so and gives the whole thing's size.";
 
     /// It downloads and compares; it changes nothing anywhere.
     const READ_ONLY: bool = true;
@@ -451,7 +545,7 @@ impl Tool for GetFileDiff {
         // Only a diff is trimmed. The other two answers are a file's own
         // content and a sentence, and neither has a header to keep or a
         // change to keep lines around.
-        let text = match args.context_lines.unwrap_or(ContextLines::Around(DEFAULT_CONTEXT)) {
+        let text = match args.context_lines {
             ContextLines::Around(lines) if is_diff => trim(&text, lines),
             _ => text,
         };

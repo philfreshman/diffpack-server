@@ -39,9 +39,12 @@
 
 use axum::body::Body;
 use axum::http::Request;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use diffpack_server::engine;
 use diffpack_server::handle::{DiffHandle, Inputs};
 use diffpack_server::mcp::Diffpack;
+use diffpack_server::page;
 use diffpack_server::registry::Registry;
 use diffpack_server::router;
 use diffpack_server::tools::Ctx;
@@ -115,6 +118,144 @@ const bravo02 = 2;
 const bravo03 = 2;
 const bravo04 = 2;
 ";
+
+// ---------------------------------------------------------------------------
+// What a client is told
+// ---------------------------------------------------------------------------
+
+/// The definition carries what an agent needs to call this correctly having
+/// read nothing else, which is #23's question asked of the tool that exists.
+#[tokio::test]
+async fn the_definition_carries_everything_an_agent_needs() {
+    let tool = listed(TOOL).await;
+
+    for field in ["handle", "path", "old_path", "context_lines", "max_bytes"] {
+        assert!(
+            tool["inputSchema"]["properties"][field].is_object(),
+            "the input schema should describe `{field}`, got {}",
+            tool["inputSchema"]
+        );
+    }
+
+    assert_eq!(
+        tool["inputSchema"]["required"],
+        json!(["handle", "path"]),
+        "a comparison and a file inside it are the two things a caller must \
+         name; everything else has an answer without it: got {}",
+        tool["inputSchema"]
+    );
+
+    assert_eq!(
+        tool["outputSchema"]["type"],
+        json!("object"),
+        "a tool answering with structured content declares its shape, got {tool}"
+    );
+    for field in ["text", "truncated", "bytes", "isDiff"] {
+        assert!(
+            tool["outputSchema"]["properties"][field].is_object(),
+            "the output schema should describe `{field}`, got {}",
+            tool["outputSchema"]
+        );
+    }
+
+    assert_eq!(
+        tool["annotations"]["readOnlyHint"],
+        json!(true),
+        "reading a patch back changes nothing a caller can observe, and a \
+         client deciding whether to ask for confirmation reads this, got {}",
+        tool["annotations"]
+    );
+    assert_eq!(
+        tool["annotations"]["idempotentHint"],
+        json!(true),
+        "a handle names two published versions, which are immutable, so the \
+         same patch is the same patch, got {}",
+        tool["annotations"]
+    );
+    assert_eq!(
+        tool["annotations"]["openWorldHint"],
+        json!(true),
+        "the handle names a package on a registry, which is a world this \
+         server does not control, got {}",
+        tool["annotations"]
+    );
+}
+
+/// The handle this tool takes is described by the module that mints it.
+///
+/// Four tools take one, and a sentence written here would be a fifth
+/// description of the same string. What a caller has to know — where it comes
+/// from, and that it is not built by hand — belongs to the one module that
+/// knows it.
+#[tokio::test]
+async fn the_handle_this_tool_takes_is_described_by_the_module_that_mints_it() {
+    let tool = listed(TOOL).await;
+    let described = tool["inputSchema"]["properties"]["handle"]["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the handle carries a description, got {tool}"));
+
+    assert!(
+        described.contains("diff_package_versions"),
+        "a caller reading this should be told which call produces one: got \
+         {described}"
+    );
+    assert!(
+        described.contains("passed back"),
+        "and that it is passed back rather than written: got {described}"
+    );
+}
+
+/// The context argument documents the number that binds.
+///
+/// The default reaches a model from the schema rather than from a sentence
+/// this tool wrote, so the number an agent reads and the number the handler
+/// applies cannot be two different threes.
+#[tokio::test]
+async fn the_context_argument_documents_the_default_that_binds() {
+    let tool = listed(TOOL).await;
+    let context = tool["inputSchema"]["properties"]["context_lines"].clone();
+
+    assert_eq!(
+        context["default"],
+        json!(3),
+        "the default in the schema is the one the handler uses when the \
+         argument is absent, which `context_defaults_to_three_lines` holds \
+         from the other end: got {context}"
+    );
+
+    let described = context["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the argument carries a description, got {context}"));
+    assert!(
+        described.contains("full"),
+        "an agent that wants the whole file has to be told the word for it, \
+         since nothing about a number suggests one: got {described}"
+    );
+}
+
+/// The description says the three things an agent would otherwise get wrong.
+///
+/// Each is a case where a correct answer reads as a wrong one to a caller
+/// that was not told: an answer that is a file rather than a patch, a renamed
+/// file that reads as added unless its old path comes with it, and a patch
+/// that is short because context was trimmed rather than because little
+/// changed.
+#[tokio::test]
+async fn the_description_says_what_an_agent_would_otherwise_get_wrong() {
+    let tool = listed(TOOL).await;
+    let description = tool["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a tool carries a description, got {tool}"));
+
+    for said in ["isDiff", "old_path", "context_lines"] {
+        assert!(
+            description.contains(said),
+            "the description should name `{said}`, which is a case where a \
+             correct answer reads as a wrong one to a caller that was not \
+             told: got {description}"
+        );
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The five cases
@@ -744,8 +885,253 @@ async fn a_trimmed_answer_carries_no_line_the_full_answer_does_not() {
 }
 
 // ---------------------------------------------------------------------------
+// How much of it comes back
+// ---------------------------------------------------------------------------
+
+/// A patch over `max_bytes` is cut, says so, and states its real size.
+///
+/// The cut itself is `src/page.rs`'s and `tests/page.rs` holds where it
+/// falls. What is here is that this tool goes through that module rather than
+/// handing back whatever it rendered.
+#[tokio::test]
+async fn a_patch_over_max_bytes_is_cut_and_says_so() {
+    let whole = patch(json!({
+        "handle": diffable(),
+        "path": "src/index.js",
+        "context_lines": "full",
+    }))
+    .await;
+
+    let cut = patch(json!({
+        "handle": diffable(),
+        "path": "src/index.js",
+        "context_lines": "full",
+        "max_bytes": 20,
+    }))
+    .await;
+
+    assert_eq!(
+        cut["truncated"],
+        json!(true),
+        "a patch cut short says so, because a silently shortened diff is how \
+         an agent concludes a change was not made: got {cut}"
+    );
+    assert!(
+        text(&cut).contains("truncated by diffpack"),
+        "the text itself carries the marker, for a reader that never looks at \
+         the flag beside it: got {cut}"
+    );
+    assert_eq!(
+        cut["bytes"], whole["bytes"],
+        "the size reported is the whole patch's and not the piece that came \
+         back, or an agent is told a diff it has seen a fifth of is a fifth \
+         long: got {cut}"
+    );
+}
+
+/// The size a cut is measured against is the patch at the context asked for.
+///
+/// Trimming happens before the cut, which is what makes `context_lines` worth
+/// having: a caller that asked for three lines of context is not charged the
+/// response budget for the lines it asked to be spared.
+#[tokio::test]
+async fn the_reported_size_is_the_patch_at_the_context_asked_for() {
+    let trimmed = patch(json!({
+        "handle": handle("renamey", "1.0.0", "2.0.0", false),
+        "path": "src/processor.js",
+        "old_path": "src/handler.js",
+        "context_lines": 3,
+    }))
+    .await;
+
+    let full = patch(json!({
+        "handle": handle("renamey", "1.0.0", "2.0.0", false),
+        "path": "src/processor.js",
+        "old_path": "src/handler.js",
+        "context_lines": "full",
+    }))
+    .await;
+
+    let (trimmed, full) = (
+        trimmed["bytes"].as_u64().expect("a size is a number"),
+        full["bytes"].as_u64().expect("a size is a number"),
+    );
+
+    assert!(
+        trimmed < full,
+        "the trimmed patch should be the smaller of the two, since seven lines \
+         of this file were dropped: got {trimmed} against {full}"
+    );
+}
+
+/// A file larger than a response is cut with nothing asked for.
+///
+/// `odd-files` ships a two-megabyte file and has one version, so comparing it
+/// against itself is the largest answer this suite can produce — a file
+/// neither version touched, carried whole. The server's own cap is what stops
+/// it, because a response over the platform's limit is not a long answer but
+/// an error with nothing in it.
+///
+/// What this does not prove is the same cap over a *diff* that large, which
+/// no pair of fixture archives can build. It is the same call to the same
+/// module either way, and `tests/page.rs` is what holds where the cut falls.
+#[tokio::test]
+async fn an_answer_larger_than_a_response_is_cut_without_being_asked() {
+    let (body, result) = respond(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": TOOL,
+            "arguments": {
+                "handle": handle("odd-files", "1.0.0", "1.0.0", false),
+                "path": "big.txt",
+            },
+            "_meta": meta(),
+        },
+    }))
+    .await;
+
+    let answer = result["result"]["structuredContent"].clone();
+
+    assert_eq!(
+        answer["truncated"],
+        json!(true),
+        "a two-megabyte answer does not fit under the response ceiling and is \
+         cut whether or not a cap was asked for: got {}",
+        answer["bytes"]
+    );
+    assert_eq!(
+        answer["bytes"],
+        json!(2_000_000),
+        "the size reported is the whole file's: got {}",
+        answer["bytes"]
+    );
+    assert!(
+        body.len() < page::RESPONSE_CEILING,
+        "the frame this server wrote is {} bytes, over the {} the platform \
+         will carry",
+        body.len(),
+        page::RESPONSE_CEILING,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // What is refused
 // ---------------------------------------------------------------------------
+
+/// A handle that is not one never reaches the handler.
+///
+/// `tests/handle.rs` holds the four ways a handle is refused. What is asserted
+/// here is that this tool's argument is that type rather than a string it
+/// checks itself: a tool that verified late would answer `-32603` or, worse,
+/// fetch something first.
+#[tokio::test]
+async fn a_handle_that_is_not_one_is_a_protocol_error() {
+    let answer = post(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": TOOL,
+            "arguments": { "handle": "not-a-handle", "path": "src/index.js" },
+            "_meta": meta(),
+        },
+    }))
+    .await;
+
+    assert_eq!(
+        answer["error"]["code"],
+        json!(-32602),
+        "a handle a client made up is the client's mistake and not something a \
+         model can reword its way out of: got {answer}"
+    );
+}
+
+/// A handle whose two halves disagree is refused before anything is fetched.
+#[tokio::test]
+async fn a_handle_whose_halves_disagree_is_a_protocol_error() {
+    let answer = post(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": TOOL,
+            "arguments": { "handle": edited(), "path": "src/index.js" },
+            "_meta": meta(),
+        },
+    }))
+    .await;
+
+    assert_eq!(
+        answer["error"]["code"],
+        json!(-32602),
+        "a handle whose `diff_id` does not name the inputs beside it names one \
+         diff and describes another: got {answer}"
+    );
+}
+
+/// A version the registry does not have is a tool error naming it.
+///
+/// The model channel rather than the protocol one: the handle decoded and the
+/// arguments were well formed, and what went wrong is something an agent can
+/// act on by asking for a version that exists.
+#[tokio::test]
+async fn a_version_the_registry_does_not_have_names_what_was_not_found() {
+    let result = call(json!({
+        "handle": handle("diffable", "1.0.0", "9.9.9", false),
+        "path": "src/index.js",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(true),
+        "a version that is not published cannot be diffed: got {result}"
+    );
+
+    let message = result["content"][0]["text"]
+        .as_str()
+        .expect("a tool error carries text for the model");
+    assert!(
+        message.contains("diffable") && message.contains("9.9.9"),
+        "the message should name the package and the version that is missing, \
+         since a bare `not found` leaves an agent guessing which of the two \
+         was wrong: got {message}"
+    );
+}
+
+/// A package the registry does not have is a tool error naming it.
+///
+/// A crate rather than an npm package, because the fixture set's way of
+/// saying "the registry serves nothing here" is a `null` entry and that is
+/// where it has one.
+#[tokio::test]
+async fn a_package_the_registry_does_not_have_names_what_was_not_found() {
+    let handle = DiffHandle::mint(Inputs {
+        registry: Registry::Crates,
+        package: "not-a-real-crate".to_owned(),
+        from_version: "1.0.0".to_owned(),
+        to_version: "1.0.0".to_owned(),
+        similarity_threshold: 0.75,
+        ignore_whitespace: false,
+    })
+    .encode();
+
+    let result = call(json!({ "handle": handle, "path": "src/lib.rs" })).await;
+
+    assert_eq!(
+        result["isError"],
+        json!(true),
+        "a package that does not exist cannot be diffed: got {result}"
+    );
+    assert!(
+        result["content"][0]["text"]
+            .as_str()
+            .is_some_and(|message| message.contains("not-a-real-crate")),
+        "the message should name what was asked for: got {result}"
+    );
+}
 
 /// A directory is refused rather than reported as a path in neither version.
 ///
@@ -822,6 +1208,53 @@ async fn patch(arguments: Value) -> Value {
     );
 
     result["structuredContent"].clone()
+}
+
+/// The listed definition of `name`, or a panic naming what was listed.
+async fn listed(name: &str) -> Value {
+    let answer = post(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": { "_meta": meta() },
+    }))
+    .await;
+
+    let tools = answer["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list should answer with an array, got {answer}"))
+        .clone();
+
+    tools
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .unwrap_or_else(|| {
+            let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+            panic!("`{name}` should be listed, got {names:?}")
+        })
+        .clone()
+}
+
+/// A handle with its package changed and its `diff_id` left alone.
+///
+/// What an agent does to a handle it can read part of: change the thing it is
+/// asking about and leave the identifier, which looks like an internal
+/// detail. The encoding is spelled out here rather than taken from the crate,
+/// so this is a forgery a client could send rather than one this server
+/// helped build.
+fn edited() -> String {
+    let encoded = diffable();
+    let encoded = encoded
+        .strip_prefix("d1:")
+        .expect("a handle this server minted");
+    let payload = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .expect("a handle's payload is base64url");
+    let mut payload: Value = serde_json::from_slice(&payload).expect("a handle's payload is JSON");
+
+    payload["package"] = json!("something-else");
+
+    format!("d1:{}", URL_SAFE_NO_PAD.encode(payload.to_string()))
 }
 
 /// The `text` of an answer, or a panic naming what came back instead.
