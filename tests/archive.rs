@@ -16,9 +16,12 @@
 //! The live adapter is exercised in `tests/networked.rs`, which reaches the
 //! real registries and is `#[ignore]`d for that reason.
 
-use diffpack_server::archive::{self, Archive, FileMap};
+use std::sync::Arc;
+
+use diffpack_server::archive::{self, Archive, FileMap, InFlight};
 use diffpack_server::error::Failure;
 use diffpack_server::registry::Registry;
+use futures::FutureExt;
 
 /// The npm rule that is not obvious, through the whole seam: the path keeps a
 /// scope and the filename drops it, so the bytes for `@types/node` come back
@@ -215,6 +218,78 @@ fn the_size_cap_is_above_what_a_large_package_weighs() {
         "an 80 MB crate is an ordinary thing to diff, got a cap of {} bytes",
         archive::SIZE_LIMIT
     );
+}
+
+/// The guard on concurrent downloads is a budget in *bytes*, and this is what
+/// a count of downloads cannot say: a call arriving while another call's pair
+/// is still on the way waits for room, because what bounds this function is
+/// what those downloads weigh together rather than how many of them there are.
+///
+/// The pair already in flight is held here rather than fetched, and that is
+/// the whole reason this test says anything. Two fetches through the fixture
+/// adapter do not overlap — it reads a file and never goes near a socket, so
+/// the first finishes and gives its room back before the second is polled —
+/// and a test that simply called `fetch` twice would pass with the budget
+/// deleted and pass with it halved. A reservation nobody has dropped is the
+/// only honest way to be *in* the middle of a download here.
+///
+/// What is left is a fetch that answers `Pending` on its first poll, which is
+/// a fetch waiting on the budget and on nothing else.
+#[tokio::test]
+async fn a_download_waits_while_another_calls_pair_is_still_arriving() {
+    let in_flight = Arc::new(InFlight::of(archive::IN_FLIGHT_LIMIT));
+
+    // One `diff_package_versions` call, both of its archives at the size cap
+    // and both still on the way. Asked for in one reservation rather than two
+    // because two is a wait if the budget ever stops being worth two
+    // archives, and a test that hangs is a test that says nothing.
+    let pair = in_flight.reserve(archive::IN_FLIGHT_LIMIT).await;
+
+    let archive = fixtures().with_in_flight(Arc::clone(&in_flight));
+
+    assert!(
+        archive
+            .fetch(Registry::Npm, "@types/node", "20.1.0")
+            .now_or_never()
+            .is_none(),
+        "a download should wait while another call has the whole budget in flight"
+    );
+
+    drop(pair);
+
+    archive
+        .fetch(Registry::Npm, "@types/node", "20.1.0")
+        .await
+        .expect("the download that waited should go ahead once that call has landed");
+}
+
+/// And the edge on the other side: the budget is one whole call's worth, so
+/// the second half of a pair never waits on the first. `diff_package_versions`
+/// asks for both versions through one `try_join!`, and a budget under two
+/// archives would serialise every diff this server computes — quietly, since
+/// both fetches would still answer.
+///
+/// Held against [`archive::IN_FLIGHT_LIMIT`] rather than against a number
+/// written here, so lowering the constant fails this rather than slowing
+/// production down with nothing to say so.
+#[tokio::test]
+async fn the_second_half_of_a_pair_does_not_wait_on_the_first() {
+    let in_flight = Arc::new(InFlight::of(archive::IN_FLIGHT_LIMIT));
+
+    // The first version of the pair, at the size cap, still arriving.
+    let first = in_flight.reserve(archive::SIZE_LIMIT).await;
+
+    let archive = fixtures().with_in_flight(Arc::clone(&in_flight));
+
+    let second = archive
+        .fetch(Registry::Npm, "diffable", "2.0.0")
+        .now_or_never()
+        .expect("a version pair is what the budget is sized for, so neither half waits")
+        .expect("the fixture adapter has this archive");
+
+    assert!(!second.is_empty(), "the second archive should have arrived");
+
+    drop(first);
 }
 
 /// A package name in a tool argument must never become a request to a host
