@@ -18,7 +18,7 @@ src/archive/        fetch(registry, package, version) -> FileMap
 src/catalogue/      versions(registry, package) -> Vec<Version>, newest first
 src/search/         hits(registry, query, limit) -> Vec<Hit>, best match first
 src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, cap
-src/store/          DiffStore: get(&DiffKey) / put(entry)                   #21 #22
+src/store/          DiffStore: get(&DiffKey) / put(entry)                      #22
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
@@ -117,14 +117,24 @@ list of tools, and the generic call path where arguments are validated and
 
 `Ctx` is what one request carries, built once by the service factory
 `router::router_with` takes and cloned into every call. For a handler that
-means the seams it may reach: `Archive`, `Catalogue` and `Search` today and
-`DiffStore` (#21) beside them, while `registry`, `page` and `handle` are named
-directly because a pure module has nothing to hand over. Beside them it
-carries what the dispatch needs and a handler never touches — the log's
-`Sink`, and the `Spent` that the phases of one call add up in.
-`Ctx::archive()`, `Ctx::catalogue()` and `Ctx::search()` hand back their seam
-with that stopwatch already on it, so a wait on a registry cannot go uncounted
-and a handler's call is unchanged.
+means the seams it may reach: `Archive`, `Catalogue`, `Search` and
+`DiffStore`, while `registry`, `page` and `handle` are named directly because
+a pure module has nothing to hand over. Beside them it carries what the
+dispatch needs and a handler never touches — the log's `Sink`, and the `Spent`
+that the phases of one call add up in. `Ctx::archive()`, `Ctx::catalogue()`
+and `Ctx::search()` hand back their seam with that stopwatch already on it, so
+a wait on a registry cannot go uncounted and a handler's call is unchanged.
+
+`Ctx::store()` does not, and the difference is a decision rather than an
+omission: the `fetch` phase answers how long a call waited on a *registry*,
+and a cache read counted towards it would report the call that avoided two
+downloads as the one that waited longest. It hands back a clone of the handle
+rather than a borrow, because writing an entry outlives the call that produced
+it — the work goes to `waitUntil` and the context is gone by the time it runs.
+
+`Ctx::storing_in` is the third `..self` spread beside `Ctx::logging_to`, and
+it is there for the two things a store can be that a fixture directory cannot
+express: not there, and slow.
 
 That factory is also the seam the suite drives: a test builds a `Ctx` over the
 fixture adapters and a capturing sink, and reaches both through the path
@@ -288,10 +298,42 @@ module, along with the 256 MB budget and the eviction that keeps it (#22). A
 tool asks for a result and gets one or does not; how many HTTP calls that took
 is not a tool's business. See [ADR 0003](adr/0003-the-cache-seam-is-a-store.md).
 
-The client is here today and `DiffStore` arrives with #21, so nothing in this
-module is public yet. Four operations — write a blob, ask whether one is
-there, list what is under a prefix, delete several at once — and no more,
+Three things are the store's and not a caller's, and each is a rule about the
+cache rather than about the blobs underneath it. **A cache failure is never a
+diff failure**: every way this module can fail ends in a miss, so neither
+method has a `Result`, and what would have been one is a line in the log
+instead. **An entry is the unit**: `meta.json` and `patches.json` go together,
+because half of one is not a hit and the only right answer to half is the one
+this module already gives. And **a write happens after the answer**, through
+the runtime's `waitUntil`, because a caller is waiting on a diff and not on a
+cache.
+
+Two caps are the store's too — 256 KiB on one file's patch, 8 MiB on one
+entry — and both are fields rather than constants read where they are used, so
+a test drives them with a real comparison and a small number. Over the first,
+that patch is left out and the rest are kept; over the second, `meta.json` is
+written with `patches_omitted` and `patches.json` is not written at all. That
+flag is the difference between a comparison whose patches were dropped and one
+with nothing to patch, which is otherwise the same absent blob.
+
+A `put` heads before it writes. An entry is derived from its contents, so a
+blob already at that pathname holds those bytes already — and rewriting it
+would reset the moment it was uploaded, which is the order #22 evicts in.
+
+Three adapters: the blob store, this process's memory, and no store at all.
+The third is not a mode invented for the suite — it is what a deployment
+missing its credentials gets, and it is what makes "degraded to uncached" a
+thing the suite exercises rather than hopes for. The second is what
+`Ctx::fixture` carries, and it is blob-shaped rather than entry-shaped, so a
+test of the cache pins where an entry lives and not only that one was kept.
+
+Five operations on the client — write a blob, ask whether one is there, read
+one back, list what is under a prefix, delete several at once — and no more,
 because a general client for the service is the shape ADR 0003 rejected.
+Reading one back is two requests: the API has no operation that answers with a
+blob's contents, only one that says where to download them, and both hops are
+one operation here because "is it there" and "what is in it" are one
+question.
 
 There is no published specification for that API and no usable Rust client for
 it, so the wire is taken from what `@vercel/blob` sends, read out of its
@@ -449,6 +491,13 @@ waited rather than which document it waited for — and a tool that only reads
 a catalogue reporting no wait at all is the reading an operator would take
 for "this one never left the process".
 
+A `Note` is the other thing this module writes, and it is deliberately not a
+`Line`. A seam that must not fail a call has nowhere else to put a failure: a
+`Failure` would reach the model, and a `Line` is the dispatch's — one per
+call, so that counting them counts calls, and already written by the time a
+backgrounded cache write has failed. The `DiffStore` is the only seam like
+that, by ADR 0003, and it carries a `Sink` of its own for the same reason.
+
 `Spent` keeps the *window* fetching spanned rather than the sum of each
 fetch's duration, because `diff_package_versions` asks for two versions
 through one `try_join!` and a sum reports a thousand milliseconds where the
@@ -462,8 +511,9 @@ Two phases today. The finer split #26 asks for — download, extract, diff,
 store — needs each of the four to be something this crate can time, and none
 of them is: download and extract are one interface by ADR 0001, the diff is a
 synchronous call inside `src/engine.rs` which by ADR 0007 has no reach into a
-request, and the store is a client with no seam over it until #21. Each is a
-decision about a seam rather than a field to add.
+request, and the store's write happens after the answer, so a call's line is
+written before there is anything to report about it. Each is a decision about
+a seam rather than a field to add.
 
 ### `src/engine.rs` — the one importer of `diffpack-engine`
 
@@ -471,6 +521,18 @@ Re-exports what the server uses and names the pinned version, which is a field
 in the cache key rather than a label. The server computes diffs with the same
 code the browser runs; re-implementing any of it would mean two copies of an
 output format that has to stay byte-identical.
+
+One function here is written out rather than re-exported, and it is the
+exception that the paragraph above is the reason for. `patch` renders one
+file's Patch — the four cases a file can be in between two versions, and which
+of them is a diff at all. The engine has it, as `build_diff_result`, but
+private to its `wasm_bindgen` layer and so not part of the surface a Cargo
+dependent links against. Two tools need it and they arrive at different times
+— #21 renders every changed file while both archives are extracted, #15
+renders one on demand when the cache does not have it — so it goes in the
+module that names the engine version it is pinned to, where a drift is one
+file to fix. See [ADR
+0013](adr/0013-the-patch-renderer-lives-in-the-engine-seam.md).
 
 ### `src/health.rs` — the `/health` body
 
