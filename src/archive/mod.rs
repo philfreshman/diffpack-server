@@ -14,19 +14,24 @@
 //! archives from a directory on disk, which is what lets the suite assert
 //! what a version's files are without a network and what lets #24's
 //! conformance run in CI. They differ in where the bytes come from and in
-//! nothing else: resolution, the size cap, the host allowlist and extraction
-//! are the same code for both, so a test through the fixture adapter is a
-//! test of the path production takes.
+//! nothing else: resolution, the size cap, the budget on what may be
+//! arriving at once, the host allowlist and extraction are the same code for
+//! both, so a test through the fixture adapter is a test of the path
+//! production takes.
 
 mod fixture;
+mod in_flight;
 mod live;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
 use crate::engine;
 use crate::error::Failure;
 use crate::registry::{self, ArchiveSource, Registry};
+
+pub use in_flight::{InFlight, Reservation};
 
 /// An archive after extraction: every file path in a version mapped to its
 /// entry, with the archive's top-level directory already stripped.
@@ -45,6 +50,25 @@ pub type FileMap = HashMap<String, engine::FileMapEntry>;
 /// from somebody else's server.
 pub const SIZE_LIMIT: u64 = 128 * 1024 * 1024;
 
+/// The most this process may have arriving at once, across every download it
+/// is making.
+///
+/// One tool call's worth, which is what [`SIZE_LIMIT`] doubled is: a version
+/// pair is the largest thing one call asks for, and `diff_package_versions`
+/// asks for both halves of it through one `try_join!`. Written as a multiple
+/// rather than as a number of its own so that it cannot fall below what one
+/// call needs — a budget under it would make every diff this server computes
+/// fetch its two versions one after the other, which is the concurrency #13
+/// added, taken away by a guard nobody asked to do that.
+///
+/// What it bounds is the *second* call: a warm instance serving two diffs at
+/// once has four archives on the way, and this is what makes two of them wait
+/// for the other two rather than adding to them. The guard is therefore the
+/// process's and not one invocation's, which is the one thing a cap written
+/// per request could not have been. See [ADR
+/// 0013](../docs/adr/0013-the-archive-seam-bounds-bytes-in-flight.md).
+pub const IN_FLIGHT_LIMIT: u64 = 2 * SIZE_LIMIT;
+
 /// Where a version's files come from.
 #[derive(Debug)]
 pub struct Archive {
@@ -54,6 +78,13 @@ pub struct Archive {
     /// can be exercised with a real archive and a small limit instead of with
     /// a package nobody wants to download in a test.
     limit: u64,
+
+    /// What this process may have arriving at once. Shared with every other
+    /// [`Archive`] in the process rather than owned, because the memory it
+    /// protects is the process's — a `Ctx` is built per request, so a budget
+    /// this struct owned would be one budget per request and no budget at
+    /// all.
+    in_flight: Arc<InFlight>,
 }
 
 /// The two adapters, as a variant each rather than a trait.
@@ -74,6 +105,7 @@ impl Archive {
         Self {
             source: Source::Live(live::Live::new()),
             limit: SIZE_LIMIT,
+            in_flight: shared(),
         }
     }
 
@@ -87,12 +119,24 @@ impl Archive {
         Self {
             source: Source::Fixture(fixture::Fixture::new(dir.into())),
             limit: SIZE_LIMIT,
+            in_flight: shared(),
         }
     }
 
     /// The same archive source, refusing anything over `limit` bytes.
     pub fn with_limit(self, limit: u64) -> Self {
         Self { limit, ..self }
+    }
+
+    /// The same archive source, counting what it downloads against
+    /// `in_flight` rather than against the process's budget.
+    ///
+    /// For the suite, which needs a budget it can spend without waiting on
+    /// whatever else the test binary is downloading — and needs one nothing
+    /// else is waiting on, since a test that holds a reservation holds it
+    /// against every fetch that shares it.
+    pub fn with_in_flight(self, in_flight: Arc<InFlight>) -> Self {
+        Self { in_flight, ..self }
     }
 
     /// The files in `version` of `package`.
@@ -102,6 +146,17 @@ impl Archive {
         package: &str,
         version: &str,
     ) -> Result<FileMap, Failure> {
+        // Before the first request and held until the bytes have become a
+        // `FileMap`, because that is how long this fetch has a body in
+        // memory. Taken once for the whole call rather than once per hop:
+        // PyPI's two hops are one download's worth in sequence, and a
+        // reservation per hop would put a fetch back in the queue halfway
+        // through, behind downloads that had not started.
+        //
+        // What is reserved is the cap rather than the weight, because the
+        // weight is not known until the body is here. See `in_flight`.
+        let _in_flight = self.in_flight.reserve(self.limit).await;
+
         let url = match registry.archive(package, version)? {
             ArchiveSource::Archive { url } => url,
 
@@ -171,6 +226,20 @@ impl Archive {
         }
         Ok(bytes)
     }
+}
+
+/// The budget every [`Archive`] in this process counts against.
+///
+/// A `OnceLock` rather than a field somebody passes around, for the reason
+/// [`crate::fetch`]'s client is one: a serverless function is built once and
+/// invoked many times, and what is being protected is the memory of the
+/// process those invocations share. Two of them fetching at once is the case
+/// this exists for, and a budget either of them owned would not see the
+/// other.
+fn shared() -> Arc<InFlight> {
+    static IN_FLIGHT: OnceLock<Arc<InFlight>> = OnceLock::new();
+
+    Arc::clone(IN_FLIGHT.get_or_init(|| Arc::new(InFlight::of(IN_FLIGHT_LIMIT))))
 }
 
 /// An archive's bytes as the files inside it.

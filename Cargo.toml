@@ -113,7 +113,18 @@ schemars = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# `macros` and `rt-multi-thread` for the runtime the binary and the suite run
+# on, and `sync` for the two guards #26 asks for: the budget on what may be
+# downloading at once in `src/archive/`, and the single fetch of PyPI's index
+# in `src/search/`. Both are waits, and a wait is the thing a `std` lock must
+# not be held across.
+#
+# `sync` is named here rather than inherited. Cargo unifies features, so
+# `tokio::sync` compiles today whether or not this line asks for it — rmcp and
+# reqwest both want it — and a build that relies on that is a build a
+# dependency can break by tightening its own features. What this crate uses,
+# this crate asks for.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 # `Layer`, so `api/mcp.rs` can wrap the router in `VercelLayer`. Nothing else
 # from it — the middleware this crate writes itself is an axum
 # `map_response`, and the middleware it does not is `tower-http` below.
