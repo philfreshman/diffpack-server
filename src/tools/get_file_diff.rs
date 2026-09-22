@@ -217,6 +217,156 @@ fn sided(header: &str, sign: char, content: &str) -> String {
     text
 }
 
+/// What one line of a rendered diff is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// A line both versions have. The only kind trimming drops.
+    Context,
+    /// A line the first version has and the second does not.
+    Removed,
+    /// A line the second version has and the first does not.
+    Added,
+}
+
+impl Kind {
+    /// The kind `line` carries in its first character.
+    ///
+    /// Anything that is not a `-` or a `+` is context. The engine writes a
+    /// space there, and reading an unexpected character as context is the
+    /// fail-safe direction: a line trimming does not understand is kept and
+    /// counted on both sides rather than dropped.
+    fn of(line: &str) -> Self {
+        match line.as_bytes().first() {
+            Some(b'-') => Self::Removed,
+            Some(b'+') => Self::Added,
+            _ => Self::Context,
+        }
+    }
+}
+
+/// One line of a rendered diff, and where it sits in each of the two files.
+///
+/// A context line occupies a position in both, a removed line only in the
+/// first and an added line only in the second — which is the whole of what a
+/// hunk header counts.
+#[derive(Debug, Clone, Copy)]
+struct Placed {
+    kind: Kind,
+    /// Its line number in the first version, where that version has it.
+    first: Option<usize>,
+    /// Its line number in the second version, where that version has it.
+    second: Option<usize>,
+}
+
+/// Which side of a [`Placed`] a hunk header is being written for.
+type Side = fn(&Placed) -> Option<usize>;
+
+/// `text`, cut down to `context` unchanged lines either side of each change.
+///
+/// The engine emits every line of a file, because the browser renders the
+/// whole file in a scrollable pane. An agent reading a three-line change out
+/// of a four-thousand-line file does not want the other three thousand nine
+/// hundred, so they are dropped here — and the `@@` headers the engine has no
+/// need for are added, because once lines are missing a caller has no other
+/// way to know where the rest of them sat.
+///
+/// Nothing is rewritten. Every line this returns that is not a header is a
+/// line of `text`, in `text`'s order, which is what makes the trimmed answer
+/// derivable from the full one rather than a second rendering of the same
+/// diff.
+fn trim(text: &str, context: u32) -> String {
+    let context = context as usize;
+
+    // Split rather than `lines`, which would also strip a `\r`. The engine
+    // keeps one, on the grounds that it belongs to the line, and a trim that
+    // quietly dropped it would not be a subset of what it was given.
+    let mut all = text.split('\n');
+    let (Some(from_header), Some(to_header)) = (all.next(), all.next()) else {
+        return text.to_owned();
+    };
+    let body: Vec<&str> = all.collect();
+
+    let mut placed: Vec<Placed> = Vec::with_capacity(body.len());
+    let (mut first, mut second) = (0usize, 0usize);
+    for line in &body {
+        let kind = Kind::of(line);
+        placed.push(Placed {
+            kind,
+            first: (kind != Kind::Added).then(|| {
+                first += 1;
+                first
+            }),
+            second: (kind != Kind::Removed).then(|| {
+                second += 1;
+                second
+            }),
+        });
+    }
+
+    let mut out = format!("{from_header}\n{to_header}");
+
+    for (start, end) in hunks(&placed, context) {
+        let within = &placed[start..=end];
+
+        let side = |at: Side| {
+            let count = within.iter().filter_map(at).count();
+            // A side with no line in the hunk is written at the position it
+            // had reached, which is what `git` does with the `-0,0` a file
+            // the first version does not have gets.
+            let at = within
+                .iter()
+                .find_map(at)
+                .or_else(|| placed[..start].iter().rev().find_map(at))
+                .unwrap_or(0);
+            // One line is written as its start alone. The unified-diff rule,
+            // and what a parser written against `git diff` expects.
+            if count == 1 {
+                format!("{at}")
+            } else {
+                format!("{at},{count}")
+            }
+        };
+
+        out.push_str(&format!(
+            "\n@@ -{} +{} @@",
+            side(|placed| placed.first),
+            side(|placed| placed.second),
+        ));
+        for line in &body[start..=end] {
+            out.push('\n');
+            out.push_str(line);
+        }
+    }
+
+    out
+}
+
+/// The stretches of `placed` a trim keeps: every change, with `context` lines
+/// either side, and two that meet joined into one.
+///
+/// Joined when they touch as well as when they overlap, because a single
+/// unchanged line between two hunks is shorter than the header that would
+/// separate them.
+fn hunks(placed: &[Placed], context: usize) -> Vec<(usize, usize)> {
+    let mut hunks: Vec<(usize, usize)> = Vec::new();
+
+    for (at, line) in placed.iter().enumerate() {
+        if line.kind == Kind::Context {
+            continue;
+        }
+
+        let start = at.saturating_sub(context);
+        let end = (at + context).min(placed.len().saturating_sub(1));
+
+        match hunks.last_mut() {
+            Some((_, last)) if *last + 1 >= start => *last = (*last).max(end),
+            _ => hunks.push((start, end)),
+        }
+    }
+
+    hunks
+}
+
 /// The content of `path` in `files`, or nothing when the version has no file
 /// there.
 ///
@@ -266,10 +416,45 @@ impl Tool for GetFileDiff {
         )?;
 
         let from_path = args.old_path.as_deref().unwrap_or(&args.path);
+
+        // A directory has no content, so the engine reads one as absent on
+        // both sides and renders the sentence that says it is in neither
+        // version. That sentence is false about a path the package ships,
+        // and an agent has nothing in the answer to doubt it with — the
+        // failure `get_file_content` refuses a directory to avoid. The
+        // second version first, because that is the one a caller's path
+        // usually names.
+        let directory = [
+            (&to_files, args.path.as_str(), &inputs.to_version),
+            (&from_files, from_path, &inputs.from_version),
+        ]
+        .into_iter()
+        .find(|(files, path, _)| {
+            files
+                .get(*path)
+                .is_some_and(|entry| matches!(entry.file_type, FileType::Directory))
+        });
+
+        if let Some((_, path, version)) = directory {
+            return Err(Failure::PathIsDirectory {
+                package: inputs.package.clone(),
+                version: version.clone(),
+                path: path.to_owned(),
+            });
+        }
+
         let from = content(&from_files, from_path);
         let to = content(&to_files, &args.path);
 
         let (text, is_diff) = render(&args.path, from, to, inputs.ignore_whitespace);
+
+        // Only a diff is trimmed. The other two answers are a file's own
+        // content and a sentence, and neither has a header to keep or a
+        // change to keep lines around.
+        let text = match args.context_lines.unwrap_or(ContextLines::Around(DEFAULT_CONTEXT)) {
+            ContextLines::Around(lines) if is_diff => trim(&text, lines),
+            _ => text,
+        };
 
         Ok(Patch {
             excerpt: page::truncate(&text, args.max_bytes),
