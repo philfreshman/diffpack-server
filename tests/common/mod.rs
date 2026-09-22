@@ -42,6 +42,13 @@
 // some of them use is dead code in the rest — and `cargo clippy --all-targets
 // -- -D warnings` turns that into a failed build. The alternative is one
 // `#[allow]` per item, which is the same allowance written eleven times.
+//
+// What it buys is silence about an item *some* suite uses, and nothing more.
+// An item no suite uses is not covered by the reason above, and the compiler
+// will never say so here — so it is removed rather than carried: a way of
+// asking that nothing has ever asked is a shape guessed rather than a shape
+// needed, and the guess is cheaper to make again later than to keep correct
+// in the meantime.
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -164,18 +171,6 @@ impl Client {
             "id": 1,
             "method": "tools/call",
             "params": { "name": tool, "arguments": arguments },
-        }))
-        .await
-        .result()
-    }
-
-    /// Read the resource at `uri`, answering with the `result`.
-    pub async fn read(&self, uri: &str) -> Value {
-        self.respond(json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "resources/read",
-            "params": { "uri": uri },
         }))
         .await
         .result()
@@ -380,11 +375,6 @@ impl Answer {
     /// structure, because what Vercel refuses is what this server wrote.
     pub fn frame(&self) -> String {
         String::from_utf8_lossy(&self.body).into_owned()
-    }
-
-    /// The bytes, unread.
-    pub fn bytes(&self) -> &[u8] {
-        &self.body
     }
 
     /// One response header, if it is there and is text.
