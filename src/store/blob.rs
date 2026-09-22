@@ -15,11 +15,6 @@
 //! rather than from documentation — the API is private and has no other
 //! specification.
 
-// `list` and `delete` are written for #22's eviction and nothing calls them
-// yet. The client is private to this module by design — ADR 0003 — so there
-// is no public surface for the compiler to count as a use either.
-#![allow(dead_code)]
-
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -82,8 +77,8 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// `uploaded_at` stays the string the API sent. It is ISO-8601 in UTC to
 /// the millisecond, a format whose lexical order is its chronological
-/// order, so #22 can sort on it without this module taking a dependency on
-/// a calendar.
+/// order, so eviction sorts on it without this module taking a dependency
+/// on a calendar.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Blob {
@@ -249,11 +244,13 @@ impl Api {
     }
 
     /// The same client, waiting `backoff` before its second attempt.
+    #[cfg(test)]
     pub(crate) fn with_backoff(self, backoff: Duration) -> Self {
         Self { backoff, ..self }
     }
 
     /// The same client, giving one attempt `timeout` and no more.
+    #[cfg(test)]
     pub(crate) fn with_timeout(self, timeout: Duration) -> Self {
         Self { timeout, ..self }
     }
@@ -274,7 +271,7 @@ impl Api {
             // path an entry lives at is derived from its contents, so a
             // random suffix would put it somewhere nothing can read it
             // back from; and an entry is written once, so an overwrite
-            // would reset the `uploadedAt` that #22 evicts in the order of.
+            // would reset the `uploadedAt` that eviction runs in the order of.
             .header("x-add-random-suffix", "0")
             .header("x-allow-overwrite", "0")
             // The API assumes nothing here. `public` because an entry is
@@ -860,11 +857,12 @@ mod tests {
         assert_eq!(stub.received().header("x-vercel-blob-access"), "public");
     }
 
-    /// What a `head` is for: #21 asks it before serving a cached diff, and
-    /// #22 accounts against what it answers. So the two facts a present blob
-    /// has to come back with are its size and when it was written — and the
-    /// request that asks for them is a `GET` with the pathname in a `url`
-    /// parameter, which is the API's spelling and not one to guess at.
+    /// What a `head` is for: a write asks it rather than replacing an entry
+    /// that is already there, and a sweep accounts in the same two numbers a
+    /// listing answers with. So the two facts a present blob has to come
+    /// back with are its size and when it was written — and the request that
+    /// asks for them is a `GET` with the pathname in a `url` parameter,
+    /// which is the API's spelling and not one to guess at.
     #[tokio::test]
     async fn a_head_answers_with_the_size_and_the_age_of_a_blob_that_is_there() {
         let stub = Stub::answering(vec![Reply::ok(
@@ -908,7 +906,7 @@ mod tests {
     }
 
     /// A page is not the answer. The store holds one blob per file per
-    /// cached entry and the budget in #22 is a sum over all of them, so a
+    /// cached entry and the budget is a sum over all of them, so a
     /// `list` that stopped at the first page would under-count — silently,
     /// by exactly the blobs it never asked for, and in the safe-looking
     /// direction that lets the cache grow past its ceiling unobserved.
