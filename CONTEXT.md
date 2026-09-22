@@ -262,8 +262,14 @@ it stays inside the budget are its own business.
 _Avoid_: cache, blob client, storage
 
 **Budget**:
-The hard 256 MB this project's blob store may hold. Staying inside it is the
-DiffStore's job, by evicting the oldest Entries first.
+The hard 256 MB this project's blob store may hold, and the 240 MB a sweep
+leaves it at. Staying inside it is the DiffStore's job, by evicting the oldest
+Entries first — oldest by the moment a Blob was uploaded, which is insertion
+age and not how recently anything was read. It is two numbers because the
+first is never exceeded and the second is what makes that true: the gap is
+what absorbs two invocations admitting at once, and a delete the store has not
+finished propagating. Distinct from the Size cap, which is about one body
+coming in, and from the Response ceiling, which bounds one answer going out.
 _Avoid_: quota, limit (unqualified — the response ceiling is also a limit)
 
 ### The protocol surface

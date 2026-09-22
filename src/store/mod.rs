@@ -3,7 +3,7 @@
 //! [`DiffStore`] is what the rest of the crate sees of the cache — get the
 //! entry for a `DiffKey`, put an entry — and everything underneath it is
 //! this module's: the Vercel Blob client, the 256 MB budget and the eviction
-//! that keeps it (#22). See [ADR
+//! that keeps it. See [ADR
 //! 0003](../docs/adr/0003-the-cache-seam-is-a-store.md).
 //!
 //! # An entry, and why it is the unit
@@ -476,7 +476,7 @@ impl DiffStore {
     /// The head is not an optimisation. An entry is derived from its
     /// contents, so a blob already at this pathname holds these bytes
     /// already — and writing them again would reset the moment it was
-    /// uploaded, which is the order #22 evicts in. A comparison asked for
+    /// uploaded, which is the order eviction runs in. A comparison asked for
     /// often would keep moving to the back of that queue.
     ///
     /// What makes that happen at all is a read that missed although it

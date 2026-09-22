@@ -11,8 +11,8 @@
 //! That handle is what lets a test say more than "it was cheap": it names the
 //! blobs an entry is, and when each of them was written. Both are the
 //! cache's contract rather than its internals — the pathnames are what #27
-//! reads a result back from, and the upload moment is the order #22 evicts
-//! in.
+//! reads a result back from, the sizes are what the budget is counted in,
+//! and the upload moment is the order eviction runs in.
 //!
 //! # What a test here is not
 //!
@@ -422,7 +422,7 @@ async fn the_answer_does_not_wait_for_the_entry_to_be_written() {
 /// An entry that is already there is not written again.
 ///
 /// Rewriting an identical entry would reset the moment it was uploaded, and
-/// that moment is the order #22 evicts in — so a comparison that is asked
+/// that moment is the order eviction runs in — so a comparison that is asked
 /// for often would keep moving to the back of the queue and the cache would
 /// evict the entries that earn their place.
 ///

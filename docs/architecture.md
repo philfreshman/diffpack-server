@@ -18,7 +18,7 @@ src/archive/        fetch(registry, package, version) -> FileMap
 src/catalogue/      versions(registry, package) -> Versions, newest first
 src/search/         hits(registry, query, limit) -> Vec<Hit>, best match first
 src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, cap
-src/store/          DiffStore: get(&DiffKey) / put(entry)                      #22
+src/store/          DiffStore: get(&DiffKey) / put(entry), inside a budget
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
@@ -304,7 +304,7 @@ web page unless the request asks for PEP 691's JSON.
 
 `DiffStore`: `get(&DiffKey)` and `put(entry)`, a whole entry at a time. The
 Vercel Blob client is the implementation behind it and is private to this
-module, along with the 256 MB budget and the eviction that keeps it (#22). A
+module, along with the 256 MB budget and the eviction that keeps it. A
 tool asks for a result and gets one or does not; how many HTTP calls that took
 is not a tool's business. See [ADR 0003](adr/0003-the-cache-seam-is-a-store.md).
 
@@ -328,7 +328,32 @@ with nothing to patch, which is otherwise the same absent blob.
 
 A `put` heads before it writes. An entry is derived from its contents, so a
 blob already at that pathname holds those bytes already — and rewriting it
-would reset the moment it was uploaded, which is the order #22 evicts in.
+would reset the moment it was uploaded, which is the order eviction runs in.
+
+A `put` also asks for room before it writes, and that is the budget: 256 MB
+the store may hold, swept down to 240 MB whenever admitting an entry would
+take it past the ceiling. The total is read from a listing rather than carried,
+because a total carried in one invocation is a number two of them would
+disagree about; the entries a sweep takes are the oldest by `uploadedAt`, whole
+entries at a time, and an entry larger than the whole budget is refused before
+anything is listed rather than emptying the cache to no purpose.
+
+Two numbers rather than one, and the 16 MB between them is the point. Two
+invocations can admit at the same moment, each against a total that did not
+include the other's entry, and a delete takes up to a minute to propagate — so
+a listing taken after a sweep can still count blobs that are gone. Size
+accounting here is a good estimate and never a fact, and a hard-edged check
+exceeds the ceiling exactly once, in production, with nothing watching. The
+budget is fields rather than constants for the reason the two caps are.
+
+Eviction is **insertion age and not least-recently-used**: an entry written a
+month ago goes before one written yesterday, however often it was read. `list`
+gives `uploadedAt` for free and an LRU would need a separate index with its own
+write path and its own races. What makes that affordable is ADR 0006 — a
+handle carries its inputs, so a reading tool whose entry has been swept
+recomputes and serves rather than refusing. Eviction costs latency and is
+invisible to an agent, which is the footing on which the LRU question is worth
+revisiting once there is real traffic to argue from.
 
 Three adapters: the blob store, this process's memory, and no store at all.
 The third is not a mode invented for the suite — it is what a deployment
