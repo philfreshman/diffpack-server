@@ -139,3 +139,60 @@ struct Index {
     fetched: Instant,
     body: Body,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    /// The memo makes an index fetched once per *warm* instance. This is the
+    /// cold instance, which is the case it says nothing about: the document
+    /// is not there yet, and until the first fetch finishes there is nothing
+    /// for a second search to find. Eight searches arriving at once on an
+    /// instance nobody has searched on is eight fetches of tens of megabytes,
+    /// each one held in full.
+    ///
+    /// So the burst is what this drives, and a counter is what it holds: the
+    /// fetch happens once and the seven that waited are answered with what
+    /// the first one got.
+    ///
+    /// The fake waits before it answers, and that is the part that makes the
+    /// test mean anything. A fetch that returned without ever yielding would
+    /// be finished before the second call was polled, and eight calls in a
+    /// row cost one fetch whether or not anything is guarding them — the same
+    /// trap as asserting concurrency by doing a thing twice. Waiting on a
+    /// socket is what a real fetch does, and `yield_now` is the smallest
+    /// honest version of it.
+    #[tokio::test]
+    async fn a_cold_burst_fetches_the_index_once() {
+        // This test's own URL. The memo holds one document at a time, so a
+        // URL another test might fetch is one that could replace this one
+        // between the fetch and the calls reading it back.
+        const URL: &str = "https://example.invalid/simple/a-cold-burst";
+
+        let fetches = AtomicUsize::new(0);
+        let fetch = || async {
+            tokio::task::yield_now().await;
+            fetches.fetch_add(1, Ordering::SeqCst);
+            Ok(Body::from("every package there is"))
+        };
+
+        let burst = (0..8).map(|_| once_at_a_time(URL, fetch));
+        let answers = futures::future::join_all(burst).await;
+
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            1,
+            "eight searches arriving at once should cost one fetch of the index"
+        );
+
+        for answer in &answers {
+            let body = answer.as_ref().expect("every search in the burst is answered");
+            assert_eq!(
+                &**body, "every package there is",
+                "the ones that waited should be answered with what the first fetched"
+            );
+        }
+    }
+}
