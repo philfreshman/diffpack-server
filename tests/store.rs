@@ -71,6 +71,22 @@ fn diffable() -> Value {
     })
 }
 
+/// The same package compared with itself: a real comparison in which nothing
+/// changed.
+///
+/// What a comparison with nothing to patch is, without a second fixture set
+/// to hold one. Every file is `unchanged`, so no patch is rendered and none
+/// goes missing — which is the side of `patches_omitted` that has to stay
+/// `false`.
+fn unchanged() -> Value {
+    json!({
+        "registry": "npm",
+        "package": "diffable",
+        "from_version": "1.0.0",
+        "to_version": "1.0.0",
+    })
+}
+
 /// The whole point of the cache, as an agent sees it.
 ///
 /// The first call downloads two archives and compares them; the second is
@@ -237,6 +253,68 @@ async fn a_patch_over_the_cap_is_left_out_and_the_others_are_kept() {
             .map(|patches| patches.keys().map(String::as_str).collect::<Vec<&str>>()),
         Some(vec!["src/added.js", "src/new-name.js", "src/removed.js"]),
         "the one patch over the cap is the only one missing, got {patches}"
+    );
+}
+
+/// An entry that left one patch out says a patch was left out.
+///
+/// The other way patches go missing, and the one the flag used to be silent
+/// about. A file whose patch was over the per-patch cap is absent from
+/// `patches.json` — byte for byte what a file that did not change looks
+/// like — so an entry declaring that nothing was dropped says the same thing
+/// about the one file it cannot answer for as it says about the one there was
+/// never anything to answer.
+///
+/// Read off the blob rather than off the wire, and not for convenience: a
+/// reader that finds no patch for a file the tree says changed renders it
+/// instead, whichever way the patch went missing, so no answer this server
+/// gives differs on this flag. It is the entry's own record of what is in it,
+/// and the entry is where it can be read.
+#[tokio::test]
+async fn an_entry_that_left_one_patch_out_says_a_patch_was_left_out() {
+    let store = Memory::new();
+
+    let answer = call(|| store.store().capping_patches_at(100), diffable()).await;
+    settles(&store, 2).await;
+
+    assert_eq!(
+        blob(&store, &meta_of(&answer))["patches_omitted"],
+        json!(true),
+        "one file's patch was dropped for its size, and the entry has to say \
+         so"
+    );
+
+    let kept = blob(&store, &patches_of(&answer));
+    assert!(
+        kept.as_object().is_some_and(|kept| !kept.is_empty()),
+        "and the patches that fit are still beside it, which is what makes \
+         this a different entry from one that dropped all of them: got {kept}"
+    );
+}
+
+/// A comparison with nothing to patch is not one whose patches were dropped.
+///
+/// The distinction the flag exists to draw, from the side that has to stay
+/// `false`: a version compared with itself changes no file, so there is no
+/// patch to render and none missing. An entry that said otherwise would send
+/// a reader looking for something that was never there — and a flag that is
+/// true whenever it is easier to say true says nothing at all.
+#[tokio::test]
+async fn a_comparison_with_nothing_to_patch_says_nothing_was_dropped() {
+    let store = Memory::new();
+
+    let answer = call(|| store.store(), unchanged()).await;
+    settles(&store, 2).await;
+
+    assert_eq!(
+        blob(&store, &patches_of(&answer)),
+        json!({}),
+        "a version against itself changes no file, so nothing is rendered"
+    );
+    assert_eq!(
+        blob(&store, &meta_of(&answer))["patches_omitted"],
+        json!(false),
+        "and an entry with nothing to patch has dropped nothing"
     );
 }
 

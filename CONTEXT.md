@@ -294,9 +294,10 @@ _Avoid_: rename threshold, match score
 **Entry**:
 One cached Diff result: `meta.json` and `patches.json` under one diff_id,
 written together and evicted together. Half an Entry is not a cache hit, and
-a FileMap's entry is a file rather than one of these. An Entry written without
-its patches — because they were too big — is a whole Entry and says so, which
-is what distinguishes it from a Diff with nothing to patch. It is what a
+a FileMap's entry is a file rather than one of these. An Entry missing a Patch
+it should have — one over the per-patch cap, or all of them because the Entry
+was too big — is a whole Entry and says so, which is what distinguishes it
+from a Diff with nothing to patch. It is what a
 Comparison is *remembered* as and not what one is: an Entry is two Blobs in a
 store, and it holds a Tree and its Patches and never the archives either was
 worked out from — which is why a Comparison served out of one arrives without

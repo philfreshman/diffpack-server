@@ -524,10 +524,11 @@ cache.
 Two caps are the store's too — 256 KiB on one file's patch, 8 MiB on one
 entry — and both are fields rather than constants read where they are used, so
 a test drives them with a real comparison and a small number. Over the first,
-that patch is left out and the rest are kept; over the second, `meta.json` is
-written with `patches_omitted` and `patches.json` is not written at all. That
-flag is the difference between a comparison whose patches were dropped and one
-with nothing to patch, which is otherwise the same absent blob.
+that patch is left out and the rest are kept; over the second, `patches.json`
+is not written at all. `patches_omitted` is true either way — it is the
+difference between a comparison whose patches were dropped and one with
+nothing to patch, and a file the per-patch cap took is absent from an entry
+exactly the way a file that did not change is.
 
 A `put` heads before it writes. An entry is derived from its contents, so a
 blob already at that pathname holds those bytes already — and rewriting it
