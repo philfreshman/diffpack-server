@@ -797,6 +797,40 @@ async fn no_context_is_the_changed_lines_alone() {
     );
 }
 
+/// Trimming drops the lines below the last change as well as those above the
+/// first.
+///
+/// Every other hunk in this file runs to the end of the body it came from —
+/// `renamey` replaces its last five lines and `churny` its only one — so a
+/// trimmer that cut the top of a file and kept the bottom would pass all of
+/// them. `src/index.js` changes the middle line of three, which is the shape
+/// that tells the two apart: the `}` below the change goes with the
+/// declaration above it.
+#[tokio::test]
+async fn a_change_in_the_middle_drops_the_lines_below_it_too() {
+    let answer = patch(json!({
+        "handle": diffable(),
+        "path": "src/index.js",
+        "context_lines": 0,
+    }))
+    .await;
+
+    assert_eq!(
+        answer["text"],
+        json!(
+            "\
+--- from/src/index.js
++++ to/src/index.js
+@@ -2 +2 @@
+-   return \"Hello, \" + name;
++   return \"Hi, \" + name;"
+        ),
+        "with no context asked for, the one line that changed is all that is \
+         left of a three-line file, and the hunk starts where the change is \
+         rather than where the file does: got {answer}"
+    );
+}
+
 /// A diff with no changed line in it trims to its header.
 ///
 /// The case a whitespace-only change makes when the handle says to ignore
