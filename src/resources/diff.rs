@@ -64,7 +64,9 @@ pub fn link(handle: &DiffHandle) -> Resource {
     Resource::new(uri_of(handle), "diff")
         .with_title("This comparison")
         .with_description(
-            "The whole of the comparison this call made: what was compared, how much              changed, and every file and directory in it. Reading it is the same answer              `get_diff_tree` pages through.",
+            "The whole of the comparison this call made: what was compared, how much \
+             changed, and every file and directory in it. Reading it is the same answer \
+             `get_diff_tree` pages through.",
         )
         .with_mime_type("application/json")
 }
