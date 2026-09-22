@@ -1,0 +1,33 @@
+{
+  "packageKey": {
+    "system": "PYPI",
+    "name": "jupyterlab"
+  },
+  "versions": [
+    {
+      "versionKey": { "system": "PYPI", "name": "jupyterlab", "version": "4.5.6" },
+      "publishedAt": "2026-03-11T14:17:00Z",
+      "isDefault": false
+    },
+    {
+      "versionKey": { "system": "PYPI", "name": "jupyterlab", "version": "4.6.3" },
+      "publishedAt": "2026-08-10T18:50:53Z",
+      "isDefault": false
+    },
+    {
+      "versionKey": { "system": "PYPI", "name": "jupyterlab", "version": "4.6.4" },
+      "publishedAt": "2026-09-21T15:25:14Z",
+      "isDefault": true
+    },
+    {
+      "versionKey": { "system": "PYPI", "name": "jupyterlab", "version": "4.7.0a1" },
+      "publishedAt": "2026-07-21T13:13:58Z",
+      "isDefault": false
+    },
+    {
+      "versionKey": { "system": "PYPI", "name": "jupyterlab", "version": "4.7.0a2" },
+      "publishedAt": "2026-09-21T16:59:12Z",
+      "isDefault": false
+    }
+  ]
+}

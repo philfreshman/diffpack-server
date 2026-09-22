@@ -88,7 +88,7 @@ fn seams() -> Vec<Seam> {
             name: "catalogue",
             tool: "list_package_versions",
             arguments: json!({ "registry": "npm", "package": "zod" }),
-            reads: "/total",
+            reads: "/versions/total",
             // The fixture `zod` has four versions where the real package has
             // hundreds.
             fixture_says: json!(4),
