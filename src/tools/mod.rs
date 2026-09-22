@@ -431,10 +431,20 @@ pub struct Recorded<'a> {
 impl Recorded<'_> {
     /// The entry for `key`, and what that lookup found on the request's
     /// line.
+    ///
+    /// A store that is not there is recorded as that rather than as the miss
+    /// it looks like from here. Every `get` on one answers `None`, so a
+    /// deployment with no credentials would otherwise leave a line saying
+    /// `miss` for every call it ever serves — a hundred percent miss rate,
+    /// which is what a cache that is working and cold reads as too.
     pub async fn get(self, key: &DiffKey) -> Option<Entry> {
         let entry = self.store.get(key).await;
 
-        self.lookup.looked(entry.is_some());
+        match self.store.is_available() {
+            true => self.lookup.looked(entry.is_some()),
+            false => self.lookup.found_no_store(),
+        }
+
         entry
     }
 

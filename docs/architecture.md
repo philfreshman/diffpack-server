@@ -620,6 +620,17 @@ waited longest. What the line carries instead is `hit` or `miss`, and nothing
 at all for a tool that never asked: the two are different populations under
 one tool name, and a percentile over both describes neither.
 
+`no_store` is the third value and the same rule one level down. A deployment
+with no credentials to reach the blob store with has no store at all — the
+server that existed before there was a cache, correct and slower — and every
+lookup in one answers nothing. Counted as a miss it reads as a flat hundred
+percent miss rate, which is what a working cache that is cold reads as too,
+so the one thing an operator most needs to tell apart is the one thing the
+field could not say. Left absent instead, it would be indistinguishable from
+a tool that never asks. The store settles this when it is built and
+`Recorded::get` reads it off `DiffStore::is_available`, which is the only
+thing that method is for.
+
 A `Note` is the other thing this module writes, and it is deliberately not a
 `Line`. A seam that must not fail a call has nowhere else to put a failure: a
 `Failure` would reach the model, and a `Line` is the dispatch's — one per
