@@ -272,8 +272,14 @@ it stays inside the budget are its own business.
 _Avoid_: cache, blob client, storage
 
 **Budget**:
-The hard 256 MB this project's blob store may hold. Staying inside it is the
-DiffStore's job, by evicting the oldest Entries first.
+The hard 256 MB this project's blob store may hold, and the 240 MB a sweep
+leaves it at. Staying inside it is the DiffStore's job, by evicting the oldest
+Entries first — oldest by the moment a Blob was uploaded, which is insertion
+age and not how recently anything was read. It is two numbers because the
+first is never exceeded and the second is what makes that true: the gap is
+what absorbs two invocations admitting at once, and a delete the store has not
+finished propagating. Distinct from the Size cap, which is about one body
+coming in, and from the Response ceiling, which bounds one answer going out.
 _Avoid_: quota, limit (unqualified — the response ceiling is also a limit)
 
 ### The protocol surface
@@ -306,7 +312,15 @@ them is not the fact)
 
 **Resource**:
 Something an agent reads by URI (`diffpack://…`) rather than calls. A Resource
-answers "what is there"; a Tool does something.
+answers "what is there"; a Tool does something. It computes nothing a Tool
+computes — the registry catalogue is `registry` serialised and a comparison is
+the Tools' own walks arranged into a document ([ADR
+0014](docs/adr/0014-a-resource-is-a-projection-of-the-tools.md)) — so what a
+Resource owns is the document and not the answer in it. One whose URI has a
+field to fill in is a *template*, and that is a different list: a Resource is
+what `resources/list` carries and a template is what
+`resources/templates/list` carries, because only the first is a URI a client
+can follow as it stands.
 _Avoid_: document, asset
 
 **Failure**:

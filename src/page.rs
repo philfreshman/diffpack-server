@@ -527,6 +527,37 @@ pub fn truncate(text: &str, max_bytes: Option<MaxBytes>) -> Excerpt {
     }
 }
 
+/// How many bytes `text` costs once escaped into the field that carries it.
+///
+/// The measurement [`truncate`] makes while it cuts, for the caller that only
+/// needs the answer. Private because [`fits`] is that caller and there is no
+/// other: a `pub` with nothing on the other side of it is surface this crate
+/// would have to keep working.
+fn encoded_len(text: &str) -> usize {
+    text.chars().map(encoded_cost).sum()
+}
+
+/// Whether `text` fits whole in one answer.
+///
+/// The third shape this module answers for, beside a [`Page`] and an
+/// [`Excerpt`], and the one with no smaller version of itself. A sequence too
+/// long for one answer is paged and a blob too long is cut, because half a
+/// file is still a readable half. A comparison's tree is neither: the first
+/// nine tenths of one reads exactly like a whole one, and an agent looking
+/// for a file in the last tenth is told it is not there. So what does not fit
+/// is *replaced* by a statement about itself — [`crate::resources::diff`] is
+/// the caller, and the statement is its to write.
+///
+/// [`PAYLOAD_CEILING`] is the bound, which is conservative here rather than
+/// exact: that number is a third of the platform's because a tool's answer
+/// crosses the wire twice, and a resource read carries its document once. The
+/// margin is left where it is deliberately. Being wrong the other way is a
+/// platform error with nothing in it, and a tree over a megabyte is one an
+/// agent should be paging through whatever the ceiling allows.
+pub fn fits(text: &str) -> bool {
+    encoded_len(text) <= PAYLOAD_CEILING
+}
+
 /// The most the marker can cost, once escaped.
 ///
 /// Two usize decimals is forty digits and the rest is a fixed ASCII phrase

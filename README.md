@@ -6,9 +6,10 @@ tools an agent can call: resolve a package on npm, crates.io or PyPI, fetch and
 extract its archives, and diff one version against another.
 
 **Status: transport, the tools that read a package, the one that diffs two,
-and the two that read a diff back.** The crate builds, tests and deploys,
-and `/mcp` speaks Streamable HTTP: a client connects, negotiates a protocol
-revision, lists tools and calls one. There are eight. `search_packages` finds
+the two that read a diff back, and the resources beside them.** The crate
+builds, tests and deploys, and `/mcp` speaks Streamable HTTP: a client
+connects, negotiates a protocol revision, lists tools and calls one. There are
+eight, and three resources beside them. `search_packages` finds
 a package from a name half
 remembered, which is where an agent with no exact name to start from starts;
 `resolve_archive_url` answers from its arguments and fetches nothing;
@@ -21,9 +22,10 @@ short if it is longer than a response can carry; and
 sample of the files that moved most, and a handle; `get_diff_tree` takes that
 handle and lists the comparison's files and directories a page at a time; and
 `get_file_diff` takes the same handle and returns one of those files' diffs,
-trimmed to the lines around each change unless you ask for all of them. The
-resources that read a diff back arrive with
-[#16](https://github.com/philfreshman/diffpack-server/issues/16).
+trimmed to the lines around each change unless you ask for all of them. Three
+resources sit beside the tools for a client that would rather open something
+than call it: `diffpack://registries` describes the three registries in one
+document, and a comparison and any one file of it are readable by URI.
 `/health` is the other route and is what a monitor watches.
 
 Production serves whatever was last merged to `main`, so a branch merged into
@@ -49,6 +51,7 @@ src/lib.rs       Everything with a decision in it.
 src/router.rs    Every route this function serves.
 src/mcp.rs       The MCP handler: identity, capabilities, the tool list.
 src/tools/       One module per tool: its definition and its handler.
+src/resources/   One module per resource: its URI and its handler.
 src/registry.rs  What a registry is: npm, crates.io, PyPI, described once.
 src/archive/     A version's files: fetch, size cap, extract, one interface.
 src/catalogue/   What a package has released, most recently published first.
@@ -324,8 +327,21 @@ paging through that is a call spent on what did not happen; and
 `get_file_diff`, which takes the same handle and a path and returns that
 file's diff, with three lines of unchanged context around each change rather
 than the whole file, and `isDiff: false` where the answer is a file rather
-than a patch. The resources that read a diff back arrive with
-[#16](https://github.com/philfreshman/diffpack-server/issues/16).
+than a patch.
+
+Three resources sit beside those tools, for the client that presents a
+resource browser rather than a list of calls. `resources/list` has
+`diffpack://registries`, which describes npm, crates.io and PyPI in one
+document — the identifier each is named by, where a version's archive, a
+package's versions and a search come from, and how each spells a package
+name, so an agent reads a scoped npm name once instead of guessing at it.
+`resources/templates/list` has the two that take a handle:
+`diffpack://diff/{handle}` is the whole of a comparison in one document, and
+`diffpack://diff/{handle}/file/{path}` is one file of it. Reading a comparison
+too large for one response answers with its totals and a pointer to
+`get_diff_tree` rather than with as much of the tree as fits, and
+`diff_package_versions` carries a link to its own comparison so a client can
+follow the result without building a URI itself.
 
 Claude Code:
 
