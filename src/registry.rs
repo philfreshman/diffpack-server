@@ -203,8 +203,8 @@ impl Registry {
     /// cannot read is something the caller has to explain to a model, and
     /// the caller is the one holding the package name that belongs in that
     /// message.
-    pub fn read_versions(self, document: &str) -> Option<Vec<Version>> {
-        let mut versions = match self {
+    pub fn read_versions(self, document: &str) -> Option<Versions> {
+        let (mut versions, current) = match self {
             Self::Npm => {
                 // Only the keys are wanted from `versions`; the dates are in
                 // `time`, which also carries `created` and `modified`. The
@@ -214,10 +214,22 @@ impl Registry {
                 struct Document {
                     versions: std::collections::BTreeMap<String, de::IgnoredAny>,
                     time: std::collections::BTreeMap<String, String>,
+                    /// npm's pointer at the current release, and the one
+                    /// `npm install` with no version resolves. Every other
+                    /// tag a package carries — `next`, `beta`, a release
+                    /// line's own — is a name somebody chose, so only this
+                    /// one is read.
+                    #[serde(default, rename = "dist-tags")]
+                    dist_tags: DistTags,
+                }
+                #[derive(Default, Deserialize)]
+                struct DistTags {
+                    #[serde(default)]
+                    latest: Option<String>,
                 }
 
                 let document: Document = serde_json::from_str(document).ok()?;
-                document
+                let listed = document
                     .versions
                     .into_keys()
                     .map(|version| Version {
@@ -225,7 +237,8 @@ impl Registry {
                         published_at: document.time.get(&version).cloned(),
                         version,
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                (listed, document.dist_tags.latest)
             }
 
             Self::Crates => {
@@ -240,7 +253,7 @@ impl Registry {
                 }
 
                 let document: Document = serde_json::from_str(document).ok()?;
-                document
+                let listed = document
                     .versions
                     .into_iter()
                     .map(|release| Version {
@@ -248,7 +261,8 @@ impl Registry {
                         version: release.num,
                         published_at: release.created_at,
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                (listed, None)
             }
 
             // deps.dev sorts these lexically by version string, which is
@@ -273,7 +287,7 @@ impl Registry {
                 }
 
                 let document: Document = serde_json::from_str(document).ok()?;
-                document
+                let listed = document
                     .versions
                     .into_iter()
                     .map(|release| Version {
@@ -281,7 +295,8 @@ impl Registry {
                         version: release.version_key.version,
                         published_at: release.published_at,
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                (listed, None)
             }
         };
 
@@ -294,7 +309,10 @@ impl Registry {
         // Ties keep whatever order they arrived in, which for two releases
         // published in the same instant is not a question anyone is asking.
         versions.sort_by(|a, b| b.published_at.cmp(&a.published_at));
-        Some(versions)
+        Some(Versions {
+            all: versions,
+            current,
+        })
     }
 
     /// Where a search for `query` is answered, and for at most `limit` hits.
@@ -650,6 +668,34 @@ pub const VERSION_RULE: &str = "A version is one published version, spelled the 
 pub struct VersionSource {
     /// The document to fetch.
     pub url: String,
+}
+
+/// Every version a registry lists for one package, and the one it points at.
+///
+/// Two answers rather than one because a registry's version document carries
+/// two, and they are different questions. `all` is newest first — most
+/// recently published — which is what an agent asking *what changed in the
+/// last two releases* wants. `current` is the release the registry itself
+/// resolves to, which is what an agent asking *the latest version* wants.
+/// npm's `@types/node` answers them with different versions most weeks.
+///
+/// Named for neither the seam that fetches it ([`crate::catalogue`]) nor the
+/// document it was read out of: it is what the document *said*, which is the
+/// only thing a tool ever needs from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Versions {
+    /// Every version the registry lists, newest published first.
+    pub all: Vec<Version>,
+
+    /// The version the registry itself points at, spelled as the registry
+    /// spells it.
+    ///
+    /// `None` where the registry names none. It is not looked up in
+    /// [`all`](Self::all) and not checked against it: a pointer at a version
+    /// this server did not receive in the list is the registry's own answer,
+    /// and replacing it with `None` would report *no current release* for a
+    /// package that has one.
+    pub current: Option<String>,
 }
 
 /// One published version of a package, and when it was published.

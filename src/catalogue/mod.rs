@@ -40,7 +40,7 @@ mod live;
 use std::path::PathBuf;
 
 use crate::error::Failure;
-use crate::registry::{Registry, Version};
+use crate::registry::{Registry, Versions};
 
 /// The most a version document may weigh before this server refuses it
 /// unread.
@@ -105,12 +105,9 @@ impl Catalogue {
         Self { limit, ..self }
     }
 
-    /// Every published version of `package`, newest first.
-    pub async fn versions(
-        &self,
-        registry: Registry,
-        package: &str,
-    ) -> Result<Vec<Version>, Failure> {
+    /// Every published version of `package`, newest first, and the one the
+    /// registry points at.
+    pub async fn versions(&self, registry: Registry, package: &str) -> Result<Versions, Failure> {
         let url = registry.versions(package).url;
         let document = self.bytes(&url, registry, package).await?;
 

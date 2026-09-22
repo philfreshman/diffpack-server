@@ -65,7 +65,7 @@ use crate::archive::{Archive, FileMap};
 use crate::catalogue::Catalogue;
 use crate::error::Failure;
 use crate::log::{Line, Sink, Spent};
-use crate::registry::{Hit, Registry, Version};
+use crate::registry::{Hit, Registry, Versions};
 use crate::search::Search;
 
 /// Declare the tools, and build the collection and the dispatch from one list.
@@ -371,13 +371,9 @@ impl Timed<'_, Archive> {
 }
 
 impl Timed<'_, Catalogue> {
-    /// Every published version of `package`, newest first, and the time it
-    /// took on the request's tally.
-    pub async fn versions(
-        self,
-        registry: Registry,
-        package: &str,
-    ) -> Result<Vec<Version>, Failure> {
+    /// Every published version of `package`, newest first, the one the
+    /// registry points at, and the time it took on the request's tally.
+    pub async fn versions(self, registry: Registry, package: &str) -> Result<Versions, Failure> {
         self.spent
             .while_fetching(self.seam.versions(registry, package))
             .await

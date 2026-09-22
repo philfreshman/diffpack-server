@@ -237,7 +237,7 @@ async fn an_answer_says_when_each_version_was_published() {
     }))
     .await;
 
-    let items = result["structuredContent"]["items"]
+    let items = result["structuredContent"]["versions"]["items"]
         .as_array()
         .unwrap_or_else(|| panic!("a page carries its items, got {result}"));
 
@@ -321,6 +321,46 @@ async fn a_pypi_prerelease_is_flagged_and_a_post_release_is_not() {
 }
 
 // ---------------------------------------------------------------------------
+// Which one the registry itself points at
+// ---------------------------------------------------------------------------
+
+/// The case #61 is about.
+///
+/// An agent asked for "the latest version of `@types/node`" and handed the
+/// first entry of this listing is given 24.13.6 — a true answer to a question
+/// nobody asked. It is a 24.x patch published forty seconds after the 26.6.2
+/// release, which is ordinary for this package: its maintainers publish
+/// across four release lines most weeks, and `npm install @types/node` gives
+/// you 26.6.2.
+///
+/// So the two answers are different entries, and both are here. Which is
+/// which comes off npm — `dist-tags.latest` was 26.6.2 when this was
+/// written — rather than off what this implementation says.
+#[tokio::test]
+async fn an_npm_packages_current_version_is_the_tag_and_not_the_newest_publish() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "@types/node",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["currentVersion"],
+        json!("26.6.2"),
+        "npm points at 26.6.2 with `dist-tags.latest`, which is what \
+         `npm install` resolves: got {result}"
+    );
+
+    assert_eq!(
+        versions(&result).first(),
+        Some(&"24.13.6"),
+        "the most recently published version is a 24.x patch. It is the other \
+         question this tool answers, and answering this one with it is the \
+         whole reason the field above exists: got {result}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Reading it a page at a time
 // ---------------------------------------------------------------------------
 
@@ -348,14 +388,14 @@ async fn a_walk_of_the_pages_is_the_whole_listing() {
         "a page of two is the first two, got {first}"
     );
     assert_eq!(
-        first["structuredContent"]["total"],
+        first["structuredContent"]["versions"]["total"],
         json!(6),
         "the total is how many versions the package has and not how many are \
          on this page — an agent told it received 2 of 2 has no reason to ask \
          again: got {first}"
     );
 
-    let cursor = first["structuredContent"]["nextCursor"]
+    let cursor = first["structuredContent"]["versions"]["nextCursor"]
         .as_str()
         .unwrap_or_else(|| panic!("a page that ends early hands back a cursor, got {first}"))
         .to_owned();
@@ -371,7 +411,7 @@ async fn a_walk_of_the_pages_is_the_whole_listing() {
         "the cursor resumes where the page stopped, got {rest}"
     );
     assert!(
-        rest["structuredContent"]["nextCursor"].is_null(),
+        rest["structuredContent"]["versions"]["nextCursor"].is_null(),
         "the last page of a sequence does not hand out another cursor, got {rest}"
     );
 }
@@ -534,7 +574,7 @@ async fn the_handler_answers_with_typed_versions() {
     .expect("the fixture set has this crate");
 
     assert_eq!(
-        page.items.first(),
+        page.versions.items.first(),
         Some(&Version {
             version: "1.53.1".to_owned(),
             published_at: Some("2026-07-20T17:06:09.996426Z".to_owned()),
@@ -544,8 +584,8 @@ async fn the_handler_answers_with_typed_versions() {
          number — would pass every test above and fail a client validating \
          against the schema"
     );
-    assert_eq!(page.total, 5);
-    assert_eq!(page.next_cursor, None);
+    assert_eq!(page.versions.total, 5);
+    assert_eq!(page.versions.next_cursor, None);
 }
 
 /// Which failure it is, rather than which words it produced.
@@ -583,7 +623,7 @@ async fn the_handler_returns_the_failure_that_names_the_absent_package() {
 
 /// Each entry's version and whether it is a preview, in the order returned.
 fn previews(result: &Value) -> Vec<(&str, bool)> {
-    result["structuredContent"]["items"]
+    result["structuredContent"]["versions"]["items"]
         .as_array()
         .unwrap_or_else(|| panic!("a page carries its items, got {result}"))
         .iter()
@@ -601,7 +641,7 @@ fn previews(result: &Value) -> Vec<(&str, bool)> {
 
 /// The `version` of every entry on this page, in the order they were returned.
 fn versions(result: &Value) -> Vec<&str> {
-    result["structuredContent"]["items"]
+    result["structuredContent"]["versions"]["items"]
         .as_array()
         .unwrap_or_else(|| panic!("a page carries its items, got {result}"))
         .iter()

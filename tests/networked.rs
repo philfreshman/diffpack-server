@@ -152,10 +152,10 @@ async fn npm_lists_the_versions_this_server_asks_it_for() {
         .expect("npm lists this package");
 
     assert!(
-        versions.iter().any(|v| v.version == "20.1.0"),
+        versions.all.iter().any(|v| v.version == "20.1.0"),
         "a release this server has an archive fixture for is still published"
     );
-    assert_recent(&versions, "2025");
+    assert_recent(&versions.all, "2025");
 }
 
 /// crates.io, end to end, from the API host rather than the static one.
@@ -168,10 +168,10 @@ async fn crates_io_lists_the_versions_this_server_asks_it_for() {
         .expect("crates.io lists this crate");
 
     assert!(
-        versions.iter().any(|v| v.version == "1.0.0"),
+        versions.all.iter().any(|v| v.version == "1.0.0"),
         "a release this server has an archive fixture for is still published"
     );
-    assert_recent(&versions, "2025");
+    assert_recent(&versions.all, "2025");
 }
 
 /// PyPI through deps.dev, and the one that would have shipped wrong.
@@ -190,17 +190,20 @@ async fn pypi_versions_are_ordered_by_date_rather_than_by_the_sources_order() {
         .expect("deps.dev lists this package");
 
     assert!(
-        versions.iter().any(|v| v.version == "2.31.0"),
+        versions.all.iter().any(|v| v.version == "2.31.0"),
         "a release this server has an archive fixture for is still published"
     );
 
-    let newest = versions.first().expect("a published package has versions");
+    let newest = versions
+        .all
+        .first()
+        .expect("a published package has versions");
     assert_ne!(
         newest.version, "2.9.2",
         "2.9.2 is the last entry in deps.dev's own order, so this is what \
          reversing the document produces"
     );
-    assert_recent(&versions, "2024");
+    assert_recent(&versions.all, "2024");
 }
 
 /// A package no registry has, asked for by name rather than by version.

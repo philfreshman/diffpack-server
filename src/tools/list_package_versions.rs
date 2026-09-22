@@ -59,6 +59,31 @@ pub struct Args {
     pub limit: Option<page::Limit>,
 }
 
+/// What the registry says the package has.
+///
+/// A wrapper around the page rather than a page on its own, because there are
+/// two answers here and only one of them is a sequence. See the module
+/// header.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Output {
+    /// The published versions, most recently published first.
+    pub versions: Page<Version>,
+
+    /// The version this registry itself points at: the one it installs for
+    /// someone who names no version, and the answer to "what is the latest
+    /// version of this package". It is **not** the first entry above — that
+    /// is the most recently published version, which on a package with
+    /// several live release lines is often a patch to an older one.
+    ///
+    /// Beside the list rather than marked on an entry, so that asking for a
+    /// small page cannot hide it: it is the same answer whichever page you
+    /// asked for, and it may name a version that is not on this one.
+    ///
+    /// Absent where the registry names none.
+    pub current_version: Option<String>,
+}
+
 /// One published version of the package.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -104,12 +129,13 @@ impl Tool for ListPackageVersions {
     const OPEN_WORLD: bool = true;
 
     type Args = Args;
-    type Output = Page<Version>;
+    type Output = Output;
 
-    async fn call(args: Args, ctx: &Ctx) -> Result<Page<Version>, Failure> {
-        let versions = ctx.catalogue().versions(args.registry, &args.package).await?;
+    async fn call(args: Args, ctx: &Ctx) -> Result<Output, Failure> {
+        let listed = ctx.catalogue().versions(args.registry, &args.package).await?;
 
-        let versions: Vec<Version> = versions
+        let versions: Vec<Version> = listed
+            .all
             .into_iter()
             .map(|version| Version {
                 version: version.version,
@@ -118,6 +144,9 @@ impl Tool for ListPackageVersions {
             })
             .collect();
 
-        page::paginate(versions, args.limit, args.cursor)
+        Ok(Output {
+            versions: page::paginate(versions, args.limit, args.cursor)?,
+            current_version: listed.current,
+        })
     }
 }
