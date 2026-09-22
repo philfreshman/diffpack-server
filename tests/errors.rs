@@ -16,20 +16,13 @@
 
 use std::time::Duration;
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+mod common;
+
+use axum::http::StatusCode;
+use common::Client;
 use diffpack_server::error::{self, Failure};
-use diffpack_server::mcp::Diffpack;
 use diffpack_server::router;
-use diffpack_server::tools::Ctx;
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
-
-const CURRENT: &str = "2026-07-28";
-
-/// The fixture sets this suite's server is built over.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 // ---------------------------------------------------------------------------
 // The protocol channel
@@ -41,16 +34,17 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 /// "wrong method" without parsing a body.
 #[tokio::test]
 async fn an_unknown_method_is_not_found_and_minus_32601() {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "diffpack/no-such-method",
-        "params": { "_meta": meta() },
-    }))
-    .await;
+    let answer = Client::fixture()
+        .respond(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "diffpack/no-such-method",
+            "params": {},
+        }))
+        .await;
 
-    assert_eq!(answer.0, StatusCode::NOT_FOUND);
-    assert_eq!(answer.1["error"]["code"], -32601);
+    assert_eq!(answer.status, StatusCode::NOT_FOUND);
+    assert_eq!(answer.json()["error"]["code"], -32601);
 }
 
 /// Naming a tool that does not exist is the same kind of mistake: there is no
@@ -62,21 +56,21 @@ async fn an_unknown_method_is_not_found_and_minus_32601() {
 /// would pass without ever reaching the code it is about.
 #[tokio::test]
 async fn calling_a_tool_that_does_not_exist_is_a_protocol_error() {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": { "name": "no_such_tool", "arguments": {}, "_meta": meta() },
-    }))
-    .await;
+    let answer = Client::fixture()
+        .post(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "no_such_tool", "arguments": {} },
+        }))
+        .await;
 
     assert_eq!(
-        answer.1["error"]["code"], -32602,
-        "a name that does not resolve is a parameter that does not validate, got {}",
-        answer.1
+        answer["error"]["code"], -32602,
+        "a name that does not resolve is a parameter that does not validate, got {answer}"
     );
     assert!(
-        answer.1["result"]["isError"].is_null(),
+        answer["result"]["isError"].is_null(),
         "a tool that does not exist must not be reported as a tool that failed"
     );
 }
@@ -573,31 +567,18 @@ fn free_text_fields_are_redacted_on_the_way_out() {
 /// and a caller can report.
 #[tokio::test]
 async fn a_panicking_handler_answers_with_a_json_rpc_error() {
-    let router = router::router_with(|| Ok(Panicking), vec![]);
-
-    let request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", "tools/list")
-        .body(Body::from(
-            json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/list",
-                "params": { "_meta": meta() },
-            })
-            .to_string(),
-        ))
-        .expect("the request should build");
-
-    let (status, body) = send(router, request).await;
+    let answer = Client::routed(|| router::router_with(|| Ok(Panicking), vec![]))
+        .respond(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {},
+        }))
+        .await;
+    let body = answer.json();
 
     assert_ne!(
-        status,
+        answer.status,
         StatusCode::INTERNAL_SERVER_ERROR,
         "a panic should not reach the client as a bare 500"
     );
@@ -656,30 +637,17 @@ impl rmcp::ServerHandler for Panicking {
 /// is that `Guarded` forwards, and any method it did not override would do.
 #[tokio::test]
 async fn a_method_this_crate_has_not_implemented_still_reaches_the_handler() {
-    let router = router::router_with(|| Ok(WithResources), vec![]);
+    let answer = Client::routed(|| router::router_with(|| Ok(WithResources), vec![]))
+        .respond(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "resources/list",
+            "params": {},
+        }))
+        .await;
+    let body = answer.json();
 
-    let request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", "resources/list")
-        .body(Body::from(
-            json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "resources/list",
-                "params": { "_meta": meta() },
-            })
-            .to_string(),
-        ))
-        .expect("the request should build");
-
-    let (status, body) = send(router, request).await;
-
-    assert_eq!(status, StatusCode::OK, "got {body}");
+    assert_eq!(answer.status, StatusCode::OK, "got {body}");
     assert_eq!(
         body["result"]["resources"][0]["uri"],
         json!(WITH_RESOURCES_URI),
@@ -718,65 +686,6 @@ impl rmcp::ServerHandler for WithResources {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// The per-request `_meta` a `2026-07-28` client attaches. See `tests/mcp.rs`.
-fn meta() -> Value {
-    json!({
-        "io.modelcontextprotocol/protocolVersion": CURRENT,
-        "io.modelcontextprotocol/clientCapabilities": {},
-    })
-}
-
-async fn post(body: Value) -> (StatusCode, Value) {
-    let method = body["method"].as_str().expect("a call names a method");
-
-    let request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", method);
-
-    // SEP-2243 repeats the thing a request names in a header as well as the
-    // body, and the transport refuses a `tools/call` that omits it. A helper
-    // that left it out would be testing a broken client.
-    let request = match body["params"]["name"].as_str() {
-        Some(name) => request.header("mcp-name", name),
-        None => request,
-    };
-
-    let request = request
-        .body(Body::from(body.to_string()))
-        .expect("the request should build");
-
-    send(server(), request).await
-}
-
-async fn send(router: axum::Router, request: Request<Body>) -> (StatusCode, Value) {
-    let response = router
-        .oneshot(request)
-        .await
-        .expect("the router answers every request");
-
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("the body should read")
-        .to_bytes();
-
-    let body = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!(
-            "expected a JSON body, got {e}: {}",
-            String::from_utf8_lossy(&bytes)
-        )
-    });
-
-    (status, body)
-}
-
 /// The text a model would read for `failure`, whichever channel it takes.
 fn message_of(failure: Failure) -> String {
     match failure.respond() {
@@ -792,18 +701,4 @@ fn text_of(result: &rmcp::model::CallToolResult) -> String {
         .filter_map(|block| block.as_text().map(|text| text.text.clone()))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// A server whose context reads the fixture sets.
-///
-/// `router::router()` would build a live one. Nothing this suite calls
-/// reaches a seam today, which is exactly how the bug #64 fixed stayed
-/// invisible: a context is safe by what it happens not to be asked for until
-/// somebody adds the call that asks. A fixture root costs nothing here and
-/// means the next test added cannot leave this process.
-fn server() -> axum::Router {
-    router::router_with(
-        || Ok(Diffpack::with_ctx(Ctx::fixture(FIXTURES))),
-        Vec::new(),
-    )
 }

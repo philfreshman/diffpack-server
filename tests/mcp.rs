@@ -10,143 +10,44 @@
 //! status codes come back, which headers appear and which never do. That is
 //! what is pinned here.
 //!
+//! This is the one suite whose subject is the request rather than the answer,
+//! so it is also the one that takes `tests/common/mod.rs`'s client apart: a
+//! conforming request is what `Client::request` hands back, and each test
+//! below that is about a header changes that one rather than assembling
+//! another. A request built here from scratch would be a second opinion about
+//! what a conforming client sends, which is the thing that module exists to
+//! stop there being.
+//!
 //! No port is bound. `tower`'s `oneshot` hands a request straight to the
 //! router, which is the same code path `vercel_runtime` drives in production
 //! minus the socket.
 
+mod common;
+
 use axum::body::Body;
-use axum::http::{HeaderMap, Request, StatusCode};
+use axum::http::{Request, StatusCode};
+use common::{Client, CURRENT, PREVIOUS};
 use diffpack_server::router;
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
-/// The revision this server is written against: no protocol-level sessions,
-/// no `initialize` handshake, `server/discover` mandatory.
-const CURRENT: &str = "2026-07-28";
-
-/// The previous revision, still spoken by clients that have not caught up.
-/// One endpoint has to serve both, so every test that matters is run against
-/// this one too.
-const PREVIOUS: &str = "2025-11-25";
-
-/// What a client sends and what it gets back, with the body left as bytes:
-/// not every answer is JSON (a `405` is plain text), and a test that assumed
-/// otherwise would report a parse failure instead of the status it meant to
-/// check.
-struct Answer {
-    status: StatusCode,
-    headers: HeaderMap,
-    body: Vec<u8>,
+/// A client of `version` driving the deployed router.
+///
+/// `router::router()` rather than a router this suite built, because what is
+/// pinned here is the HTTP surface `api/mcp.rs` mounts. The two tests that
+/// are about the allowed-origin list build their own, because the list is
+/// what they are asking about.
+fn client(version: &'static str) -> Client {
+    Client::routed(router::router).speaking(version)
 }
 
-impl Answer {
-    fn json(&self) -> Value {
-        serde_json::from_slice(&self.body).unwrap_or_else(|e| {
-            panic!(
-                "expected a JSON body, got {e}: {}",
-                String::from_utf8_lossy(&self.body)
-            )
-        })
-    }
-
-    /// The `result` of a successful JSON-RPC response, or a panic naming the
-    /// error — so a test that fails says what the server objected to rather
-    /// than `None`.
-    fn result(&self) -> Value {
-        let body = self.json();
-        if let Some(error) = body.get("error") {
-            panic!("expected a result, got JSON-RPC error {error}");
-        }
-        body["result"].clone()
-    }
-
-    fn header(&self, name: &str) -> Option<&str> {
-        self.headers.get(name).and_then(|v| v.to_str().ok())
-    }
-}
-
-/// A POST to `/mcp` calling `method`, as a conforming client of `version`
-/// sends it.
-///
-/// Everything below is the client's obligation under the transport, not this
-/// server's leniency, which is why the builder always meets it: a request
-/// that skipped any of it would be testing how we treat a broken client
-/// rather than whether we serve a working one.
-///
-/// * `Accept` names both `application/json` and `text/event-stream`, and
-///   `Content-Type` is JSON.
-/// * From `2026-07-28`, SEP-2243 repeats the method in an `Mcp-Method`
-///   header, so an intermediary can route without parsing the body.
-/// * From `2026-07-28`, the protocol version and the client's capabilities
-///   ride in each request's `_meta`. Dropping the `initialize` handshake had
-///   to put what it carried somewhere, and with no session to have agreed
-///   them in earlier, that somewhere is every request.
-fn mcp_post(version: &str, id: u32, method: &str, params: Value) -> Request<Body> {
-    // ISO-8601 dates sort lexicographically, so a string comparison is the
-    // "this revision and later" the spec's own wording means.
-    let current = version >= CURRENT;
-
-    let mut params = params;
-    if current {
-        params["_meta"] = json!({
-            "io.modelcontextprotocol/protocolVersion": version,
-            "io.modelcontextprotocol/clientCapabilities": {},
-        });
-    }
-
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", version);
-
-    if current {
-        request = request.header("mcp-method", method);
-    }
-
-    let body = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-
-    request
-        .body(Body::from(body.to_string()))
-        .expect("the request should build")
+/// A JSON-RPC request body.
+fn body(id: u32, method: &str, params: Value) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
 }
 
 /// The call every test that is not about a particular method makes.
-fn list_tools(version: &str, id: u32) -> Request<Body> {
-    mcp_post(version, id, "tools/list", json!({}))
-}
-
-/// Drive `request` through the deployed router.
-async fn ask(request: Request<Body>) -> Answer {
-    ask_of(router::router(), request).await
-}
-
-/// Drive `request` through a router the test built itself — the seam the
-/// origin tests need, because the allowed list is the thing under test.
-async fn ask_of(router: axum::Router, request: Request<Body>) -> Answer {
-    let response = router
-        .oneshot(request)
-        .await
-        .expect("the router answers every request");
-
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .expect("the body should read")
-        .to_bytes()
-        .to_vec();
-
-    Answer {
-        status,
-        headers,
-        body,
-    }
+fn list_tools(id: u32) -> Value {
+    body(id, "tools/list", json!({}))
 }
 
 /// `tools/list` succeeds on the current revision. An empty list is a correct
@@ -154,7 +55,7 @@ async fn ask_of(router: axum::Router, request: Request<Body>) -> Answer {
 /// connect and ask at all.
 #[tokio::test]
 async fn a_current_client_lists_tools() {
-    let answer = ask(list_tools(CURRENT, 1)).await;
+    let answer = client(CURRENT).respond(list_tools(1)).await;
 
     assert_eq!(answer.status, StatusCode::OK);
     assert!(
@@ -169,7 +70,7 @@ async fn a_current_client_lists_tools() {
 /// endpoint, every client we care about.
 #[tokio::test]
 async fn a_previous_revision_client_lists_tools() {
-    let answer = ask(list_tools(PREVIOUS, 1)).await;
+    let answer = client(PREVIOUS).respond(list_tools(1)).await;
 
     assert_eq!(answer.status, StatusCode::OK);
     assert!(answer.result()["tools"].is_array());
@@ -182,7 +83,9 @@ async fn a_previous_revision_client_lists_tools() {
 /// server list.
 #[tokio::test]
 async fn discover_returns_versions_capabilities_and_identity() {
-    let answer = ask(mcp_post(CURRENT, 1, "server/discover", json!({}))).await;
+    let answer = client(CURRENT)
+        .respond(body(1, "server/discover", json!({})))
+        .await;
     assert_eq!(answer.status, StatusCode::OK);
 
     let result = answer.result();
@@ -220,7 +123,7 @@ async fn discover_returns_versions_capabilities_and_identity() {
 /// trip is an avoided cold start.
 #[tokio::test]
 async fn tools_list_carries_a_ttl_and_a_cache_scope() {
-    let result = ask(list_tools(CURRENT, 1)).await.result();
+    let result = client(CURRENT).respond(list_tools(1)).await.result();
 
     assert!(
         result["ttlMs"].as_u64().is_some(),
@@ -234,9 +137,9 @@ async fn tools_list_carries_a_ttl_and_a_cache_scope() {
 }
 
 /// The spec asks for a deterministic order so that a client can cache the
-/// list and compare it cheaply. With no tools registered this is vacuous, and
-/// that is the point: it is here so that the first tool to land cannot land
-/// in whatever order it was registered in.
+/// list and compare it cheaply. `tests/tools.rs` says which tools there are;
+/// what is pinned here is that two calls agree and that the order is the
+/// one a client can predict without having seen a listing before.
 #[tokio::test]
 async fn tools_are_listed_in_a_deterministic_order() {
     let names = |result: &Value| -> Vec<String> {
@@ -248,8 +151,8 @@ async fn tools_are_listed_in_a_deterministic_order() {
             .collect()
     };
 
-    let first = names(&ask(list_tools(CURRENT, 1)).await.result());
-    let second = names(&ask(list_tools(CURRENT, 2)).await.result());
+    let first = names(&client(CURRENT).respond(list_tools(1)).await.result());
+    let second = names(&client(CURRENT).respond(list_tools(2)).await.result());
 
     assert_eq!(first, second, "two calls should list tools in one order");
 
@@ -276,7 +179,7 @@ async fn get_and_delete_are_method_not_allowed() {
             .body(Body::empty())
             .expect("the request should build");
 
-        let answer = ask(request).await;
+        let answer = client(CURRENT).send(request).await;
 
         assert_eq!(
             answer.status,
@@ -300,12 +203,14 @@ async fn no_answer_carries_a_session_id() {
     let offered = "a-session-id-a-client-invented";
 
     for version in [CURRENT, PREVIOUS] {
-        let mut request = list_tools(version, 1);
+        let client = client(version);
+
+        let mut request = client.request(list_tools(1));
         request
             .headers_mut()
             .insert("mcp-session-id", offered.parse().expect("a valid header"));
 
-        let answer = ask(request).await;
+        let answer = client.send(request).await;
 
         assert_eq!(answer.status, StatusCode::OK, "on {version}");
         assert_eq!(
@@ -326,22 +231,22 @@ async fn no_answer_carries_a_session_id() {
 /// process that sends none.
 #[tokio::test]
 async fn a_disallowed_origin_is_forbidden_and_an_absent_one_is_not() {
-    let router = || router::router_with(|| Ok(diffpack_server::mcp::Diffpack::new()), vec![]);
+    let client = allowing(vec![]);
 
-    let mut with_origin = list_tools(CURRENT, 1);
+    let mut with_origin = client.request(list_tools(1));
     with_origin.headers_mut().insert(
         "origin",
         "https://evil.example".parse().expect("a valid header"),
     );
 
     assert_eq!(
-        ask_of(router(), with_origin).await.status,
+        client.send(with_origin).await.status,
         StatusCode::FORBIDDEN,
         "an origin that is not on the list should be refused"
     );
 
     assert_eq!(
-        ask_of(router(), list_tools(CURRENT, 1)).await.status,
+        client.respond(list_tools(1)).await.status,
         StatusCode::OK,
         "a request with no Origin at all should be served"
     );
@@ -351,18 +256,26 @@ async fn a_disallowed_origin_is_forbidden_and_an_absent_one_is_not() {
 /// let in without a code change, which is what #25 will need.
 #[tokio::test]
 async fn an_allowed_origin_is_served() {
-    let router = router::router_with(
-        || Ok(diffpack_server::mcp::Diffpack::new()),
-        vec!["https://app.example".to_owned()],
-    );
+    let client = allowing(vec!["https://app.example".to_owned()]);
 
-    let mut request = list_tools(CURRENT, 1);
+    let mut request = client.request(list_tools(1));
     request.headers_mut().insert(
         "origin",
         "https://app.example".parse().expect("a valid header"),
     );
 
-    assert_eq!(ask_of(router, request).await.status, StatusCode::OK);
+    assert_eq!(client.send(request).await.status, StatusCode::OK);
+}
+
+/// A client over a router that allows exactly `origins` — the seam the two
+/// tests above need, because the allowed list is the thing under test.
+fn allowing(origins: Vec<String>) -> Client {
+    Client::routed(move || {
+        router::router_with(
+            || Ok(diffpack_server::mcp::Diffpack::new()),
+            origins.clone(),
+        )
+    })
 }
 
 /// `/health` predates the protocol and outlives it: it is what #8 deploys
@@ -377,7 +290,7 @@ async fn health_still_answers() {
         .body(Body::empty())
         .expect("the request should build");
 
-    let answer = ask(request).await;
+    let answer = client(CURRENT).send(request).await;
 
     assert_eq!(answer.status, StatusCode::OK);
     assert_eq!(answer.json(), diffpack_server::health::body());
@@ -396,7 +309,7 @@ async fn an_unknown_path_is_not_found() {
         .body(Body::empty())
         .expect("the request should build");
 
-    let answer = ask(request).await;
+    let answer = client(CURRENT).send(request).await;
 
     assert_eq!(answer.status, StatusCode::NOT_FOUND);
     assert!(

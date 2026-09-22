@@ -7,27 +7,15 @@
 //! reaching the code that answers it is most of what can break, and a handler
 //! test would pass through a URI that never matched.
 
-use axum::body::Body;
-use axum::http::Request;
+mod common;
+
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use common::{Client, PREVIOUS};
 use diffpack_server::handle::{DiffHandle, Inputs};
-use diffpack_server::mcp::Diffpack;
 use diffpack_server::page;
 use diffpack_server::registry::{ArchiveSource, Registry, VERSION_RULE};
-use diffpack_server::router;
-use diffpack_server::tools::Ctx;
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
-
-const CURRENT: &str = "2026-07-28";
-
-/// The previous revision, still spoken by clients that have not caught up.
-const PREVIOUS: &str = "2025-11-25";
-
-/// The fixture sets this suite is served from, instead of the registries.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 /// The registry catalogue's URI.
 const REGISTRIES: &str = "diffpack://registries";
@@ -55,7 +43,7 @@ async fn a_client_is_told_this_server_has_resources() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "server/discover",
-        "params": { "_meta": meta() },
+        "params": {},
     }))
     .await;
 
@@ -1025,7 +1013,7 @@ async fn call(tool: &str, arguments: Value) -> Value {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": { "name": tool, "arguments": arguments, "_meta": meta() },
+        "params": { "name": tool, "arguments": arguments },
     }))
     .await;
 
@@ -1128,7 +1116,7 @@ async fn reading(uri: &str) -> Value {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "resources/read",
-        "params": { "uri": uri, "_meta": meta() },
+        "params": { "uri": uri },
     }))
     .await
 }
@@ -1161,7 +1149,7 @@ async fn resources() -> Vec<Value> {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "resources/list",
-        "params": { "_meta": meta() },
+        "params": {},
     }))
     .await;
 
@@ -1177,7 +1165,7 @@ async fn templates() -> Vec<Value> {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "resources/templates/list",
-        "params": { "_meta": meta() },
+        "params": {},
     }))
     .await;
 
@@ -1242,90 +1230,14 @@ async fn advertised() -> Vec<(String, String)> {
     said
 }
 
-/// The per-request `_meta` a `2026-07-28` client attaches. See `tests/mcp.rs`.
-fn meta() -> Value {
-    json!({
-        "io.modelcontextprotocol/protocolVersion": CURRENT,
-        "io.modelcontextprotocol/clientCapabilities": {},
-    })
-}
-
 /// A request as a conforming `2026-07-28` client sends it, to a server whose
 /// archives come from `fixtures/archives/` rather than from the registries.
 async fn post(body: Value) -> Value {
-    let (_, answer) = respond(body, CURRENT).await;
-    answer
+    Client::fixture().post(body).await
 }
 
 /// The same, as a client on the previous revision sends it: none of the
 /// headers or the `_meta` SEP-2243 and SEP-1319 added.
 async fn previous(body: Value) -> Value {
-    let (_, answer) = respond(body, PREVIOUS).await;
-    answer
-}
-
-/// The same request, with the body the client received beside the answer.
-///
-/// The bytes rather than the structure, because that is what the response
-/// ceiling bounds: what Vercel refuses is the frame this server wrote, and
-/// two frames that parse alike can still differ.
-async fn respond(body: Value, version: &str) -> (String, Value) {
-    // ISO-8601 dates sort lexicographically, so a string comparison is the
-    // "this revision and later" the spec's own wording means.
-    let current = version >= CURRENT;
-    let method = body["method"].as_str().expect("a call names a method");
-
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", version);
-
-    // SEP-2243 repeats the thing being asked for in a header as well as in
-    // the body, so an intermediary can route without parsing one. For a read
-    // that is the URI, the way it is the tool name for a call — the client's
-    // obligation under the transport from `2026-07-28`, not this server's
-    // leniency, which is why the builder always meets it and a client on the
-    // previous revision sends none of it.
-    if current {
-        request = request.header("mcp-method", method);
-        for source in ["uri", "name"] {
-            if let Some(name) = body["params"][source].as_str() {
-                request = request.header("mcp-name", name);
-            }
-        }
-    }
-
-    let request = request
-        .body(Body::from(body.to_string()))
-        .expect("the request should build");
-
-    let router = router::router_with(
-        || Ok(Diffpack::with_ctx(Ctx::fixture(FIXTURES))),
-        Vec::new(),
-    );
-
-    let response = router
-        .oneshot(request)
-        .await
-        .expect("the router answers every request");
-
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("the body should read")
-        .to_bytes();
-
-    let answer = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!(
-            "expected a JSON body ({status}), got {e}: {}",
-            String::from_utf8_lossy(&bytes)
-        )
-    });
-
-    (String::from_utf8_lossy(&bytes).into_owned(), answer)
+    Client::fixture().speaking(PREVIOUS).post(body).await
 }
