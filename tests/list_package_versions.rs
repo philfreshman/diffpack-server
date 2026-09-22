@@ -714,6 +714,76 @@ async fn the_description_says_the_order_is_by_date_rather_than_by_number() {
     );
 }
 
+/// The other thing an agent cannot work out from a list of versions: that
+/// there is a second answer in the same result.
+///
+/// An agent that reads only the list will answer "what is the latest version
+/// of `@types/node`" with the first entry, because that is the only answer it
+/// was shown. So the description has to say that the current release is
+/// carried separately, and the output schema has to name the field that
+/// carries it.
+#[tokio::test]
+async fn the_definition_says_the_current_release_is_answered_separately() {
+    let tool = listed(TOOL).await;
+
+    let current = &tool["outputSchema"]["properties"]["currentVersion"];
+    assert!(
+        current.is_object(),
+        "the answer's second field is declared where a client validates \
+         against it, got {}",
+        tool["outputSchema"]
+    );
+    assert!(
+        current["description"]
+            .as_str()
+            .is_some_and(|said| said.contains("not")),
+        "the description has to say what this is *not* — the first entry of \
+         the list — since that is the answer an agent would otherwise take: \
+         got {current}"
+    );
+
+    let description = tool["description"].as_str().unwrap_or_else(|| {
+        panic!("a tool an agent picks without documentation has one, got {tool}")
+    });
+    assert!(
+        description.contains("currentVersion"),
+        "an agent choosing this tool reads the description, and a field it \
+         is never told about is one it never looks at: got {description}"
+    );
+}
+
+/// The preview flag stops answering the question it is not the answer to.
+///
+/// Its description said: asked for the latest version, prefer the newest
+/// entry where this is false. On `@types/node` that picks 24.13.6, which is
+/// not a preview, is the newest thing published, and is not the current
+/// release — the advice was wrong for exactly the package this whole field
+/// exists for, and it is wrong the same way for any package with more than
+/// one live release line.
+///
+/// Now there is a field that answers it, so this one says where to look
+/// rather than sending an agent back to the list.
+#[tokio::test]
+async fn the_preview_flag_sends_an_agent_to_the_current_version_rather_than_the_list() {
+    let tool = listed(TOOL).await;
+
+    let said = tool["outputSchema"]["$defs"]["Version"]["properties"]["prerelease"]["description"]
+        .as_str()
+        .unwrap_or_else(|| {
+            panic!(
+                "every field of an answer is described where a client reads it, got {}",
+                tool["outputSchema"]
+            )
+        });
+
+    assert!(
+        said.contains("currentVersion"),
+        "a preview flag that tells an agent to pick the newest entry that is \
+         not one is telling it to answer the current release with a backport: \
+         got {said}"
+    );
+}
+
 /// `limit` and `cursor` carry `src/page.rs`'s numbers, not numbers this tool
 /// wrote down.
 #[tokio::test]

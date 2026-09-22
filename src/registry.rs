@@ -184,9 +184,9 @@ impl Registry {
     /// different questions. The list is newest published first, which is what
     /// *what changed in the last two releases* asks. `current` is the release
     /// the registry itself resolves for someone who names no version, which
-    /// is what *the latest version* asks. Each registry names it its own way
-    /// and each arm below reads its own; on `@types/node` they are 24.13.6
-    /// and 26.6.2 most weeks.
+    /// is what *which version is this package on* asks. Each registry names
+    /// it its own way and each arm below reads its own; on `@types/node`
+    /// they are 24.13.6 and 26.6.2 most weeks.
     ///
     /// `current` is not looked up in the list. A registry pointing at a
     /// version this server did not receive in the document is reported as the
@@ -736,8 +736,9 @@ pub struct VersionSource {
 /// two, and they are different questions. `all` is newest first — most
 /// recently published — which is what an agent asking *what changed in the
 /// last two releases* wants. `current` is the release the registry itself
-/// resolves to, which is what an agent asking *the latest version* wants.
-/// npm's `@types/node` answers them with different versions most weeks.
+/// resolves to, which is what an agent asking *which version is this package
+/// on* wants. npm's `@types/node` answers them with different versions most
+/// weeks.
 ///
 /// Named for neither the seam that fetches it ([`crate::catalogue`]) nor the
 /// document it was read out of: it is what the document *said*, which is the

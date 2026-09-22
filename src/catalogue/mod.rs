@@ -4,8 +4,9 @@
 //! release history costs on the far side of it: where the document is, the
 //! HTTP client, the size cap, and reading three different shapes of JSON into
 //! one answer. A tool asks for a package's versions and is given them newest
-//! first or a [`Failure`]; which registry spells its dates which way is not a
-//! tool's to know.
+//! first — with the one the registry itself points at — or a [`Failure`];
+//! which registry spells its dates which way, and which field it names its
+//! current release in, is not a tool's to know.
 //!
 //! The same shape as [`crate::archive`] and for the same reasons: one seam,
 //! two adapters, and [`crate::fetch`] underneath both so there is one HTTP

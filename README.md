@@ -13,7 +13,7 @@ a package from a name half
 remembered, which is where an agent with no exact name to start from starts;
 `resolve_archive_url` answers from its arguments and fetches nothing;
 `list_package_versions` says what a package has released, most recently
-published first; `list_package_files` downloads a published version and lists
+published first, and which of them the registry itself installs; `list_package_files` downloads a published version and lists
 what is inside it, a page at a time; `get_file_content` returns one of those
 files, cut short if it is longer than a response can carry; and
 `diff_package_versions` compares two versions and answers with totals, a
@@ -298,7 +298,9 @@ PyPI hits carry a name alone, because the index PyPI publishes has nothing
 else in it; `resolve_archive_url`, which returns the URL a package version's
 archive is served from without fetching anything; `list_package_versions`,
 which lists what a package has published with the date of each and whether it
-is a preview, most recently published first rather than by version number;
+is a preview, most recently published first rather than by version number,
+and says separately which version the registry itself points at — on
+`@types/node` those are two different releases most weeks;
 `list_package_files`, which fetches that archive and lists the paths inside
 it with the top-level directory stripped; `get_file_content`, which returns
 one of those files, saying when it had to cut one short and when the bytes
