@@ -36,40 +36,32 @@
 
 use std::collections::HashMap;
 
-use axum::body::Body;
-use axum::http::Request;
+mod common;
+
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use common::Client;
 use diffpack_server::handle::{DiffHandle, Inputs};
-use diffpack_server::mcp::Diffpack;
 use diffpack_server::page;
 use diffpack_server::registry::Registry;
-use diffpack_server::router;
-use diffpack_server::tools::Ctx;
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
-
-const CURRENT: &str = "2026-07-28";
 
 const TOOL: &str = "get_diff_tree";
 
 /// The tool that mints what this one takes.
 const SUMMARY: &str = "diff_package_versions";
 
-/// The fixture sets this suite is served from, instead of the registries.
-///
-/// The root rather than one seam's directory inside it: `Ctx::fixture` gives
-/// every seam a fixture adapter, so nothing this suite builds can reach a
-/// registry — including a seam this tool does not use today.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
-
 // ---------------------------------------------------------------------------
 // What a client is told
 // ---------------------------------------------------------------------------
 
-/// The definition carries what an agent needs to call this correctly having
-/// read nothing else, which is #23's question asked of the tool that exists.
+/// The arguments and the answer this tool in particular has, which is #23's
+/// question asked of one tool.
+///
+/// The rules every tool is held to — a description, an object input schema, a
+/// declared output shape, the read-only and open-world hints, the registry
+/// enum — are `tests/tools.rs`'s, over all eight at once. What is here is
+/// only what is true of this one.
 #[tokio::test]
 async fn the_definition_carries_everything_an_agent_needs() {
     let tool = listed(TOOL).await;
@@ -89,28 +81,10 @@ async fn the_definition_carries_everything_an_agent_needs() {
          argument narrows an answer that is complete without it: got {}",
         tool["inputSchema"]
     );
-
-    assert_eq!(
-        tool["outputSchema"]["type"], "object",
-        "a tool answering with structured content declares its shape, got {tool}"
-    );
-
-    assert_eq!(
-        tool["annotations"]["readOnlyHint"], true,
-        "reading a comparison back changes nothing a caller can observe, and \
-         a client deciding whether to ask for confirmation reads this, got {}",
-        tool["annotations"]
-    );
     assert_eq!(
         tool["annotations"]["idempotentHint"], true,
         "a handle names two published versions, which are immutable, so the \
          same page is the same page, got {}",
-        tool["annotations"]
-    );
-    assert_eq!(
-        tool["annotations"]["openWorldHint"], true,
-        "the handle names a package on a registry, which is a world this \
-         server does not control, got {}",
         tool["annotations"]
     );
 }
@@ -960,17 +934,17 @@ async fn the_same_handle_answers_with_the_same_bytes_twice() {
 /// it runs — which is exactly what this asserts.
 #[tokio::test]
 async fn a_handle_that_is_not_one_is_a_protocol_error() {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": TOOL,
-            "arguments": { "handle": "not-a-handle" },
-            "_meta": meta(),
-        },
-    }))
-    .await;
+    let answer = Client::fixture()
+        .post(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": TOOL,
+                "arguments": { "handle": "not-a-handle" },
+            },
+        }))
+        .await;
 
     assert_eq!(answer["error"]["code"], -32602, "got {answer}");
     assert!(
@@ -987,17 +961,17 @@ async fn a_handle_that_is_not_one_is_a_protocol_error() {
 /// would mean answering confidently about a comparison nobody asked for.
 #[tokio::test]
 async fn a_handle_whose_halves_disagree_is_a_protocol_error() {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": TOOL,
-            "arguments": { "handle": edited(&diffable(), "package", json!("elsewhere")) },
-            "_meta": meta(),
-        },
-    }))
-    .await;
+    let answer = Client::fixture()
+        .post(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": TOOL,
+                "arguments": { "handle": edited(&diffable(), "package", json!("elsewhere")) },
+            },
+        }))
+        .await;
 
     assert_eq!(answer["error"]["code"], -32602, "got {answer}");
 }
@@ -1168,26 +1142,23 @@ async fn pages(arguments: Value) -> Vec<(String, Value)> {
             asked["cursor"] = json!(cursor);
         }
 
-        let (body, answer) = respond(json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": { "name": TOOL, "arguments": asked, "_meta": meta() },
-        }))
-        .await;
+        let answer = Client::fixture()
+            .respond(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": { "name": TOOL, "arguments": asked },
+            }))
+            .await;
 
-        if let Some(error) = answer.get("error") {
-            panic!("expected a result, got JSON-RPC error {error}");
-        }
-
-        let result = answer["result"].clone();
+        let result = answer.result();
         let page = result["structuredContent"].clone();
 
         seen += page["items"]
             .as_array()
             .unwrap_or_else(|| panic!("a page carries items, got {result}"))
             .len();
-        collected.push((body, result));
+        collected.push((answer.frame(), result));
 
         match page["nextCursor"].as_str() {
             Some(next) => cursor = Some(next.to_owned()),
@@ -1206,116 +1177,13 @@ async fn pages(arguments: Value) -> Vec<(String, Value)> {
 
 /// The listed definition of `name`, or a panic naming what was listed.
 async fn listed(name: &str) -> Value {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/list",
-        "params": { "_meta": meta() },
-    }))
-    .await;
-
-    let tools = answer["result"]["tools"]
-        .as_array()
-        .unwrap_or_else(|| panic!("tools/list should answer with an array, got {answer}"))
-        .clone();
-
-    tools
-        .iter()
-        .find(|tool| tool["name"] == name)
-        .unwrap_or_else(|| {
-            let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-            panic!("`{name}` should be listed, got {names:?}")
-        })
-        .clone()
+    Client::fixture().listed(name).await
 }
 
-/// Call `tool` with `arguments`, returning the `result` — or panicking with
-/// the JSON-RPC error, so a failure says what the server objected to.
+/// Call `tool` with `arguments`, returning the `result`.
+///
+/// `tool` rather than this file's, because half of what is asserted here
+/// starts at the tool that mints a handle.
 async fn call(tool: &str, arguments: Value) -> Value {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": { "name": tool, "arguments": arguments, "_meta": meta() },
-    }))
-    .await;
-
-    if let Some(error) = answer.get("error") {
-        panic!("expected a result, got JSON-RPC error {error}");
-    }
-    answer["result"].clone()
-}
-
-/// The per-request `_meta` a `2026-07-28` client attaches. See `tests/mcp.rs`.
-fn meta() -> Value {
-    json!({
-        "io.modelcontextprotocol/protocolVersion": CURRENT,
-        "io.modelcontextprotocol/clientCapabilities": {},
-    })
-}
-
-/// A request as a conforming `2026-07-28` client sends it, to a server whose
-/// archives come from `fixtures/archives/` rather than from the registries.
-///
-/// The fixture adapter is reached the way #39 says a tool's state is reached:
-/// through the service factory `router_with` takes, which builds the `Ctx`
-/// every handler is handed. A test that reached around it would be testing a
-/// path production does not take.
-async fn post(body: Value) -> Value {
-    let (_, answer) = respond(body).await;
-    answer
-}
-
-/// The same request, with the body the client received beside the answer.
-///
-/// The bytes rather than the structure, because that is what the response
-/// ceiling bounds and what "the same answer twice" is a claim about: what
-/// Vercel refuses is the frame this server wrote, and two frames that parse
-/// alike can still differ.
-async fn respond(body: Value) -> (String, Value) {
-    let method = body["method"].as_str().expect("a call names a method");
-
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", method);
-
-    if let Some(name) = body["params"]["name"].as_str() {
-        request = request.header("mcp-name", name);
-    }
-
-    let request = request
-        .body(Body::from(body.to_string()))
-        .expect("the request should build");
-
-    let router = router::router_with(
-        || Ok(Diffpack::with_ctx(Ctx::fixture(FIXTURES))),
-        Vec::new(),
-    );
-
-    let response = router
-        .oneshot(request)
-        .await
-        .expect("the router answers every request");
-
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("the body should read")
-        .to_bytes();
-
-    let answer = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!(
-            "expected a JSON body ({status}), got {e}: {}",
-            String::from_utf8_lossy(&bytes)
-        )
-    });
-
-    (String::from_utf8_lossy(&bytes).into_owned(), answer)
+    Client::fixture().call(tool, arguments).await
 }
