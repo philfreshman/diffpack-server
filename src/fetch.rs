@@ -134,12 +134,18 @@ pub struct About<'a> {
     /// Whether this request may be answered compressed.
     ///
     /// Off for everyone but the caller that needs it, and asked for rather
-    /// than assumed because it is a trade rather than a free saving. A body
-    /// decoded on the way in arrives with no `Content-Length` — the client
-    /// strips it along with the `Content-Encoding` — so the cap's cheap half,
-    /// refusing a body before a byte of it is read, stops applying to that
-    /// request. What is left is the running total, which still stops it at
-    /// the limit rather than after it.
+    /// than assumed because it is a trade rather than a free saving. The cap
+    /// has two halves — a declared length refused before a byte of the body
+    /// is read, and a running total as the chunks arrive — and a body decoded
+    /// on the way in gives up the first of them. What is left is the running
+    /// total, which still stops it at the limit rather than after it.
+    ///
+    /// [`read_within`] acts on that rather than leaving it to what a client
+    /// happens to do with a header, which is what this sentence used to
+    /// describe: a length that reached it for a body the client decodes would
+    /// describe the *compressed* bytes, and refusing a 44 MB index by the
+    /// weight of the 9.7 MB that carried it is a refusal naming a number
+    /// nobody sent.
     ///
     /// For an archive that trade is all cost: it arrives compressed already,
     /// and it is the body most worth refusing unread. For PyPI's index it is
@@ -292,9 +298,20 @@ async fn read_within(
     registry: &str,
     about: &About<'_>,
 ) -> Result<Vec<u8>, Failure> {
-    if let Some(declared) = response.content_length() {
-        if declared > limit {
-            return Err((about.too_large)(declared));
+    // The cheap half, and it is read only where what arrived is what was
+    // sent. A caller that allowed a compressed answer is handed a body the
+    // client decoded, and the length that came with it counted the bytes on
+    // the wire — so a header that survived that decode would have this
+    // function refuse a 44 MB index for weighing the 9.7 MB that carried it,
+    // and name that number in the refusal. Today the client strips it and
+    // this would be a `None`; saying so is what makes
+    // [`About::compressed`]'s sentence a rule rather than an observation
+    // about somebody else's library.
+    if !about.compressed {
+        if let Some(declared) = response.content_length() {
+            if declared > limit {
+                return Err((about.too_large)(declared));
+            }
         }
     }
 

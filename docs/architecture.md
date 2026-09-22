@@ -18,6 +18,7 @@ src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
 src/catalogue/      versions(registry, package) -> Versions, newest first
 src/search/         hits(registry, query, limit) -> Vec<Hit>, best match first
+src/document/       what the three above share: host check, adapters, fixtures, cap
 src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, caps
 src/store/          DiffStore: get(&DiffKey) / put(entry), inside a budget
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
@@ -257,10 +258,12 @@ run offline. See [ADR 0001](adr/0001-the-archive-seam-is-a-filemap.md).
 Three things are the same code for both adapters rather than the live one's
 alone, because each is a rule about what this server does rather than about
 where bytes come from: the host allowlist `registry` derives, the size cap,
-and extraction. The fixture index is keyed by URL for the same reason — a
-fetch path that built a URL of its own instead of asking `registry` finds
-nothing there, so `tests/archive.rs` is a test of resolution as well as of
-extraction.
+and extraction. The first two are `src/document/`'s and shared with the other
+two seams; extraction is this module's, and is what is left here along with
+where a version's archive is and the hop PyPI needs to find out. The fixture
+index is keyed by URL for that same reason — a fetch path that built a URL of
+its own instead of asking `registry` finds nothing there, so `tests/archive.rs`
+is a test of resolution as well as of extraction.
 
 The index has a third answer beside "here are the bytes" and "this URL is not
 in the set": `null`, meaning the registry serves nothing there. It is the
@@ -282,7 +285,11 @@ fixture set keyed by the URL `registry` builds.
 It is not part of `archive` because that seam *is* a `FileMap` ([ADR
 0001](adr/0001-the-archive-seam-is-a-filemap.md)) and this is none of it: a
 document that is read rather than extracted, about a package rather than one
-version of one, and never cached.
+version of one, and never cached. Sharing what sits *under* the two
+interfaces does not undo that, which is what `src/document/` is and what [ADR
+0015](adr/0015-one-implementation-beneath-three-registry-seams.md) argues.
+What is left here is where the document is, what it is called when it will
+not read, and how to turn one into a `Versions`.
 
 **Newest first means most recently published first**, and the date it is
 computed from is the only thing in these documents that can produce the
@@ -322,15 +329,64 @@ the source itself having moved, since nothing in that URL named a package. See
 [ADR 0011](adr/0011-what-a-registry-publishes-is-its-own-seam.md).
 
 Where a search is asked, what to ask it for, and how to read the answer are
-`registry`'s. What is this module's is the request, the size cap, and the one
-policy a search needs that a catalogue does not: PyPI's source is the index of
+`registry`'s; making the request, checking the host and weighing the body are
+`src/document/`'s, along with the other two seams'. What is this module's is
+the size cap's number, the refusals a search fails with, and the one policy a
+search needs that a catalogue does not: PyPI's source is the index of
 everything it publishes rather than a reply to a query, so a warm instance
 holds the document it already fetched for the ten minutes PyPI's own
-`cache-control` gives it — a constant in that module rather than a header read
-back off each answer, so a `max-age` PyPI changed is a change made here. That
-is a document, not an answer — every
-query is matched against it afresh — so no search result is cached anywhere
-and nothing here goes near the blob store.
+`cache-control` gives it — a constant in `src/search/` rather than a header
+read back off each answer, so a `max-age` PyPI changed is a change made here.
+That is a document, not an answer — every query is matched against it afresh —
+so no search result is cached anywhere and nothing here goes near the blob
+store.
+
+The *holding* itself is one level down, in `src/document/`, and that is where
+it has to be: a body handed back by a warm instance is still a body this
+server is holding, so a seam built `with_limit` has to be able to refuse it,
+which means the holding sits under the cap and the cap is that module's.
+Which source is worth holding, and for how long, stay here.
+
+### `src/document/` — what the three registry seams share
+
+`archive`, `catalogue` and `search` each ask a registry for something, and all
+three do the same four things first: check the URL against the hosts
+`registry` names, go to a live registry or to a fixture set, weigh what came
+back against the size cap, and hand the bytes on. This module is those four
+steps once. What is left in each seam is the step that differs — extraction, a
+version list, hits — plus where its document is and what its failures are
+called.
+
+It takes its refusals as parameters, the way `fetch` does and for the same
+reason: a URL off the allowlist is a `MalformedArchive` to `archive`, an
+`UnreadableVersions` to `catalogue` and an `Internal` to `search`, because
+nothing in a search URL came from a caller. `About` is the whole of what a
+seam says about a request, so what is per-seam about a fetch reads as one
+struct literal in that seam's own file.
+
+**It is not a fourth seam and is deliberately not on the import list above.**
+A tool that could name it would be a tool that can fetch, which is the thing
+`scripts/check-tool-seams.sh` exists to prevent, and it is absent from that
+script's list for the reason `fetch` is. The three interfaces above are
+unchanged; what is shared is what sits under them. See [ADR
+0015](adr/0015-one-implementation-beneath-three-registry-seams.md), which also
+says why this does not reopen [ADR
+0011](adr/0011-what-a-registry-publishes-is-its-own-seam.md).
+
+One fixture index format and one reader of it. All three sets were already
+written the same way on disk — a URL to the file that stands in for what it
+serves, or `null` for a URL that serves nothing — and the three readers had
+started to differ in nothing that mattered. The `null` refusal is built from
+the status the asking seam names, through the same constructor the live
+adapter uses, so a fixture set cannot answer differently from a registry.
+
+The cap is compared against once here, and a body that `fetch` streamed does
+not reach that comparison: it was refused on a declared length before a byte
+was read and on a running total as the chunks arrived, so weighing the result
+could only agree. What does reach it is a fixture body and one a warm instance
+was already holding — the paths nothing streamed, which is what keeps the cap
+a rule about what this server will read rather than about where bytes came
+from.
 
 ### `src/fetch.rs` — the registries' HTTP client
 
@@ -396,8 +452,18 @@ guessing them, and the one header that differs. A `404` is a missing *version*
 to `archive`, a missing *package* to `catalogue` and a broken source to
 `search`, and a body over the cap is named after whichever was being read — an
 archive has a smaller thing to ask for instead and a version list does not.
-The header is `Accept`, which only PyPI's index needs: the same URL serves a
-web page unless the request asks for PEP 691's JSON.
+That caller is `src/document/` now rather than three of them, and the
+arrangement it passes them in is this module's, one level up. The header is
+`Accept`, which only PyPI's index needs: the same URL serves a web page unless
+the request asks for PEP 691's JSON.
+
+The cheap half of the cap is read only where what arrived is what was sent.
+One caller may be answered compressed — the index is 9.7 MB that way against
+44 MB and a 30 s timeout — and a declared length that reached the check for a
+body the client decoded would count the bytes on the wire, so it would refuse
+that index by the weight of what carried it and say so to a model. The running
+total is what bounds a decoded body, and it stops one at the limit rather than
+after it.
 
 ### `src/store/` — cached diff results
 

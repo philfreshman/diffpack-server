@@ -8,9 +8,9 @@
 //! ranked reply is not a tool's to know.
 //!
 //! The same shape as [`crate::archive`] and [`crate::catalogue`] and for the
-//! same reasons: one seam, two adapters, and [`crate::fetch`] underneath the
-//! live one so there is one HTTP client for the registries rather than one
-//! per seam.
+//! same reasons: one seam, two adapters, and [`crate::document`] under all
+//! three so there is one HTTP client, one host check and one fixture reader
+//! for the registries rather than one of each per seam.
 //!
 //! # Why this is not the catalogue seam
 //!
@@ -24,7 +24,10 @@
 //! policy that difference needs lives here rather than in a module whose
 //! header says it is about one package's releases. [ADR
 //! 0011](../docs/adr/0011-what-a-registry-publishes-is-its-own-seam.md) has
-//! the rest.
+//! the rest, and it is untouched: what these three share is an
+//! implementation, not an interface. [ADR
+//! 0015](../docs/adr/0015-one-implementation-beneath-three-registry-seams.md)
+//! is where that distinction is argued.
 //!
 //! # Two adapters
 //!
@@ -46,17 +49,16 @@
 //!
 //! What a registry has moves whenever somebody publishes, and the 256 MB
 //! budget belongs to diff results, so no answer is written to the blob store.
-//! The one thing a warm instance holds is PyPI's *document* — see
-//! [`live`] — and every query is matched against it afresh.
-
-mod fixture;
-mod live;
+//! The one thing a warm instance holds is PyPI's *document* — for
+//! [`FRESH_FOR`], which is this module's number — and every query is matched
+//! against it afresh.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::time::Duration;
 
+use crate::document::{About, Document};
 use crate::error::Failure;
-use crate::registry::{self, Hit, Registry};
+use crate::registry::{Hit, Registry};
 
 /// The most one search answer may weigh before this server refuses it unread.
 ///
@@ -71,30 +73,44 @@ use crate::registry::{self, Hit, Registry};
 /// packages are called something like this" is not an ordinary anything.
 pub const SIZE_LIMIT: u64 = 64 * 1024 * 1024;
 
+/// How long an index this server has already fetched is treated as current.
+///
+/// PyPI serves its index with `cache-control: max-age=600`, so ten minutes is
+/// the registry's own answer to the question rather than a number chosen
+/// here. It is written down rather than read back off the response: nothing
+/// in this crate parses a header, so a `max-age` PyPI changed is a change to
+/// this line and not one that arrives on its own.
+///
+/// A package published inside that window is missing from a search made
+/// inside it, which is the trade the source costs: the alternative is tens of
+/// megabytes on every call.
+///
+/// It is this module's constant and goes to [`crate::document`] as an
+/// argument. Which source is worth holding, and for how long, is a fact about
+/// what a registry publishes; the holding itself has to sit under the cap,
+/// and the cap is that module's.
+const FRESH_FOR: Duration = Duration::from_secs(600);
+
+/// What a source that is not answering answers with, where it answers at all.
+///
+/// The number a fixture stands in with, so that the refusal the suite drives
+/// is the one a real outage produces rather than one shaped like it. Not a
+/// `404` the way the other two sets' `null` is: nothing in a search URL names
+/// a package, so a search source answering as though there were is a source
+/// that has moved rather than a thing that is missing.
+const SOURCE_DOWN: u16 = 503;
+
 /// Where the packages a registry has are looked for.
 #[derive(Debug)]
 pub struct Search {
-    source: Source,
-    /// The most an answer may weigh before this server refuses it. A field
-    /// rather than the constant read at the point of use, so the refusal can
-    /// be exercised with a real answer and a small limit.
-    limit: u64,
-}
-
-/// The two adapters, as a variant each rather than a trait, for the reason
-/// [`crate::archive`] gives: neither can arrive from outside this crate.
-#[derive(Debug)]
-enum Source {
-    Live(live::Live),
-    Fixture(fixture::Fixture),
+    documents: Document,
 }
 
 impl Search {
     /// The registries themselves, which is what production asks.
     pub fn live() -> Self {
         Self {
-            source: Source::Live(live::Live::new()),
-            limit: SIZE_LIMIT,
+            documents: Document::live(SIZE_LIMIT),
         }
     }
 
@@ -105,14 +121,15 @@ impl Search {
     /// convention, for the archive fixtures' reason.
     pub fn fixture(dir: impl Into<PathBuf>) -> Self {
         Self {
-            source: Source::Fixture(fixture::Fixture::new(dir.into())),
-            limit: SIZE_LIMIT,
+            documents: Document::fixture(dir, "reading the search fixtures", SIZE_LIMIT),
         }
     }
 
     /// The same source, refusing an answer over `limit` bytes.
     pub fn with_limit(self, limit: u64) -> Self {
-        Self { limit, ..self }
+        Self {
+            documents: self.documents.with_limit(limit),
+        }
     }
 
     /// The packages on `registry` that answer to `query`, at most `limit` of
@@ -128,35 +145,49 @@ impl Search {
         query: &str,
         limit: u32,
     ) -> Result<Vec<Hit>, Failure> {
+        let cap = self.documents.limit();
         let source = registry.search(query, limit);
 
-        // The same check the archive and catalogue paths make, and not
-        // because this URL could plausibly be wrong: it is built by
-        // `registry` and is allowed by construction. It is here so that the
-        // rule is "every outbound request is checked" rather than "every
-        // outbound request that somebody thought about".
-        if !registry::allows(&source.url) {
-            return Err(Failure::Internal {
-                doing: "asking a registry which packages it has",
-            });
-        }
+        let body = self
+            .documents
+            .body(
+                &source.url,
+                &About {
+                    registry,
+                    accept: Some(source.accept),
+                    // The source that is a whole index is the one worth
+                    // decoding on the way in, and it is the same fact that
+                    // makes it worth holding: a source that answers every
+                    // query with one document is the one whose document is
+                    // large. See `fetch::About`.
+                    compressed: source.whole_index,
+                    // And it is the one worth holding between invocations,
+                    // for the same fact a third time: a document that answers
+                    // every query is a document a second search would fetch
+                    // again for nothing.
+                    remember_for: source.whole_index.then_some(FRESH_FOR),
+                    nothing_there: SOURCE_DOWN,
+                    // A URL this crate built, checked anyway — so that the
+                    // rule is "every outbound request is checked" rather than
+                    // "every outbound request that somebody thought about".
+                    // Nothing a model can act on: a search URL off the
+                    // allowlist is two files in this repository disagreeing.
+                    blocked: &|| Failure::Internal {
+                        doing: "asking a registry which packages it has",
+                    },
+                    // A search URL names no package, so there is nothing for
+                    // one of these to be missing: a source answering as
+                    // though there were is a source that has moved.
+                    missing: &|status| unavailable(registry, status),
+                    too_large: &|bytes| too_large(registry, bytes, cap),
+                },
+            )
+            .await?;
 
-        let body = match &self.source {
-            Source::Live(live) => live.body(&source, self.limit, registry).await?,
-            Source::Fixture(fixture) => fixture.body(&source.url, registry)?,
-        };
+        let body = std::str::from_utf8(&body)
+            .map_err(|_| unreadable(registry, "what the registry served is not text"))?;
 
-        // Weighed here and not only inside the live adapter, for the reason
-        // `archive` and `catalogue` weigh theirs here: the cap is a rule
-        // about what this server will read rather than about where bytes came
-        // from, so a fixture set cannot answer with something the registries
-        // would have been refused for.
-        let weight = body.len() as u64;
-        if weight > self.limit {
-            return Err(too_large(registry, weight, self.limit));
-        }
-
-        registry.read_hits(&body, query, limit).ok_or_else(|| {
+        registry.read_hits(body, query, limit).ok_or_else(|| {
             unreadable(
                 registry,
                 "the registry answered in a shape this server does not know",
@@ -199,10 +230,3 @@ fn too_large(registry: Registry, bytes: u64, limit: u64) -> Failure {
         limit,
     }
 }
-
-/// One search source's answer, as both adapters hand it over.
-///
-/// Shared rather than a `String` because the one source that is a whole
-/// index is held between invocations, and handing a caller its own copy
-/// would be the saving spent again on every search.
-type Body = Arc<str>;

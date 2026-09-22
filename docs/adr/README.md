@@ -25,6 +25,7 @@ directory was created (#40).
 | [0012](0012-a-tree-is-paged-as-a-flat-sequence.md) | A tree is paged as a flat sequence | done, #14 |
 | [0013](0013-the-patch-renderer-lives-in-the-engine-seam.md) | The patch renderer lives in the engine seam | done, #21 #15 |
 | [0014](0014-a-resource-is-a-projection-of-the-tools.md) | A resource is a projection of the tools | done, #16 |
+| [0015](0015-one-implementation-beneath-three-registry-seams.md) | One implementation beneath three registry seams | done, #81 |
 
 A new one goes in at the next number. The bar is the usual three: hard to
 reverse, surprising without the context, and the result of a real trade-off. A

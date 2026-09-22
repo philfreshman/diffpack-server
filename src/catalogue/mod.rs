@@ -9,8 +9,11 @@
 //! current release in, is not a tool's to know.
 //!
 //! The same shape as [`crate::archive`] and for the same reasons: one seam,
-//! two adapters, and [`crate::fetch`] underneath both so there is one HTTP
-//! client in this crate rather than one per seam.
+//! two adapters, and one module under all three seams so there is one HTTP
+//! client, one host check and one fixture reader in this crate rather than
+//! one of each per seam. That module is [`crate::document`]; what is left
+//! here is the part that is only a version list's, which is where the
+//! document is and how to read it.
 //!
 //! # Why this is not the archive seam
 //!
@@ -20,6 +23,9 @@
 //! read rather than extracted, it is about a package rather than about one
 //! version of one, and it is never cached. Putting it behind `Archive::fetch`
 //! would have made that ADR's sentence untrue.
+//!
+//! Sharing what sits *under* the two interfaces does not. See [ADR
+//! 0015](../docs/adr/0015-one-implementation-beneath-three-registry-seams.md).
 //!
 //! # Nothing here is cached
 //!
@@ -35,11 +41,9 @@
 //! #16 adds, and until then fetching per call is the whole of the freshness
 //! story — every answer is as fresh as the registry was when it was asked.
 
-mod fixture;
-mod live;
-
 use std::path::PathBuf;
 
+use crate::document::{About, Document};
 use crate::error::Failure;
 use crate::registry::{Registry, Versions};
 
@@ -59,31 +63,25 @@ use crate::registry::{Registry, Versions};
 /// ordinary anything.
 pub const SIZE_LIMIT: u64 = 32 * 1024 * 1024;
 
+/// What a `404` stands in for in the version fixture set: a package the
+/// registry does not have.
+///
+/// A `404` here is about the *package*, which is what makes this seam's
+/// refusal different from [`crate::archive`]'s: there is no version in the
+/// request to have got wrong.
+const NO_SUCH_PACKAGE: u16 = 404;
+
 /// Where a package's versions come from.
 #[derive(Debug)]
 pub struct Catalogue {
-    source: Source,
-    /// The most a document may weigh before this server refuses it. A field
-    /// rather than a constant read at the point of use, so that the refusal
-    /// can be exercised with a real document and a small limit.
-    limit: u64,
-}
-
-/// The two adapters, as a variant each rather than a trait — the same
-/// reasoning as [`crate::archive`] and [ADR
-/// 0004](../docs/adr/0004-one-registry-module.md).
-#[derive(Debug)]
-enum Source {
-    Live(live::Live),
-    Fixture(fixture::Fixture),
+    documents: Document,
 }
 
 impl Catalogue {
     /// Versions from the registries, which is what production runs.
     pub fn live() -> Self {
         Self {
-            source: Source::Live(live::Live::new()),
-            limit: SIZE_LIMIT,
+            documents: Document::live(SIZE_LIMIT),
         }
     }
 
@@ -96,65 +94,58 @@ impl Catalogue {
     /// [`crate::registry`] would find nothing here.
     pub fn fixture(dir: impl Into<PathBuf>) -> Self {
         Self {
-            source: Source::Fixture(fixture::Fixture::new(dir.into())),
-            limit: SIZE_LIMIT,
+            documents: Document::fixture(dir, "reading the version fixtures", SIZE_LIMIT),
         }
     }
 
     /// The same source, refusing anything over `limit` bytes.
     pub fn with_limit(self, limit: u64) -> Self {
-        Self { limit, ..self }
+        Self {
+            documents: self.documents.with_limit(limit),
+        }
     }
 
     /// Every published version of `package`, newest first, and the one the
     /// registry points at.
     pub async fn versions(&self, registry: Registry, package: &str) -> Result<Versions, Failure> {
-        let url = registry.versions(package).url;
-        let document = self.bytes(&url, registry, package).await?;
+        let limit = self.documents.limit();
+        let source = registry.versions(package);
 
-        let document = String::from_utf8(document)
+        let document = self
+            .documents
+            .body(
+                &source.url,
+                &About {
+                    registry,
+                    accept: None,
+                    compressed: false,
+                    // One document per package, so there is nothing here that
+                    // one call's answer would serve another's.
+                    remember_for: None,
+                    nothing_there: NO_SUCH_PACKAGE,
+                    blocked: &|| {
+                        unreadable(
+                            registry,
+                            package,
+                            "they are served from a host this server does not fetch from",
+                        )
+                    },
+                    missing: &|_| no_such_package(registry, package),
+                    too_large: &|bytes| too_large(registry, package, bytes, limit),
+                },
+            )
+            .await?;
+
+        let document = std::str::from_utf8(&document)
             .map_err(|_| unreadable(registry, package, "what the registry served is not text"))?;
 
-        registry.read_versions(&document).ok_or_else(|| {
+        registry.read_versions(document).ok_or_else(|| {
             unreadable(
                 registry,
                 package,
                 "the registry answered in a shape this server does not know",
             )
         })
-    }
-
-    /// Whatever is served at `url`, as bytes, or a refusal if it is larger
-    /// than this server will read.
-    async fn bytes(
-        &self,
-        url: &str,
-        registry: Registry,
-        package: &str,
-    ) -> Result<Vec<u8>, Failure> {
-        // Every outbound request, checked against the hosts the registries
-        // between them name — the same check [`crate::archive`] makes, and
-        // for the same reason: a URL this crate built is allowed by
-        // construction, and checking it anyway costs one line and leaves
-        // nothing to keep in step.
-        if !crate::registry::allows(url) {
-            return Err(unreadable(
-                registry,
-                package,
-                "they are served from a host this server does not fetch from",
-            ));
-        }
-
-        let bytes = match &self.source {
-            Source::Live(live) => live.bytes(url, self.limit, registry, package).await?,
-            Source::Fixture(fixture) => fixture.bytes(url, registry, package)?,
-        };
-
-        let weight = bytes.len() as u64;
-        if weight > self.limit {
-            return Err(too_large(registry, package, weight, self.limit));
-        }
-        Ok(bytes)
     }
 }
 
@@ -177,10 +168,8 @@ fn unreadable(registry: Registry, package: &str, reason: &str) -> Failure {
 /// A package the registry does not have, in the words a model reads.
 ///
 /// One constructor for both adapters, so the fixture set cannot answer
-/// something the registries would not. A `404` here is about the *package*,
-/// which is what makes this seam's refusal different from
-/// [`crate::archive`]'s: there is no version in the request to have got wrong.
-pub(super) fn no_such_package(registry: Registry, package: &str) -> Failure {
+/// something the registries would not.
+fn no_such_package(registry: Registry, package: &str) -> Failure {
     Failure::NoSuchPackage {
         registry: registry.name().to_owned(),
         package: package.to_owned(),
