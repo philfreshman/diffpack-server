@@ -1,12 +1,19 @@
 //! Cached diff results, driven the way an agent drives them.
 //!
-//! The cache has no surface of its own: nothing calls it, nothing reads it
-//! back, and the only thing an agent ever sees of it is that the same
-//! comparison asked for twice was cheap the second time. So every test here
-//! goes over the wire — `tools/call` on `diff_package_versions`, through the
-//! service factory `router_with` takes — and the store under it is an
-//! in-process one the test holds a handle to, the way `tests/log.rs` holds a
+//! The cache has no surface of its own: no tool names it, and the only thing
+//! an agent ever sees of it is that a comparison this server has already made
+//! is cheap to ask for again. So every test here goes over the wire —
+//! `tools/call` and `resources/read`, through the service factory
+//! `router_with` takes — and the store under it is an in-process one the test
+//! holds a handle to, the way `tests/log.rs` holds a
 //! [`Capture`](diffpack_server::log::Capture).
+//!
+//! Four paths ask for a comparison and one of them writes what the others are
+//! served, so a suite that only drove the writer could say what was put in the
+//! store and nothing about what comes out of it. What says the difference is a
+//! fixture set the comparison cannot be made through at all — see
+//! [`ONE_SIDED`]: a call that answers through it did not fetch, which is a
+//! stronger claim than a stopwatch and one a suite cannot get wrong.
 //!
 //! That handle is what lets a test say more than "it was cheap": it names the
 //! blobs an entry is, and when each of them was written. Both are the
@@ -304,9 +311,9 @@ async fn an_entry_that_dropped_its_patches_is_still_remembered() {
 /// is not the absence above: this one says nothing was dropped, so answering
 /// with it would serve a comparison whose every patch is silently missing —
 /// a changed file that a reader of the entry would take for one with nothing
-/// to render. Nothing reads an entry back yet; `get_file_diff` renders on
-/// demand every time, so this is a wrong answer waiting rather than one
-/// being given.
+/// to render. Nothing reads an entry's *patches* back yet; `get_file_diff`
+/// renders on demand every time (#84), so this is a wrong answer waiting
+/// rather than one being given.
 ///
 /// So it is a miss, and the miss is what repairs it: the recomputed entry
 /// heads past the `meta.json` that is there and writes the blob that is not.
