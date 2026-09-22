@@ -154,7 +154,10 @@ express: not there, and slow.
 
 That factory is also the seam the suite drives: a test builds a `Ctx` over the
 fixture adapters and a capturing sink, and reaches both through the path
-production takes rather than around it.
+production takes rather than around it. `tests/common/mod.rs` is the one
+client that does the reaching — the SEP-2243 headers, the per-request `_meta`,
+the protocol revision and the router over a supplied `Ctx`, in one spelling,
+so that a suite says which context it is in and nothing else about the wire.
 
 It is built two ways and only two: `Ctx::new` is every seam live and
 `Ctx::fixture` is every seam reading from the checked-in sets under

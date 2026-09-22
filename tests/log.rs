@@ -12,25 +12,13 @@
 
 use std::time::{Duration, Instant};
 
-use axum::body::Body;
-use axum::http::Request;
+mod common;
+
+use common::{Client, FIXTURES};
 use diffpack_server::log::{Capture, Spent};
-use diffpack_server::mcp::Diffpack;
-use diffpack_server::router;
 use diffpack_server::store::{DiffStore, Memory};
 use diffpack_server::tools::Ctx;
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
-
-const CURRENT: &str = "2026-07-28";
-
-/// The fixture sets this suite is served from, instead of the registries.
-///
-/// The root rather than one seam's directory inside it: `Ctx::fixture` gives
-/// every seam a fixture adapter, so nothing this suite builds can reach a
-/// registry — including a seam this suite's calls do not use today.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 /// The question every other assertion here depends on: a call that went
 /// through the endpoint left exactly one line behind, and that line says
@@ -654,17 +642,35 @@ async fn call_without_a_store(log: &Capture, tool: &str, arguments: Value) -> Va
 }
 
 /// Call `tool` through the endpoint, against `store`.
+///
+/// A fresh context per request, the way the factory in `src/router.rs` builds
+/// one: the phases a line reports are that call's, and a context cloned
+/// across two calls would put the first one's fetches in the second one's
+/// window.
 async fn calling(log: &Capture, store: Store, tool: &str, arguments: Value) -> Value {
-    post(
-        log,
-        store,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": { "name": tool, "arguments": arguments, "_meta": meta() },
-        }),
-    )
+    let log = log.clone();
+
+    Client::building(move || {
+        let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
+        match &store {
+            Store::Fresh => ctx,
+            Store::Held(memory) => ctx.storing_in(memory.store()),
+            // Left writing to stderr, which is the store's own default and
+            // where its notes go in production. A store pointed at this
+            // buffer would put a note in it for every lookup it could not
+            // make, and `one` counts what is in the buffer — so the suite
+            // that asserts one call leaves one line would be reading the note
+            // instead. What a store says it could not do is
+            // `tests/store.rs`'s question.
+            Store::Absent => ctx.storing_in(DiffStore::unavailable()),
+        }
+    })
+    .post(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": tool, "arguments": arguments },
+    }))
     .await
 }
 
@@ -700,76 +706,4 @@ async fn settles(store: &Memory) {
         "the entry should be written by now, the store holds {:?}",
         store.written()
     );
-}
-
-/// The per-request `_meta` a `2026-07-28` client attaches. See `tests/mcp.rs`.
-fn meta() -> Value {
-    json!({
-        "io.modelcontextprotocol/protocolVersion": CURRENT,
-        "io.modelcontextprotocol/clientCapabilities": {},
-    })
-}
-
-/// A real request through the real router, with the fixture archives, the
-/// capturing sink and `store` behind it.
-///
-/// Both arrive through the service factory `router_with` takes, which is the
-/// path production takes to build a [`Ctx`] — a test that reached around it
-/// would be testing wiring that does not exist.
-async fn post(log: &Capture, store: Store, body: Value) -> Value {
-    let method = body["method"].as_str().expect("a call names a method");
-
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", method);
-
-    if let Some(name) = body["params"]["name"].as_str() {
-        request = request.header("mcp-name", name);
-    }
-
-    let request = request
-        .body(Body::from(body.to_string()))
-        .expect("the request should build");
-
-    let log = log.clone();
-    let router = router::router_with(
-        move || {
-            // A fresh context per request, the way the factory in
-            // `src/router.rs` builds one: the phases a line reports are that
-            // call's, and a context cloned across two calls would put the
-            // first one's fetches in the second one's window.
-            let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
-            Ok(Diffpack::with_ctx(match &store {
-                Store::Fresh => ctx,
-                Store::Held(memory) => ctx.storing_in(memory.store()),
-                // Left writing to stderr, which is the store's own default
-                // and where its notes go in production. A store pointed at
-                // this buffer would put a note in it for every lookup it
-                // could not make, and `one` counts what is in the buffer —
-                // so the suite that asserts one call leaves one line would
-                // be reading the note instead. What a store says it could
-                // not do is `tests/store.rs`'s question.
-                Store::Absent => ctx.storing_in(DiffStore::unavailable()),
-            }))
-        },
-        Vec::new(),
-    );
-
-    let response = router
-        .oneshot(request)
-        .await
-        .expect("the router should answer");
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .expect("the body should read")
-        .to_bytes();
-
-    serde_json::from_slice(&body).expect("the answer should be JSON")
 }

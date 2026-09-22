@@ -25,23 +25,15 @@
 
 use std::time::{Duration, Instant};
 
-use axum::body::Body;
-use axum::http::Request;
+mod common;
+
+use common::{Client, FIXTURES};
 use diffpack_server::log::Capture;
-use diffpack_server::mcp::Diffpack;
-use diffpack_server::router;
 use diffpack_server::store::{DiffStore, Memory};
 use diffpack_server::tools::Ctx;
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
-
-const CURRENT: &str = "2026-07-28";
 
 const TOOL: &str = "diff_package_versions";
-
-/// The fixture sets this suite is served from, instead of the registries.
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures");
 
 /// The pair every test here compares unless it needs another.
 ///
@@ -1322,72 +1314,14 @@ async fn call(store: impl Fn() -> DiffStore, arguments: Value) -> Value {
 /// The cache is written by one tool and read back by the three that take a
 /// handle, so a suite that could only drive the writer could not state what
 /// happens to a reader when an entry is swept.
-async fn call_tool(store: impl Fn() -> DiffStore, tool: &str, arguments: Value) -> Value {
-    let answer = post(
-        store,
-        tool,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": tool,
-                "arguments": arguments,
-                "_meta": {
-                    "io.modelcontextprotocol/protocolVersion": CURRENT,
-                    "io.modelcontextprotocol/clientCapabilities": {},
-                },
-            },
-        }),
-    )
-    .await;
-
-    if let Some(error) = answer.get("error") {
-        panic!("expected a result, got JSON-RPC error {error}");
-    }
-    answer["result"].clone()
-}
-
-/// A request as a conforming `2026-07-28` client sends it, to a server whose
-/// archives come from `fixtures/` and whose cache is `store`.
 ///
 /// The context is built the way production builds one — through the service
-/// factory — and then has its store replaced, which is the same `..self`
-/// spread `Ctx::logging_to` is and not a builder that fills the seams it was
-/// not given. Every other seam is still the fixture set's.
-async fn post(store: impl Fn() -> DiffStore, tool: &str, body: Value) -> Value {
-    let request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", "tools/call")
-        .header("mcp-name", tool)
-        .body(Body::from(body.to_string()))
-        .expect("the request should build");
-
-    let ctx = Ctx::fixture(FIXTURES).storing_in(store());
-    let router = router::router_with(move || Ok(Diffpack::with_ctx(ctx.clone())), Vec::new());
-
-    let response = router
-        .oneshot(request)
+/// factory the shared client hands `router_with` — and then has its store
+/// replaced, which is the same `..self` spread `Ctx::logging_to` is and not a
+/// builder that fills the seams it was not given. Every other seam is still
+/// the fixture set's.
+async fn call_tool(store: impl Fn() -> DiffStore, tool: &str, arguments: Value) -> Value {
+    Client::over(Ctx::fixture(FIXTURES).storing_in(store()))
+        .call(tool, arguments)
         .await
-        .expect("the router answers every request");
-
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("the body should read")
-        .to_bytes();
-
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!(
-            "expected a JSON body ({status}), got {e}: {}",
-            String::from_utf8_lossy(&bytes)
-        )
-    })
 }
