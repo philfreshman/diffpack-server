@@ -710,11 +710,12 @@ a package whose paths are long.
 ### `src/handle.rs` — the handle a diff is asked for again by
 
 What passes between the tool that computes a diff and the ones that read one
-back — `get_diff_tree` and `get_file_diff` today, the diff resources (#16)
-beside them later. It carries the `diff_id` — the cache lookup,
-and the string #27 needs — and beside it the inputs that `diff_id` was minted
-from, so that a reading tool whose entry has been evicted recomputes rather
-than refusing. See [ADR 0006](adr/0006-the-handle-carries-its-inputs.md).
+back — `get_diff_tree` and `get_file_diff`, and the two resources under
+`diffpack://diff/`, which take the same handle out of their URI rather than a
+`diff_id`. It carries the `diff_id` — the cache lookup, and the string #27
+needs — and beside it the inputs that `diff_id` was minted from, so that a
+reading tool whose entry has been evicted recomputes rather than refusing.
+See [ADR 0006](adr/0006-the-handle-carries-its-inputs.md).
 
 It travels as one opaque string. `DiffHandle` serialises as that string and
 deserialises by decoding it, which is what makes a tool's `-32602` automatic:
