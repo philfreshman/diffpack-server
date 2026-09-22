@@ -369,6 +369,69 @@ fn churn(file: &Changed) -> u32 {
     file.lines_added + file.lines_removed
 }
 
+/// One comparison: both versions' files, and the tree they compare to.
+///
+/// What every read of a diff starts from, including the one file's diff next
+/// door — which needs the tree to find where a renamed file was, and both
+/// file maps to render it. Made once so that reading one file costs one pair
+/// of downloads rather than two.
+pub struct Comparison {
+    pub from_files: FileMap,
+    pub to_files: FileMap,
+    pub tree: DiffFileEntry,
+}
+
+/// Both versions of what `handle` names, downloaded together.
+///
+/// The one `try_join!` in this crate, and the reason `futures` is on the list
+/// a tool may import. The two downloads do not depend on each other and a
+/// version pair is the only place this server waits on the network twice, so
+/// waiting on them one after the other would double the wait for nothing.
+async fn versions(handle: &DiffHandle, ctx: &Ctx) -> Result<(FileMap, FileMap), Failure> {
+    let inputs = handle.inputs();
+
+    Ok(try_join!(
+        ctx.archive()
+            .fetch(inputs.registry, &inputs.package, &inputs.from_version),
+        ctx.archive()
+            .fetch(inputs.registry, &inputs.package, &inputs.to_version),
+    )?)
+}
+
+/// The comparison `handle` names.
+///
+/// The walk from a handle to a compared tree, in the module that owns the
+/// comparison. It used to be written four times — here, in `get_diff_tree`,
+/// in `get_file_diff` and in the `diffpack://diff/{handle}` resource — and
+/// four copies of one walk is four places for the pair of downloads, the
+/// rename threshold and the whitespace rule to stop agreeing. See [ADR
+/// 0016](../../docs/adr/0016-the-walk-to-a-comparison-is-the-summary-tools.md).
+///
+/// It is this module's rather than a shared one's because this is the tool
+/// that computes a comparison: `diff_package_versions` is what mints a handle
+/// and the other three read back what it worked out. A resource calling it is
+/// the shape [ADR
+/// 0014](../../docs/adr/0014-a-resource-is-a-projection-of-the-tools.md) asks
+/// for, and it is the fifth of this directory's exports to have a caller
+/// outside the module that owns it.
+pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failure> {
+    let inputs = handle.inputs();
+    let (from_files, to_files) = versions(handle, ctx).await?;
+
+    let tree = engine::build_diff_tree(
+        &from_files,
+        &to_files,
+        inputs.similarity_threshold,
+        inputs.ignore_whitespace,
+    );
+
+    Ok(Comparison {
+        from_files,
+        to_files,
+        tree,
+    })
+}
+
 impl Tool for DiffPackageVersions {
     const NAME: &'static str = "diff_package_versions";
     const TITLE: &'static str = "Diff package versions";
@@ -426,37 +489,26 @@ impl Tool for DiffPackageVersions {
         let (tree, cached) = match ctx.store().get(&key).await {
             Some(entry) => (entry.tree, true),
             None => {
-                // Concurrently, the way the engine's wasm entry point fetches
-                // them: the two downloads do not depend on each other, and a
-                // version pair is the one place this server waits on the
-                // network twice.
-                let (from_files, to_files) = try_join!(
-                    ctx.archive()
-                        .fetch(inputs.registry, &inputs.package, &inputs.from_version),
-                    ctx.archive()
-                        .fetch(inputs.registry, &inputs.package, &inputs.to_version),
-                )?;
-
-                let tree = engine::build_diff_tree(
-                    &from_files,
-                    &to_files,
-                    inputs.similarity_threshold,
-                    inputs.ignore_whitespace,
-                );
+                let comparison = compare(&handle, ctx).await?;
 
                 // Rendered here rather than by whoever asks for one later:
                 // both archives are extracted at this moment, so a patch
                 // costs a comparison of two strings already in memory — and
                 // on the other side of this call it costs two downloads.
-                let patches = rendered(&tree, &from_files, &to_files, inputs.ignore_whitespace);
+                let patches = rendered(
+                    &comparison.tree,
+                    &comparison.from_files,
+                    &comparison.to_files,
+                    inputs.ignore_whitespace,
+                );
 
                 ctx.store().put(Entry {
                     key,
-                    tree: tree.clone(),
+                    tree: comparison.tree.clone(),
                     patches,
                 });
 
-                (tree, false)
+                (comparison.tree, false)
             }
         };
 

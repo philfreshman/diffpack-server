@@ -50,14 +50,13 @@
 //! *replace* those rather than add to them, which is how four tools that
 //! take one handle end up describing it four ways.
 
-use futures::try_join;
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{self, DiffFileEntry, DiffStatus, FileType};
+use crate::engine::{DiffFileEntry, DiffStatus, FileType};
 use crate::error::Failure;
 use crate::handle::DiffHandle;
 use crate::page::{self, Page};
-use crate::tools::{Ctx, Tool};
+use crate::tools::{diff_package_versions, Ctx, Tool};
 
 /// The tool.
 pub struct GetDiffTree;
@@ -352,23 +351,7 @@ impl Tool for GetDiffTree {
     type Output = Page<Node>;
 
     async fn call(args: Args, ctx: &Ctx) -> Result<Page<Node>, Failure> {
-        let inputs = args.handle.inputs();
-
-        // Concurrently, the way the tool that minted this handle fetched
-        // them: the two downloads do not depend on each other.
-        let (from_files, to_files) = try_join!(
-            ctx.archive()
-                .fetch(inputs.registry, &inputs.package, &inputs.from_version),
-            ctx.archive()
-                .fetch(inputs.registry, &inputs.package, &inputs.to_version),
-        )?;
-
-        let tree = engine::build_diff_tree(
-            &from_files,
-            &to_files,
-            inputs.similarity_threshold,
-            inputs.ignore_whitespace,
-        );
+        let tree = diff_package_versions::compare(&args.handle, ctx).await?.tree;
 
         // A trailing slash a caller may or may not have written, gone
         // either way, so `src/` and `src` are one directory. Nothing left

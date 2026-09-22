@@ -75,7 +75,6 @@
 
 use std::borrow::Cow;
 
-use futures::try_join;
 use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 use serde::{de, Deserialize, Deserializer, Serialize};
 
@@ -84,7 +83,7 @@ use crate::engine::{self, FileType};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
 use crate::page::{self, Excerpt};
-use crate::tools::{Ctx, Tool};
+use crate::tools::{diff_package_versions, Ctx, Tool};
 
 /// The tool.
 pub struct GetFileDiff;
@@ -448,18 +447,14 @@ impl Tool for GetFileDiff {
     type Output = Patch;
 
     async fn call(args: Args, ctx: &Ctx) -> Result<Patch, Failure> {
-        let inputs = args.handle.inputs();
+        let comparison = diff_package_versions::compare(&args.handle, ctx).await?;
 
-        // Concurrently, the way the tool that minted this handle fetched
-        // them: the two downloads do not depend on each other.
-        let (from_files, to_files) = try_join!(
-            ctx.archive()
-                .fetch(inputs.registry, &inputs.package, &inputs.from_version),
-            ctx.archive()
-                .fetch(inputs.registry, &inputs.package, &inputs.to_version),
-        )?;
-
-        render(&from_files, &to_files, inputs, args.asked())
+        render(
+            &comparison.from_files,
+            &comparison.to_files,
+            args.handle.inputs(),
+            args.asked(),
+        )
     }
 }
 
