@@ -472,7 +472,7 @@ async fn versions(handle: &DiffHandle, ctx: &Ctx) -> Result<Versions, Failure> {
 /// in `get_file_diff` and in the `diffpack://diff/{handle}` resource — and
 /// four copies of one walk is four places for the pair of downloads, the
 /// rename threshold and the whitespace rule to stop agreeing. See [ADR
-/// 0016](../../docs/adr/0016-the-walk-to-a-comparison-is-the-summary-tools.md).
+/// 0016](../../docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md).
 ///
 /// It is this module's rather than a shared one's because this is the tool
 /// that computes a comparison: `diff_package_versions` is what mints a handle

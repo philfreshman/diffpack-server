@@ -501,10 +501,11 @@ impl Args {
 /// Everything this tool does once the archives are in hand, and public
 /// because there are two callers: this tool, and the
 /// `diffpack://diff/{handle}/file/{path}` resource (#16). That resource has
-/// already fetched both versions — it builds the comparison's tree to find
-/// where a renamed file was — so one that called the tool instead would
-/// download them a second time, which on a package of any size is the whole
-/// cost of the read paid twice.
+/// already asked for the comparison — it reads the tree to find where a
+/// renamed file was, and takes both versions' files off the same answer — so
+/// one that called the tool instead would ask for it twice and download both
+/// archives twice, which on a package of any size is the whole cost of the
+/// read paid twice.
 ///
 /// What is shared is the whole answer rather than a piece of it: the
 /// directory refusal, which of the engine's four cases this is, the trim and
