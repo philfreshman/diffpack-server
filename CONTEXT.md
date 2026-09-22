@@ -374,9 +374,14 @@ _Avoid_: document, asset
 
 **Failure**:
 Anything that goes wrong, together with which of MCP's two channels it reaches
-the client on: a *protocol error* the model never sees, or a *tool error* — a
-successful response carrying `isError: true` — which it does see and can act
-on.
+the client on and the JSON-RPC code it carries: a *protocol error* the model
+never sees, or a *tool error* — a successful response carrying `isError: true`
+— which it does see and can act on. Both are the Failure's own and neither is
+the call site's, because a `resources/read` has only the first: there is no
+`isError` half in a `ReadResourceResult`, so every Failure reaches a read as a
+code, and the code is the only thing telling a version that does not exist
+from a URI that is not ours ([ADR
+0017](docs/adr/0017-a-failure-carries-the-code-it-earned.md)).
 _Avoid_: error (unqualified), exception, fault
 
 **Page**:
