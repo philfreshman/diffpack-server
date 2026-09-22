@@ -8,5 +8,7 @@
   "https://registry.npmjs.org/prereleases": "npm-prereleases.json",
   "https://api.deps.dev/v3/systems/pypi/packages/prereleases": "pypi-prereleases.json",
   "https://registry.npmjs.org/unreadable": "npm-unreadable.json",
+  "https://registry.npmjs.org/untagged": "npm-untagged.json",
+  "https://registry.npmjs.org/unpublished-latest": "npm-unpublished-latest.json",
   "https://registry.npmjs.org/not-a-real-package": null
 }

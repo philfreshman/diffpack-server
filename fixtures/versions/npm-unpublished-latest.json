@@ -1,0 +1,16 @@
+{
+  "name": "unpublished-latest",
+  "dist-tags": {
+    "latest": "2.0.0"
+  },
+  "versions": {
+    "1.0.0": { "name": "unpublished-latest", "version": "1.0.0" },
+    "1.0.1": { "name": "unpublished-latest", "version": "1.0.1" }
+  },
+  "time": {
+    "created": "2021-01-01T00:00:00.000Z",
+    "modified": "2021-03-01T00:00:00.000Z",
+    "1.0.0": "2021-01-01T00:00:00.000Z",
+    "1.0.1": "2021-03-01T00:00:00.000Z"
+  }
+}

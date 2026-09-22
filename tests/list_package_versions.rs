@@ -489,6 +489,119 @@ async fn a_walk_of_the_pages_is_the_whole_listing() {
     );
 }
 
+/// The pointer is not on every page, so it is not *on* a page.
+///
+/// This is the failure the shape was chosen to rule out. A flag on each entry
+/// would answer `limit: 1` here with one entry marked false — truthfully, and
+/// indistinguishably from a package the registry points at nothing for. An
+/// agent has no way to tell those two apart and no reason to ask again.
+///
+/// So the field is beside the page and reads the same whichever page was
+/// asked for, including a page the current release is not on.
+#[tokio::test]
+async fn the_current_version_is_the_same_answer_on_a_page_it_is_not_on() {
+    let page = call(json!({
+        "registry": "npm",
+        "package": "@types/node",
+        "limit": 1,
+    }))
+    .await;
+
+    assert_eq!(
+        versions(&page),
+        vec!["24.13.6"],
+        "a page of one is the newest publish alone, got {page}"
+    );
+    assert_eq!(
+        page["structuredContent"]["versions"]["total"],
+        json!(5),
+        "the total is the package's, so an agent can see there is more, got {page}"
+    );
+
+    assert_eq!(
+        page["structuredContent"]["currentVersion"],
+        json!("26.6.2"),
+        "26.6.2 is not on this page, and a page it is not on is not a package \
+         without a current release: got {page}"
+    );
+}
+
+/// A package the registry points at nothing for still lists its versions.
+///
+/// npm's `latest` is a tag like any other and a maintainer can remove it —
+/// `npm dist-tag rm` — leaving a package that publishes releases and names no
+/// current one. The fixture keeps a `next` tag so that this also says which
+/// tag is read: an implementation that took whatever tag it found would
+/// answer with the release candidate, which is a preview and not a current
+/// release.
+///
+/// Absent is not an error. The versions are still the answer to what the
+/// package has released, and refusing the call would make a missing tag into
+/// a missing package.
+#[tokio::test]
+async fn a_package_the_registry_points_at_nothing_for_is_not_an_error() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "untagged",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "a package with no `latest` tag is still a package, got {result}"
+    );
+    assert_eq!(
+        versions(&result),
+        vec!["3.0.0-rc.1", "2.0.0"],
+        "the listing is unaffected by the tag being absent, got {result}"
+    );
+
+    assert!(
+        result["structuredContent"]["currentVersion"].is_null(),
+        "no current release is said rather than guessed at, and the `next` \
+         tag is not it: got {result}"
+    );
+}
+
+/// A pointer at a version that is not in the list is the registry's answer,
+/// and it is passed through.
+///
+/// npm leaves `dist-tags.latest` where it is when a version is unpublished,
+/// so a package can name a current release its own document no longer lists.
+/// The version is reported as the registry spells it rather than dropped,
+/// because dropping it reports *no current release* for a package that names
+/// one — the same silent answer the shape of this field exists to avoid.
+///
+/// An agent that passes it to another tool gets a missing-version error
+/// naming the version, which is a thing it can act on. Being told nothing is
+/// not.
+#[tokio::test]
+async fn a_pointer_at_a_version_that_is_not_listed_is_reported_rather_than_dropped() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "unpublished-latest",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "a tag pointing past the list is not a package this server refuses, got {result}"
+    );
+    assert_eq!(
+        versions(&result),
+        vec!["1.0.1", "1.0.0"],
+        "the listing is what the document lists, got {result}"
+    );
+
+    assert_eq!(
+        result["structuredContent"]["currentVersion"],
+        json!("2.0.0"),
+        "npm says 2.0.0 is current and this answer says what npm says, got {result}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // When there is nothing to list
 // ---------------------------------------------------------------------------
