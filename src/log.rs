@@ -344,6 +344,26 @@ fn shorten(text: &str) -> String {
     format!("{kept}{}", Arguments::CUT)
 }
 
+/// A seam saying it could not do its job, where that is not a failure.
+///
+/// The cache is the only one there is, and it is one by design: ADR 0003
+/// says a cache failure must never fail a diff, so the failure has nowhere
+/// else to go. A [`Failure`] would reach the model, and a [`Line`] is the
+/// dispatch's — one per call, so that counting them counts calls — and is
+/// already written by the time a backgrounded write has failed.
+///
+/// Two fields, because two is what an operator reading one needs: which seam
+/// gave up, and what it was doing. What it did instead is the same thing
+/// every time, and is this type's whole reason for existing.
+#[derive(Debug, Serialize)]
+pub struct Note {
+    /// Which seam gave up. A [`Ctx`](crate::tools::Ctx)'s name for it.
+    pub seam: &'static str,
+
+    /// What it was doing, in the words a [`Failure`] would have used.
+    pub doing: &'static str,
+}
+
 /// Where a [`Line`] goes.
 ///
 /// Two variants rather than a trait, for the reason [ADR
@@ -368,15 +388,32 @@ impl Sink {
     /// not be written. A log that can break the thing it observes is worse
     /// than no log.
     pub fn write(&self, line: &Line) {
-        let Ok(line) = serde_json::to_string(line) else {
+        self.emit(serde_json::to_string(line));
+    }
+
+    /// Write `note`.
+    ///
+    /// Beside [`Sink::write`] rather than through it, because a [`Note`] is
+    /// not a [`Line`] and must not be counted as one: a call that could not
+    /// reach the cache is still one call.
+    pub fn note(&self, note: &Note) {
+        self.emit(serde_json::to_string(note));
+    }
+
+    /// Put one serialised record wherever this sink goes.
+    ///
+    /// Every failure here is swallowed for the reason above: a log that can
+    /// break the thing it observes is worse than no log.
+    fn emit(&self, record: Result<String, serde_json::Error>) {
+        let Ok(record) = record else {
             return;
         };
 
         match self {
-            Self::Stderr => eprintln!("{line}"),
+            Self::Stderr => eprintln!("{record}"),
             Self::Captured(lines) => {
                 if let Ok(mut lines) = lines.lock() {
-                    lines.push(line);
+                    lines.push(record);
                 }
             }
         }

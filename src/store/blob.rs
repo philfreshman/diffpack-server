@@ -1,8 +1,8 @@
 //! The Vercel Blob client.
 //!
-//! Four operations, because four is what the cache needs: write a blob, ask
-//! whether one is there, list what is under a prefix, delete several at
-//! once. It is not a general client for the service and is not meant to
+//! Five operations, because five is what the cache needs: write a blob, ask
+//! whether one is there, read one back, list what is under a prefix, delete
+//! several at once. It is not a general client for the service and is not meant to
 //! become one — [ADR 0003](../docs/adr/0003-the-cache-seam-is-a-store.md)
 //! rejects exposing these verbs to callers, so what leaves this module is
 //! `DiffStore`'s answers and never a pathname.
@@ -15,10 +15,9 @@
 //! rather than from documentation — the API is private and has no other
 //! specification.
 
-// Every operation below is written for `DiffStore` (#21) to call, and until
-// that exists nothing in the crate calls any of them. The client is private
-// to this module by design — ADR 0003 — so there is no public surface for
-// the compiler to count as a use either. This allow comes off with #21.
+// `list` and `delete` are written for #22's eviction and nothing calls them
+// yet. The client is private to this module by design — ADR 0003 — so there
+// is no public surface for the compiler to count as a use either.
 #![allow(dead_code)]
 
 use std::sync::OnceLock;
@@ -91,6 +90,18 @@ pub(crate) struct Blob {
     pub(crate) pathname: String,
     pub(crate) size: u64,
     pub(crate) uploaded_at: String,
+}
+
+/// Where the store says a blob's bytes can be fetched from.
+///
+/// Its own type rather than a fourth field on [`Blob`]. The three fields
+/// there are what the cache is built on and outlive any one request; this is
+/// a detail of one read, and putting it beside them would invite a caller to
+/// keep it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Download {
+    download_url: String,
 }
 
 /// One page of a listing, as the API answers it.
@@ -298,7 +309,48 @@ impl Api {
             return Ok(None);
         }
 
-        Ok(Some(self.read(succeeded(response, DOING)?, DOING).await?))
+        Ok(Some(self.decode(succeeded(response, DOING)?, DOING).await?))
+    }
+
+    /// The bytes of the blob at `pathname`, if the store holds one.
+    ///
+    /// Two requests, because the API has no operation that answers with a
+    /// blob's contents: what it answers with is where to download them from.
+    /// Both hops are one operation here rather than two at the caller,
+    /// because "is it there" and "what is in it" are one question — a cache
+    /// hit — and a caller holding half of it would have to decide what half
+    /// an entry means. [ADR
+    /// 0003](../docs/adr/0003-the-cache-seam-is-a-store.md) says it does not.
+    pub(crate) async fn read(&self, pathname: &str) -> Result<Option<Vec<u8>>, Failure> {
+        const DOING: &str = "reading a cached result from the blob store";
+
+        let mut url = self.url(&self.base)?;
+        url.query_pairs_mut().append_pair("url", pathname);
+
+        let response = self.send(self.request(Method::GET, url)?, DOING).await?;
+
+        // The same answer [`Api::head`] reads for itself, and for the same
+        // reason: a blob that is not there is what this question is asked
+        // to find out.
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        let at: Download = self.decode(succeeded(response, DOING)?, DOING).await?;
+
+        // No credential on the second hop, and none wanted: an entry is
+        // derived from a package anyone can already download, which is why
+        // [`Api::put`] asks for public access in the first place.
+        let contents = client()?
+            .request(Method::GET, self.url(&at.download_url)?)
+            .timeout(self.timeout);
+
+        let body = succeeded(self.send(contents, DOING).await?, DOING)?
+            .bytes()
+            .await
+            .map_err(|_| Failure::Internal { doing: DOING })?;
+
+        Ok(Some(body.to_vec()))
     }
 
     /// Every blob under `prefix`, however many pages that takes.
@@ -323,7 +375,7 @@ impl Api {
 
             let response = self.send(self.request(Method::GET, url)?, DOING).await?;
 
-            let page: Listing = self.read(succeeded(response, DOING)?, DOING).await?;
+            let page: Listing = self.decode(succeeded(response, DOING)?, DOING).await?;
             blobs.extend(page.blobs);
 
             match page.cursor.filter(|_| page.has_more) {
@@ -403,7 +455,7 @@ impl Api {
     /// `doing` names the operation rather than the cause: an upstream body
     /// is where a credential or a signed URL would ride into a message, so
     /// nothing from the response reaches the [`Failure`] at all.
-    async fn read<T: for<'de> Deserialize<'de>>(
+    async fn decode<T: for<'de> Deserialize<'de>>(
         &self,
         response: reqwest::Response,
         doing: &'static str,

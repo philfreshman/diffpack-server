@@ -26,12 +26,13 @@
 //! # Where a cached result would come in
 //!
 //! Nowhere yet, and that is worth saying because it looks like an omission.
-//! The DiffStore arrives with #21; until it does, every call recomputes the
-//! comparison from the inputs the handle carries. That is precisely the path
-//! a cache miss takes, so the behaviour #44 exists for — an evicted entry is
-//! recomputed and served rather than refused — is the only behaviour there
-//! is here, and the tests that hold it will go on holding it once a store is
-//! in front of it.
+//! The DiffStore is here — #21 built it, and `diff_package_versions` reads
+//! and writes it — but #21 scopes the cache to that tool, so every call here
+//! recomputes the comparison from the inputs the handle carries. That is
+//! precisely the path a cache miss takes, so the behaviour #44 exists for —
+//! an evicted entry is recomputed and served rather than refused — is the
+//! only behaviour there is here, and the tests that hold it will go on
+//! holding it once a store is in front of it.
 //!
 //! # Where the descriptions come from
 //!

@@ -221,8 +221,14 @@ Page is as much of it as fits.
 _Avoid_: branch, folder, section, sub-directory
 
 **Patch**:
-One file's rendered unified diff — the text with `@@` hunks in it. A Diff
-covers a whole version pair; a Patch covers one file inside it.
+One file's rendered diff, and whether it is a diff at all. A Diff covers a
+whole version pair; a Patch covers one file inside it. Two of the four shapes
+a file can be in are not diffs and say so: a file whose content did not change
+is its own content, and a file in neither version is a sentence — so a reader
+renders a file as a file rather than as a diff of all-context lines. The
+rendering is the engine's, reproduced in `src/engine.rs` because the engine
+keeps it private to its browser binding ([ADR
+0013](docs/adr/0013-the-patch-renderer-lives-in-the-engine-seam.md)).
 _Avoid_: hunk, delta, file diff
 
 **Similarity threshold**:
@@ -235,7 +241,9 @@ _Avoid_: rename threshold, match score
 **Entry**:
 One cached Diff result: `meta.json` and `patches.json` under one diff_id,
 written together and evicted together. Half an Entry is not a cache hit, and
-a FileMap's entry is a file rather than one of these.
+a FileMap's entry is a file rather than one of these. An Entry written without
+its patches — because they were too big — is a whole Entry and says so, which
+is what distinguishes it from a comparison with nothing to patch.
 _Avoid_: record, object, blob, cached diff
 
 **Blob**:
@@ -394,6 +402,15 @@ how much of the call went on waiting, which is the question it is next to the
 total to answer; how much Registry work the call caused is a different
 question and nothing asks it yet.
 _Avoid_: span, step, stage, timing
+
+**Note**:
+What a seam leaves behind when it could not do its job and that is not a
+Failure. The DiffStore is the only one there is and is one by design: a cache
+failure must never fail a Diff, so the failure reaches neither the model nor
+the caller. Distinct from a Line, which is the dispatch's — one per call, so
+that counting Lines counts calls — and which is already written by the time a
+Note about a backgrounded write could exist.
+_Avoid_: warning, log line, error, event
 
 **Cause**:
 Which Failure a call ended in, in one word, as a Line carries it —

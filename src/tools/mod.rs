@@ -67,6 +67,7 @@ use crate::error::Failure;
 use crate::log::{Line, Sink, Spent};
 use crate::registry::{Hit, Registry, Versions};
 use crate::search::Search;
+use crate::store::{DiffStore, Memory};
 
 /// Declare the tools, and build the collection and the dispatch from one list.
 ///
@@ -144,12 +145,12 @@ tools! {
 /// handed to every handler, so that shared state is cloned in rather than
 /// rebuilt per call or stored somewhere that has to outlive an invocation.
 ///
-/// Three seams today — [`Archive`], which arrived with #11, the first tool
+/// Four seams today — [`Archive`], which arrived with #11, the first tool
 /// that reads a package's files, [`Catalogue`], which arrived with #18, the
-/// first that reads what a package has released, and [`Search`], which
-/// arrived with #19, the first that asks a registry which packages it has —
-/// and `store` (#20) beside them when there is a cached result to reach
-/// for. [`crate::registry`] and
+/// first that reads what a package has released, [`Search`], which
+/// arrived with #19, the first that asks a registry which packages it has,
+/// and [`DiffStore`], which arrived with #21, the first cached result to
+/// reach for. [`crate::registry`] and
 /// [`crate::page`] are not among them and do not need to be: both are pure,
 /// so a tool reaches them as modules and there is nothing to hand it. A tool
 /// reaching for anything that is neither here nor a pure module has gone
@@ -194,6 +195,7 @@ pub struct Ctx {
     archive: Arc<Archive>,
     catalogue: Arc<Catalogue>,
     search: Arc<Search>,
+    store: Arc<DiffStore>,
     log: Sink,
 
     /// Where this request's time has gone so far. Behind an [`Arc`] because
@@ -209,6 +211,7 @@ impl Ctx {
             archive: Arc::new(Archive::live()),
             catalogue: Arc::new(Catalogue::live()),
             search: Arc::new(Search::live()),
+            store: Arc::new(DiffStore::live()),
             log: Sink::default(),
             spent: Arc::new(Spent::default()),
         }
@@ -226,6 +229,14 @@ impl Ctx {
     /// reaches the fixture adapters through the path production takes rather
     /// than around it.
     ///
+    /// The store is the one seam with no directory under `fixtures`, and
+    /// nothing is wrong with that: a cached result is this server's own
+    /// answer rather than a registry's document, so there is nothing to
+    /// check in. What stands in for the fixture set is a store that keeps
+    /// its blobs in this process — reaching no further than the others do,
+    /// and readable the way a checked-in set is by the suite that wants to
+    /// see what was written ([`Memory`]).
+    ///
     /// The log and the tally are the same here as in production: neither is a
     /// seam, and a suite that wants the lines back asks for them with
     /// [`Ctx::logging_to`].
@@ -235,6 +246,7 @@ impl Ctx {
             archive: Arc::new(Archive::fixture(fixtures.join("archives"))),
             catalogue: Arc::new(Catalogue::fixture(fixtures.join("versions"))),
             search: Arc::new(Search::fixture(fixtures.join("searches"))),
+            store: Arc::new(Memory::new().store()),
             log: Sink::default(),
             spent: Arc::new(Spent::default()),
         }
@@ -247,6 +259,20 @@ impl Ctx {
     /// through the same factory and the same [`call`].
     pub fn logging_to(self, log: Sink) -> Self {
         Self { log, ..self }
+    }
+
+    /// The same, caching its results in `store`.
+    ///
+    /// The third of the same shape and not a builder: it spreads `..self`,
+    /// so it changes a context that has already chosen its world rather than
+    /// filling in a seam it was not given. What it is for is the two things
+    /// a store can be that a fixture set cannot — not there, and slow — and
+    /// neither is reachable by pointing a constructor at a directory.
+    pub fn storing_in(self, store: DiffStore) -> Self {
+        Self {
+            store: Arc::new(store),
+            ..self
+        }
     }
 
     /// The seams this carries, by name.
@@ -265,11 +291,27 @@ impl Ctx {
             archive: _,
             catalogue: _,
             search: _,
+            store: _,
             log: _,
             spent: _,
         } = self;
 
-        &["archive", "catalogue", "search"]
+        &["archive", "catalogue", "search", "store"]
+    }
+
+    /// Cached diff results.
+    ///
+    /// Not timed, and that is the difference rather than an omission. The
+    /// `fetch` phase answers how long a call waited on a *registry*, and a
+    /// cache read that counted towards it would report the call that avoided
+    /// two downloads as the one that waited longest.
+    ///
+    /// The handle is cloned out rather than borrowed, because writing an
+    /// entry outlives the call that produced it: the work goes to the
+    /// runtime's `waitUntil` and the context it came from is gone by the
+    /// time it runs.
+    pub fn store(&self) -> Arc<DiffStore> {
+        Arc::clone(&self.store)
     }
 
     /// A version's files.
