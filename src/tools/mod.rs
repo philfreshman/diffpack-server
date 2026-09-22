@@ -131,6 +131,7 @@ tools! {
     diff_package_versions::DiffPackageVersions,
     get_diff_tree::GetDiffTree,
     get_file_content::GetFileContent,
+    get_file_diff::GetFileDiff,
     list_package_files::ListPackageFiles,
     list_package_versions::ListPackageVersions,
     resolve_archive_url::ResolveArchiveUrl,

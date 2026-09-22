@@ -6,9 +6,9 @@ tools an agent can call: resolve a package on npm, crates.io or PyPI, fetch and
 extract its archives, and diff one version against another.
 
 **Status: transport, the tools that read a package, the one that diffs two,
-and the first that reads a diff back.** The crate builds, tests and deploys,
+and the two that read a diff back.** The crate builds, tests and deploys,
 and `/mcp` speaks Streamable HTTP: a client connects, negotiates a protocol
-revision, lists tools and calls one. There are seven. `search_packages` finds
+revision, lists tools and calls one. There are eight. `search_packages` finds
 a package from a name half
 remembered, which is where an agent with no exact name to start from starts;
 `resolve_archive_url` answers from its arguments and fetches nothing;
@@ -18,10 +18,12 @@ published first, and which of them the registry itself installs;
 it, a page at a time; `get_file_content` returns one of those files, cut
 short if it is longer than a response can carry; and
 `diff_package_versions` compares two versions and answers with totals, a
-sample of the files that moved most, and a handle; and `get_diff_tree` takes
-that handle and lists the comparison's files and directories a page at a
-time. The rest of the tools that read a diff back arrive with
-[#15](https://github.com/philfreshman/diffpack-server/issues/15) onward.
+sample of the files that moved most, and a handle; `get_diff_tree` takes that
+handle and lists the comparison's files and directories a page at a time; and
+`get_file_diff` takes the same handle and returns one of those files' diffs,
+trimmed to the lines around each change unless you ask for all of them. The
+resources that read a diff back arrive with
+[#16](https://github.com/philfreshman/diffpack-server/issues/16).
 `/health` is the other route and is what a monitor watches.
 
 Production serves whatever was last merged to `main`, so a branch merged into
@@ -49,7 +51,13 @@ src/mcp.rs       The MCP handler: identity, capabilities, the tool list.
 src/tools/       One module per tool: its definition and its handler.
 src/registry.rs  What a registry is: npm, crates.io, PyPI, described once.
 src/archive/     A version's files: fetch, size cap, extract, one interface.
+src/catalogue/   What a package has released, most recently published first.
+src/search/      A name half remembered, matched against what a registry has.
+src/fetch.rs     Every request to a registry: user agent, timeout, redirects.
+src/store/       Diff results kept between calls, over Vercel Blob.
 src/error.rs     Which channel a failure reaches the client on.
+src/log.rs       One structured line per tool call, which is what an incident
+                 is read back from.
 src/health.rs    The /health body.
 src/page.rs      The 4.5 MB response ceiling: pages, and cut blobs.
 src/handle.rs    The handle a diff is asked for again by.
@@ -292,7 +300,7 @@ which suits a serverless function that has no warm process to hold one in —
 and it answers clients back to `2025-11-25` as well. `POST` only: `GET` and
 `DELETE` are `405`, and no answer ever carries an `Mcp-Session-Id`.
 
-A client can connect, list tools and call any of the seven there are:
+A client can connect, list tools and call any of the eight there are:
 `search_packages`, which answers a query with the packages a registry has
 that match it — npm and crates.io hits carry a version and a description, and
 PyPI hits carry a name alone, because the index PyPI publishes has nothing
@@ -307,13 +315,16 @@ it with the top-level directory stripped; `get_file_content`, which returns
 one of those files, saying when it had to cut one short and when the bytes
 were not valid UTF-8; `diff_package_versions`, which compares two versions
 and answers with how much changed, the files that changed most, and a handle
-the tools that read the diff back take; and `get_diff_tree`, the first of
+the tools that read the diff back take; `get_diff_tree`, the first of
 those, which takes that handle and lists the comparison's files and
 directories a page at a time — one directory's subtree, one depth, one set
 of statuses, since most of a package is unchanged between two versions and
-paging through that is a call spent on what did not happen. The rest of the
-reading tools arrive with
-[#15](https://github.com/philfreshman/diffpack-server/issues/15) onward.
+paging through that is a call spent on what did not happen; and
+`get_file_diff`, which takes the same handle and a path and returns that
+file's diff, with three lines of unchanged context around each change rather
+than the whole file, and `isDiff: false` where the answer is a file rather
+than a patch. The resources that read a diff back arrive with
+[#16](https://github.com/philfreshman/diffpack-server/issues/16).
 
 Claude Code:
 
