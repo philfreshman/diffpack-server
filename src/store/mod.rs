@@ -397,7 +397,8 @@ impl DiffStore {
         // an entry that would not fit in an empty store spends every other
         // comparison in the cache and still has no room at the end of it.
         if incoming > self.max_bytes {
-            return self.gave_up::<()>(TOO_BIG).is_some();
+            self.gave_up::<()>(TOO_BIG);
+            return false;
         }
 
         // A listing that could not be taken is a total that is not known,
