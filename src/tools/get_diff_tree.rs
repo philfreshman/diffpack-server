@@ -305,9 +305,10 @@ fn flatten(parent: &DiffFileEntry, left: u32, wanted: &[Status], nodes: &mut Vec
 /// descent: this tool, which roots a listing at it; the
 /// `diffpack://diff/{handle}/file/{path}` resource (#16), which reads a
 /// renamed file's `old_path` off it; and
-/// [`super::diff_package_versions::Comparison::patch`] (#84), which asks the
-/// same question of the same field — whether the file a caller named is the
-/// one a remembered patch was rendered from. Each of them with a walk of its
+/// [`super::diff_package_versions::Comparison::file_patch`] (#84, #93), which
+/// asks the same question of the same field — whether the file a caller named
+/// is the one a remembered patch was rendered from — and asks the node's type
+/// to refuse a directory without a download. Each of them with a walk of its
 /// own would be three ways of finding a node in a tree.
 ///
 /// A descent rather than a scan: at each level only the child whose path is

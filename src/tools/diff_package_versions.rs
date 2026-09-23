@@ -44,18 +44,37 @@
 //! [`Comparison`] is what it answers with, and it carries one of two halves
 //! beside the tree: both versions' files where this call worked the
 //! comparison out, and every changed file's patch where it came out of the
-//! store. [`Comparison::patch`] asks for one file and [`Comparison::files`]
-//! for the archives, and the second is what the first not having an answer
-//! costs — which is why a tool asks in that order rather than deciding for
-//! itself which half it was given.
+//! store.
 //!
-//! [`Comparison::patch`] is the only thing here that goes to another tool
-//! module: it asks [`super::get_diff_tree::node_at`] where the file it was
-//! given sits in this tree, because a patch is rendered from one path in each
-//! version and a caller naming a different pair is asking a different
-//! question. That export already had a caller outside its module and this is
-//! a third asking it the same thing, rather than a fourth descent through a
-//! tree.
+//! [`Comparison::file_patch`] — one file's patch out of it, for
+//! `get_file_diff` and the `diffpack://diff/{handle}/file/{path}` resource.
+//! The stored patch, a directory refused out of the tree, both versions'
+//! files only for a file with neither, and the file rendered through the same
+//! lookup the pre-render in [`compare`] uses. Before #93 the two callers each
+//! wrote those steps out, in the same order, and the resource did it through
+//! three of `get_file_diff`'s exports. It is here because the comparison
+//! keeps its handle to itself: the files it fetches are only right for that
+//! handle, and a method is the one place the two meet without a caller
+//! passing the handle back in.
+//!
+//! Two things here go to another tool module, and both are that module's own
+//! rule rather than work this one could do. [`super::get_diff_tree::node_at`]
+//! says where a file sits in the tree, which is how a stored patch is matched
+//! to the pair of paths it was rendered from and how a directory is known
+//! without a download; that export already had two callers outside its
+//! module. [`super::get_file_diff::presented`] is the trim and the cut, which
+//! are `get_file_diff`'s because `context_lines` is its argument.
+//!
+//! What that did to the count [ADR
+//! 0014](../../docs/adr/0014-a-resource-is-a-projection-of-the-tools.md) and
+//! [ADR 0016](../../docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md)
+//! keep — the things a tool module makes public for a caller in another
+//! module, beside its own `Args` and answer — is take it from eleven to
+//! eight. `Comparison::patch`, `Comparison::files` and `Versions` went from
+//! this module and `render` from `get_file_diff`; `file_patch` came. That is
+//! 0014's closing paragraph applied rather than argued with: the resource
+//! stopped doing its own work through a tool's front door, because the work
+//! moved to the module that owns the thing it is about.
 //!
 //! # Where the descriptions come from
 //!
@@ -424,9 +443,9 @@ fn churn(file: &Changed) -> u32 {
 ///
 /// The pair rather than one and then the other: a comparison is of two
 /// versions, and a caller holding one file map has nothing it can say.
-pub struct Versions {
-    pub from_files: FileMap,
-    pub to_files: FileMap,
+struct Versions {
+    from_files: FileMap,
+    to_files: FileMap,
 }
 
 /// One comparison, as whoever asked for it holds it.
@@ -439,10 +458,10 @@ pub struct Versions {
 /// none of the archives they came from, because that is what an entry is.
 ///
 /// Neither half is public. Which one a comparison arrived with is not a
-/// question a caller should be answering — [`Comparison::patch`] and
-/// [`Comparison::files`] are the two questions there are, and a caller that
-/// matched on the halves would be a fourth place deciding what to do about a
-/// comparison that came without its archives.
+/// question a caller should be answering — [`Comparison::file_patch`] is the
+/// one question there is about a file, and a caller that matched on the
+/// halves would be a second place deciding what to do about a comparison that
+/// came without its archives.
 pub struct Comparison {
     /// The whole comparison, as the engine arranged it.
     pub tree: DiffFileEntry,
@@ -452,13 +471,13 @@ pub struct Comparison {
 
     /// Which comparison this is.
     ///
-    /// Carried rather than asked for again. [`Comparison::files`] fetches two
-    /// archives when this one was remembered without them, and a caller that
-    /// handed it a different handle from the one [`compare`] was given would
-    /// be served another comparison's versions with nothing in the answer
-    /// saying they do not belong to this tree. Both call sites pass the same
-    /// handle; nothing made them, and the type is where that is settled
-    /// rather than in a sentence asking them to keep doing it.
+    /// Carried rather than asked for again. [`Comparison::file_patch`]
+    /// fetches two archives when this one was remembered without them, and a
+    /// caller that handed it a different handle from the one [`compare`] was
+    /// given would be served another comparison's versions with nothing in
+    /// the answer saying they do not belong to this tree. The type is where
+    /// that is settled rather than in a sentence asking callers to keep
+    /// passing the same one.
     ///
     /// It is the handle and not the key, because what a fetch needs is the
     /// inputs a handle carries ([ADR
@@ -512,10 +531,11 @@ impl Comparison {
         ctx: &Ctx,
         asked: OneFile<'_>,
     ) -> Result<get_file_diff::Patch, Failure> {
-        let rendered = match self.stored(asked.path, asked.old_path) {
-            Some(patch) => return Ok(get_file_diff::presented(patch, &asked)),
-            None => self.rendered(ctx, asked.path, asked.old_path).await?,
-        };
+        if let Some(patch) = self.stored(asked.path, asked.old_path) {
+            return Ok(get_file_diff::presented(patch, &asked));
+        }
+
+        let rendered = self.rendered(ctx, asked.path, asked.old_path).await?;
 
         Ok(get_file_diff::presented(&rendered, &asked))
     }
@@ -585,24 +605,6 @@ impl Comparison {
         })?;
 
         Ok(patch_of(files, path, from_path, inputs.ignore_whitespace))
-    }
-
-    /// The patch this comparison is already holding for the file at `path`.
-    ///
-    /// Cloned, for the resource, which still asks the two questions itself.
-    pub fn patch(&self, path: &str, old_path: Option<&str>) -> Option<Patch> {
-        self.stored(path, old_path).cloned()
-    }
-
-    /// Both versions' files, downloaded now if this comparison was
-    /// remembered without them.
-    pub async fn files(self, ctx: &Ctx) -> Result<Versions, Failure> {
-        let Self { handle, files, .. } = self;
-
-        match files {
-            Some(files) => Ok(files),
-            None => versions(&handle, ctx).await,
-        }
     }
 }
 
@@ -695,8 +697,8 @@ async fn versions(handle: &DiffHandle, ctx: &Ctx) -> Result<Versions, Failure> {
 /// and the other three read back what it worked out. A resource calling it is
 /// the shape [ADR
 /// 0014](../../docs/adr/0014-a-resource-is-a-projection-of-the-tools.md) asks
-/// for, and it is the fifth of this directory's exports to have a caller
-/// outside the module that owns it.
+/// for, and it is one of this directory's exports to have a caller outside
+/// the module that owns it.
 ///
 /// # The store is on this side of it
 ///

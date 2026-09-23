@@ -980,6 +980,53 @@ async fn a_read_of_one_files_diff_is_served_the_stored_patch_too() {
     );
 }
 
+/// So is a read of a directory's diff.
+///
+/// The same question as the call above, asked through the resource, and it
+/// has to cost the same: a read that downloaded two archives to refuse a
+/// directory the tool refused without them would be the two disagreeing
+/// about what the tree is for.
+///
+/// Held against the whole fixture set's cold read rather than against the
+/// code, because the code does not tell the two failures apart: a directory
+/// and a version the registry does not publish are both `-32001`. The
+/// message beside the code does, and comparing two envelopes reads it without
+/// pinning a sentence.
+#[tokio::test]
+async fn a_read_of_a_directory_is_refused_out_of_the_entry_too() {
+    let store = Memory::new();
+
+    let diffed = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+    let uri = format!(
+        "diffpack://diff/{}/file/src",
+        diffed["structuredContent"]["handle"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
+    );
+
+    let served = read(ONE_SIDED, || store.store(), &uri).await;
+    let cold = Memory::new();
+    assert_eq!(
+        served,
+        read(FIXTURES, || cold.store(), &uri).await,
+        "the tree says `src` is a directory, and the second version is not \
+         there to fetch: got {served}"
+    );
+    assert!(
+        served.get("error").is_some(),
+        "and that answer is the refusal a directory gets: got {served}"
+    );
+
+    let empty = Memory::new();
+    let missed = read(ONE_SIDED, || empty.store(), &uri).await;
+    assert_ne!(
+        missed, served,
+        "with nothing to be served the same read has to fetch, and the version \
+         it goes for is not published in this set"
+    );
+}
+
 /// A file the entry has no patch for is rendered, one file at a time.
 ///
 /// Why the redeem asks for the file rather than trusting the entry as a
