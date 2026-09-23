@@ -295,6 +295,21 @@ awk 'BEGIN { for (i = 0; i < 100000; i++) print "export const n = 0;" }' \
   >"$odd/package/big.txt"
 targz "odd-files-1.0.0.tgz" "package" "$odd"
 
+# --- a package with an empty file ------------------------------------------
+#
+# The extractor gives a directory the empty string for its content, so an
+# empty file and a directory look alike to anything that reads the content
+# rather than asking what is at the path. `empty.txt` is the file that tells
+# the two apart: it has to come back as a file with no text, never as a
+# directory, and `src` beside it has to come back as a directory, never as a
+# file with no text.
+empty=$work/empty-file
+mkdir -p "$empty/package"
+: >"$empty/package/empty.txt"
+write "$empty/package/src/index.js" 'export {};
+'
+targz "empty-file-1.0.0.tgz" "package" "$empty"
+
 # --- the archive this server will not fetch -------------------------------
 #
 # A real archive at a host no registry names, referenced by a listing that
