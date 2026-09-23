@@ -19,7 +19,8 @@ src/tools/          one module per tool: definition and handler together,
                     Ctx, the seams that outlive a call, and Call, one call
                     over them with its own tally
 src/resources/      one module per resource: URI and handler together
-src/registry.rs     what a registry is: npm, crates, pypi (go later)
+src/registry.rs     what a registry is: npm, crates, pypi (go later); and the
+                    package and version arguments that state its rules
 src/archive/        fetch(registry, package, version) -> FileMap, and what
                     a FileMap answers: what is at a path, and its paths
 src/catalogue/      versions(registry, package) -> Versions, newest first
@@ -324,6 +325,17 @@ cannot reach a model's schema late. And the outbound host allowlist is the hosts
 of the URLs this module builds — `archive` may fetch what `registry::allows`
 permits and nothing else — so a source added here is reachable the moment it exists,
 rather than through a second list someone has to remember to widen.
+
+The name rules and the version rule reach a tool's schema the same way.
+`package` and `version` (and `diff_package_versions`' `from_version` and
+`to_version`) are `registry::PackageName` and `registry::VersionName` rather
+than strings a tool describes for itself, the pattern `page::Limit` set. A
+version's description is `VERSION_RULE` itself. A package's states every
+registry's `name_rule()`, generated over the variant list, and points at
+`diffpack://registries`: `registry` is an argument beside `package`, so one
+schema cannot know which rule applies, and an agent reads `tools/list` without
+reading resources. Neither type checks anything. A name rule is told, not
+enforced, so both values reach the registry exactly as they arrived (#98).
 
 It fetches nothing. This module says *where* and *what shape*; `archive`,
 `catalogue` and `search` do the fetching, and that is what lets every registry
