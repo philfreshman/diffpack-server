@@ -19,12 +19,14 @@
 //! that reader and names nothing in this repository. Why a field is shaped
 //! the way it is belongs here or in an ordinary comment beside the code.
 //!
-//! Two fields have no doc comment at all, deliberately. `cursor` and `limit`
-//! are [`crate::page`]'s types and that module writes their descriptions —
-//! the default, the range, and the rule that an out-of-range `limit` is
-//! clamped rather than refused. A doc comment here would *replace* those
-//! rather than add to them, which is how a tool ends up telling an agent
-//! numbers no test compares against `page::MAX_LIMIT`.
+//! Three fields have no doc comment at all, deliberately. `prefix`, `cursor`
+//! and `limit` are [`crate::page`]'s types and that module writes their
+//! descriptions — what a directory's subtree is and is not, the default, the
+//! range, and the rule that an out-of-range `limit` is clamped rather than
+//! refused. A doc comment here would *replace* those rather than add to them,
+//! which is how a tool ends up telling an agent numbers no test compares
+//! against `page::MAX_LIMIT` — and how two tools that take a directory ended
+//! up with two rules for one, which disagreed about `/` (#97).
 
 use serde::{Deserialize, Serialize};
 
@@ -60,19 +62,14 @@ pub struct Args {
     /// tag — one published version.
     pub version: String,
 
-    /// Only what is inside this directory, one level or many: `src`, or
-    /// `src/util`. A trailing slash is allowed and makes no difference.
-    ///
-    /// It names a directory and is not matched by characters, so `sr` does
-    /// not narrow to `src/`. The directory itself is not in its own subtree.
-    /// Omit it for the whole archive. A directory the version does not have
-    /// is an empty page rather than an error.
+    // No doc comment on this or the two below, on purpose: see the module
+    // header. `page` writes their descriptions — this one the rule for a
+    // directory whose subtree is asked for, which `get_diff_tree` takes as
+    // well, and the other two the numbers that bind — and a sentence here
+    // would replace them.
     #[serde(default)]
-    pub prefix: Option<String>,
+    pub prefix: Option<page::Subtree>,
 
-    // No doc comment on either of these, on purpose: see the module header.
-    // `page` writes their descriptions, and a sentence here would replace
-    // the one that carries the numbers that bind.
     #[serde(default)]
     pub cursor: Option<page::Cursor>,
 
@@ -155,26 +152,18 @@ impl Tool for ListPackageFiles {
             .fetch(args.registry, &args.package, &args.version)
             .await?;
 
+        // An absent prefix is the root, which is what `/` is: the whole
+        // archive. The Subtree has already normalised what was asked for,
+        // and it is what knows that `sr` is not `src`.
+        let under = args.prefix.unwrap_or_default();
+
         // A `FileMap` is a map, so it has no order of its own and two calls
         // would not agree on one. Sorting is what makes the sequence a
         // sequence — without it a cursor names a position in an arrangement
         // that existed for one request.
-        // A directory, with the slash a caller may or may not have written
-        // put back exactly once. Matching against `src/` rather than `src`
-        // is the whole of what makes this a directory and not a string
-        // comparison: `sr` cannot be a prefix of `src/lib.rs`, and `lib`
-        // cannot swallow `libs/`.
-        let under = args
-            .prefix
-            .as_deref()
-            .map(|prefix| format!("{}/", prefix.trim_end_matches('/')));
-
         let mut entries: Vec<Entry> = files
             .into_iter()
-            .filter(|(path, _)| match &under {
-                Some(under) => path.starts_with(under),
-                None => true,
-            })
+            .filter(|(path, _)| under.contains(path))
             .map(|(path, entry)| Entry {
                 path,
                 entry_type: entry.file_type.into(),

@@ -126,3 +126,20 @@ The cost is that `page.rs` is named for the sequence half, so a reader looking
 for truncation has to be told where it is. `docs/architecture.md` and the
 module's own first line both say so, and `Excerpt` is a noun in
 [`CONTEXT.md`](../../CONTEXT.md) rather than an unnamed shape inside a tool.
+
+## Since: #97
+
+`page::Subtree` is a fourth argument type here, and the first that is not
+about the ceiling. It is the directory whose subtree `get_diff_tree`'s `path`
+and `list_package_files`' `prefix` ask for. It came in under the second half
+of this record's argument, not the first. Its rule is one an agent reads in a
+schema: a trailing slash makes no difference, a directory is matched at the
+separator, and `/` and `""` are the root. Two tools that each wrote that rule
+out answered `/` two ways. This is the module that already holds the types
+that write their own schema, and a module for one type is what ADR 0013
+turned down.
+
+So `page` now owns the arguments that shape an answer, and the ceiling is the
+reason for three of them. The sentence above saying `limit` and `cursor` are
+the only part of this module an agent reads stopped being true with
+`max_bytes`, and is not true of `path` or `prefix` either.

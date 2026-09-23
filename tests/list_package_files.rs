@@ -310,6 +310,83 @@ async fn a_trailing_slash_on_a_prefix_makes_no_difference() {
     );
 }
 
+/// `/` is the root, and the root's subtree is the whole archive.
+///
+/// It used to be an empty page with a total of nought: the slash was trimmed
+/// and then put back, which named a directory called `/` that no path is
+/// under. `get_diff_tree` already read `/` as the root, so the two tools that
+/// take a directory answered one question two ways.
+#[tokio::test]
+async fn a_prefix_of_a_slash_is_the_whole_archive() {
+    let whole = call(json!({
+        "registry": "crates", "package": "serde", "version": "1.0.0",
+    }))
+    .await;
+    let rooted = call(json!({
+        "registry": "crates", "package": "serde", "version": "1.0.0", "prefix": "/",
+    }))
+    .await;
+
+    assert_eq!(
+        whole["structuredContent"]["total"],
+        json!(3),
+        "the control: the archive has three entries, got {whole}"
+    );
+    assert_eq!(
+        rooted["structuredContent"], whole["structuredContent"],
+        "`/` is the root, not a directory nothing is under"
+    );
+}
+
+/// An empty prefix is the root too, for the reason `/` is: nothing is what a
+/// trailing slash leaves of `/`, so the two are one argument.
+#[tokio::test]
+async fn an_empty_prefix_is_the_whole_archive() {
+    let whole = call(json!({
+        "registry": "crates", "package": "serde", "version": "1.0.0",
+    }))
+    .await;
+    let empty = call(json!({
+        "registry": "crates", "package": "serde", "version": "1.0.0", "prefix": "",
+    }))
+    .await;
+
+    assert_eq!(
+        whole["structuredContent"]["total"],
+        json!(3),
+        "the control: the archive has three entries, got {whole}"
+    );
+    assert_eq!(
+        empty["structuredContent"], whole["structuredContent"],
+        "`\"\"` is the root, not a directory named nothing"
+    );
+}
+
+/// A `null` prefix is the root, the same as leaving it out, for the reason
+/// `get_diff_tree`'s `null` path is: the argument is optional, so its schema
+/// admits `null`, and a client that sends it is asking for everything.
+#[tokio::test]
+async fn a_null_prefix_is_the_whole_archive() {
+    let whole = call(json!({
+        "registry": "crates", "package": "serde", "version": "1.0.0",
+    }))
+    .await;
+    let null = call(json!({
+        "registry": "crates", "package": "serde", "version": "1.0.0", "prefix": null,
+    }))
+    .await;
+
+    assert_eq!(
+        whole["structuredContent"]["total"],
+        json!(3),
+        "the control: the archive has three entries, got {whole}"
+    );
+    assert_eq!(
+        null["structuredContent"], whole["structuredContent"],
+        "`null` is the argument left out"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Reading it a page at a time
 // ---------------------------------------------------------------------------
@@ -574,7 +651,9 @@ async fn the_handler_answers_with_typed_entries() {
             registry: Registry::Crates,
             package: "serde".to_owned(),
             version: "1.0.0".to_owned(),
-            prefix: Some("src".to_owned()),
+            // Read from JSON, the way the wire reads it: a Subtree has no
+            // other way in, so a hand-built one is held to the same rule.
+            prefix: serde_json::from_value(json!("src")).expect("a directory"),
             cursor: None,
             limit: None,
         },

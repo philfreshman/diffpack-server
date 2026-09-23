@@ -121,6 +121,30 @@ async fn the_handle_this_tool_takes_is_described_by_the_module_that_mints_it() {
     );
 }
 
+/// `path` carries the one rule for a subtree, and `list_package_files`'
+/// `prefix` carries the same one.
+///
+/// Two tools take a directory whose subtree is asked for, and when each wrote
+/// its own description the two answered `/` differently (#97). So the schema
+/// an agent reads for either argument is one schema, and it says what `/`
+/// and `""` mean rather than leaving it to be guessed from "omit it".
+#[tokio::test]
+async fn the_path_this_tool_takes_is_described_the_way_a_prefix_is() {
+    let path = listed(TOOL).await["inputSchema"]["properties"]["path"].clone();
+    let prefix = listed("list_package_files").await["inputSchema"]["properties"]["prefix"].clone();
+
+    assert_eq!(
+        path, prefix,
+        "one rule, written once, shown by both tools that take it"
+    );
+    assert!(
+        path["description"]
+            .as_str()
+            .is_some_and(|said| said.contains("`/`") && said.contains("empty string")),
+        "the description says what `/` and `\"\"` ask for, got {path}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // What it answers
 // ---------------------------------------------------------------------------
@@ -379,6 +403,71 @@ async fn a_trailing_slash_on_a_path_makes_no_difference() {
     let slashed = walk(json!({ "handle": diffable(), "path": "src/" })).await;
 
     assert_eq!(bare, slashed);
+}
+
+/// `/` is the root, and the root's subtree is the whole comparison.
+///
+/// What is left of `/` once its trailing slash is gone is nothing, and
+/// nothing is the root. `list_package_files` once read the same argument as a
+/// directory called `/` and answered an empty page, so this is pinned from
+/// both tools rather than assumed of either.
+///
+/// This one pins the answer and not how it is reached. The comparison's own
+/// root node is named `/`, so a descent that looked for a directory called
+/// `/` would land on the root as well. The empty path below is the one a
+/// missing normalisation would fail.
+#[tokio::test]
+async fn a_path_of_a_slash_is_the_whole_comparison() {
+    let whole = walk(json!({ "handle": diffable() })).await;
+    let rooted = walk(json!({ "handle": diffable(), "path": "/" })).await;
+
+    assert!(
+        paths(&whole).contains(&"README.md") && paths(&whole).contains(&"src"),
+        "the control: the whole comparison has the top level in it, got {:?}",
+        paths(&whole)
+    );
+    assert_eq!(
+        rooted, whole,
+        "`/` is the root, and its subtree is everything"
+    );
+}
+
+/// A `null` path is the root, the same as leaving it out.
+///
+/// The argument is optional rather than a Subtree that defaults to the root,
+/// so its schema still admits `null`, the way `cursor` and `limit` do. A
+/// client that sends every argument, with `null` for the ones it has no value
+/// for, is asking for the whole comparison and not making a bad call.
+#[tokio::test]
+async fn a_null_path_is_the_whole_comparison() {
+    let whole = walk(json!({ "handle": diffable() })).await;
+    let null = walk(json!({ "handle": diffable(), "path": null })).await;
+
+    assert!(
+        !whole.is_empty(),
+        "the control: a comparison with nodes in it"
+    );
+    assert_eq!(null, whole, "`null` is the argument left out");
+}
+
+/// An empty `path` is the root too.
+///
+/// Nothing is what a trailing slash leaves of `/`, so `""` and `/` are one
+/// argument. An agent that builds a path by joining nothing to a slash should
+/// not find the two disagree.
+#[tokio::test]
+async fn an_empty_path_is_the_whole_comparison() {
+    let whole = walk(json!({ "handle": diffable() })).await;
+    let empty = walk(json!({ "handle": diffable(), "path": "" })).await;
+
+    assert!(
+        !whole.is_empty(),
+        "the control: a comparison with nodes in it"
+    );
+    assert_eq!(
+        empty, whole,
+        "`\"\"` is the root, not a directory named nothing"
+    );
 }
 
 /// A path is matched at the separator, so one directory's name cannot be the
@@ -821,6 +910,28 @@ async fn a_directory_a_rename_emptied_is_not_in_the_tree_at_all() {
          error: got {gone}"
     );
     assert_eq!(gone["isError"], json!(false), "got {gone}");
+}
+
+/// The description says so, because the argument's own description cannot.
+///
+/// `path` carries the rule every tool that takes a directory shares, and a
+/// directory a rename emptied is this tool's alone: `list_package_files`
+/// lists one version, where a directory is there or it is not. An agent that
+/// read `src/legacy` in the first version and then asks for it here should
+/// know before it asks that an empty page is the answer, not a sign of a
+/// broken call.
+#[tokio::test]
+async fn the_description_says_a_directory_a_rename_emptied_is_not_there() {
+    let tool = listed(TOOL).await;
+    let said = tool["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a described tool, got {tool}"));
+
+    assert!(
+        said.contains("rename") && said.contains("empty page"),
+        "a directory the first version had can be missing from the \
+         comparison, and asking for it is an empty page: {said}"
+    );
 }
 
 // ---------------------------------------------------------------------------

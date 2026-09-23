@@ -21,7 +21,9 @@
 //! root nor a directory named by `path` is in what comes back — the same
 //! rule [`super::list_package_files`]'s `prefix` follows, and for the same
 //! reason: an agent that asked what is under `src` is not asking about
-//! `src`.
+//! `src`. Both arguments are one type, [`crate::page::Subtree`], which
+//! normalises the directory and writes the rule into the schema, so the two
+//! tools cannot read `/` two ways again (#97).
 //!
 //! # Where a cached result comes in
 //!
@@ -52,13 +54,14 @@
 //! is shaped the way it is belongs here or in an ordinary comment beside the
 //! code.
 //!
-//! Three fields have no doc comment at all, deliberately. `handle` is
-//! [`crate::handle`]'s type and `cursor` and `limit` are [`crate::page`]'s,
-//! and those modules write their descriptions — where a handle comes from
-//! and that it is not built by hand, the default and the range of a limit,
-//! the rule that a cursor is passed back unchanged. A doc comment here would
-//! *replace* those rather than add to them, which is how four tools that
-//! take one handle end up describing it four ways.
+//! Four fields have no doc comment at all, deliberately. `handle` is
+//! [`crate::handle`]'s type and `path`, `cursor` and `limit` are
+//! [`crate::page`]'s, and those modules write their descriptions — where a
+//! handle comes from and that it is not built by hand, what a subtree is and
+//! is not, the default and the range of a limit, the rule that a cursor is
+//! passed back unchanged. A doc comment here would *replace* those rather
+//! than add to them, which is how four tools that take one handle end up
+//! describing it four ways.
 
 use serde::{Deserialize, Serialize};
 
@@ -82,16 +85,11 @@ pub struct Args {
     // shows in its answer.
     pub handle: DiffHandle,
 
-    /// Only what is inside this directory, one level or many: `src`, or
-    /// `src/util`. A trailing slash is allowed and makes no difference.
-    ///
-    /// It names a directory and is not matched by characters, so `sr` does
-    /// not narrow to `src/`, and the directory itself is not in its own
-    /// subtree. Omit it for the whole comparison. A path with nothing under
-    /// it is an empty page rather than an error — which is what a file is,
-    /// and what a directory the comparison dropped is.
+    // No doc comment, on purpose: see the module header. `page` writes the
+    // rule for a directory whose subtree is asked for, once, for this and
+    // for `list_package_files`' `prefix`.
     #[serde(default)]
-    pub path: Option<String>,
+    pub path: Option<page::Subtree>,
 
     /// How many levels to descend, counting from wherever the answer is
     /// rooted — the comparison itself, or the directory `path` named: `1` is
@@ -318,8 +316,8 @@ fn flatten(parent: &DiffFileEntry, left: u32, wanted: &[Status], nodes: &mut Vec
 ///
 /// It is a path and not a prefix. Matching against `src/` rather than `src`
 /// is what makes `sr` unable to narrow to `src/lib.rs` and `lib` unable to
-/// swallow `libs/` — the same distinction `list_package_files` draws, where
-/// it is the whole of what makes the argument name a directory.
+/// swallow `libs/` — the same distinction [`crate::page::Subtree::contains`]
+/// draws for `list_package_files`, where there is no tree to descend.
 pub fn node_at<'t>(root: &'t DiffFileEntry, path: &str) -> Option<&'t DiffFileEntry> {
     if root.path == path {
         return Some(root);
@@ -340,7 +338,9 @@ impl Tool for GetDiffTree {
         a page at a time. Takes the handle `diff_package_versions` gave you, \
         and three ways to ask for less than all of it: `path` for one \
         directory's contents, `depth` for how far down to go, and `status` \
-        for which kinds of change you want. Ask for `added`, `removed`, \
+        for which kinds of change you want. A directory a rename left empty \
+        is not in the comparison at all, even though the first version had \
+        it, so a `path` naming it is an empty page. Ask for `added`, `removed`, \
         `modified` and `renamed` to read what changed — most of a package is \
         `unchanged` between two versions, and paging through that is a call \
         spent on what did not happen. Each file and directory in the answer \
@@ -367,13 +367,12 @@ impl Tool for GetDiffTree {
     async fn call(args: Args, ctx: &Ctx) -> Result<Page<Node>, Failure> {
         let tree = diff_package_versions::compare(&args.handle, ctx).await?.tree;
 
-        // A trailing slash a caller may or may not have written, gone
-        // either way, so `src/` and `src` are one directory. Nothing left
-        // over is the whole comparison, which is what `/` means and what
-        // omitting the argument means.
-        let rooted_at = match args.path.as_deref().map(|path| path.trim_end_matches('/')) {
-            Some(path) if !path.is_empty() => node_at(&tree, path),
-            _ => Some(&tree),
+        // An absent path is the root, which is what `/` is: the whole
+        // comparison. The Subtree has already normalised what was asked for,
+        // so what is left is a directory to descend to, or the root.
+        let rooted_at = match args.path.unwrap_or_default().directory() {
+            Some(directory) => node_at(&tree, directory),
+            None => Some(&tree),
         };
 
         // An absent depth is as far as there is. A depth of zero is a caller

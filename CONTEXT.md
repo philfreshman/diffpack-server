@@ -268,13 +268,18 @@ a FileMap's entry either.
 _Avoid_: file tree, hierarchy, listing, entry (for a node)
 
 **Subtree**:
-The part of a Tree under one directory: what `get_diff_tree`'s `path` names
-and what its `depth` bounds. A directory is not inside its own subtree, so
-the one that was asked for is not in what comes back — the rule
-`list_package_files`'s `prefix` follows. Distinct from a Page, which is how
-much of a subtree one answer carries: a subtree is what was asked for and a
-Page is as much of it as fits.
-_Avoid_: branch, folder, section, sub-directory
+The part of a Tree, or of a FileMap, under one directory: what
+`get_diff_tree`'s `path` and `list_package_files`'s `prefix` name, and what
+`get_diff_tree`'s `depth` bounds. Both arguments are one type,
+`page::Subtree`, and the rule is its: a trailing slash makes no difference, a
+directory is matched by name and not by characters, and a directory is not
+inside its own subtree, so the one that was asked for is not in what comes
+back. `/` and `""` name the root, whose subtree is everything — the whole
+comparison, or the whole archive — and never a refusal. Distinct from a Page,
+which is how much of a subtree one answer carries: a subtree is what was
+asked for and a Page is as much of it as fits.
+_Avoid_: branch, folder, section, sub-directory, prefix (one argument is
+called that, and it is not matched as one)
 
 **Patch**:
 One file's rendered diff, and whether it is a diff at all. A Diff covers a
