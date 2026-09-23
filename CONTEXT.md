@@ -114,7 +114,10 @@ tool asks for a FileMap, never for an Archive. Every entry's content is text,
 because extraction decodes it that way: bytes that are not valid UTF-8 become
 replacement characters rather than an error, so a FileMap holds a readable
 rendering of a binary file and not the file. Nothing downstream can undo
-that, which is why a tool returning content says whether it happened.
+that, which is why a tool returning content says whether it happened — and
+whether it happened is asked of the FileMap. What is at a path is one of three
+answers: a file with its text, a directory, or nothing. A directory is not an
+empty file, even though the extractor gives it empty content.
 _Avoid_: tree, file list, contents, extracted archive
 
 **Index**:
@@ -259,12 +262,12 @@ _Avoid_: change type, state, kind
 A Diff arranged the way the two versions' files are: every directory and
 every file in either of them, each with its Status and the lines it gained
 and lost. It is one Diff's shape where a FileMap is what one Version ships,
-and it is ordered where a FileMap is a map. Two things about it are the
-engine's and neither is guessable from an answer, so both are said out loud
-wherever one is served: a directory's counts are the sum of its children's,
-and a directory a rename left empty is not in the Tree at all. One file or
-one directory in it is a *node* — not an Entry, which is the cache's, and not
-a FileMap's entry either.
+and it is arranged by directory where a FileMap is a flat set of paths. Two
+things about it are the engine's and neither is guessable from an answer, so
+both are said out loud wherever one is served: a directory's counts are the
+sum of its children's, and a directory a rename left empty is not in the Tree
+at all. One file or one directory in it is a *node* — not an Entry, which is
+the cache's, and not a FileMap's entry either.
 _Avoid_: file tree, hierarchy, listing, entry (for a node)
 
 **Subtree**:
