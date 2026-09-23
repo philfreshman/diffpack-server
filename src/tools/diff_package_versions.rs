@@ -85,6 +85,7 @@ use crate::handle::{DiffHandle, Inputs};
 use crate::registry::Registry;
 use crate::resources;
 use crate::store::Entry;
+use crate::tools::get_file_diff::{self, OneFile};
 use crate::tools::{get_diff_tree, Ctx, Tool};
 
 /// The tool.
@@ -351,22 +352,16 @@ fn walk(node: &DiffFileEntry, totals: &mut Totals, changed: &mut Vec<Changed>) {
 /// A renamed file is diffed from where it was: its content in the first
 /// version is at `old_path`, and diffing it against itself at its new path
 /// would report every line of a moved file as added.
-fn rendered(
-    node: &DiffFileEntry,
-    from_files: &FileMap,
-    to_files: &FileMap,
-    ignore_whitespace: bool,
-) -> BTreeMap<String, Patch> {
+fn rendered(node: &DiffFileEntry, files: &Versions, ignore_whitespace: bool) -> BTreeMap<String, Patch> {
     let mut patches = BTreeMap::new();
-    collect(node, from_files, to_files, ignore_whitespace, &mut patches);
+    collect(node, files, ignore_whitespace, &mut patches);
     patches
 }
 
 /// Add every changed file under `node` to `patches`.
 fn collect(
     node: &DiffFileEntry,
-    from_files: &FileMap,
-    to_files: &FileMap,
+    files: &Versions,
     ignore_whitespace: bool,
     patches: &mut BTreeMap<String, Patch>,
 ) {
@@ -379,23 +374,40 @@ fn collect(
             let was = node.old_path.as_deref().unwrap_or(&node.path);
             patches.insert(
                 node.path.clone(),
-                engine::patch(
-                    &node.path,
-                    content(from_files, was),
-                    content(to_files, &node.path),
-                    ignore_whitespace,
-                ),
+                patch_of(files, &node.path, was, ignore_whitespace),
             );
         }
         FileType::Directory => {
             for child in node.children.iter().flatten() {
-                collect(child, from_files, to_files, ignore_whitespace, patches);
+                collect(child, files, ignore_whitespace, patches);
             }
         }
     }
 }
 
+/// The patch for the file at `path`, diffed from `from_path` in the first
+/// version.
+///
+/// The one rendering there is, for both of the moments a patch is made: every
+/// changed file's, while [`compare`] has both archives in hand, and one file's
+/// on demand, when [`Comparison::file_patch`] finds nothing stored for it. A
+/// remembered patch and a fresh one only agree while those two read a file
+/// the same way, so they read it here rather than each in its own copy.
+fn patch_of(files: &Versions, path: &str, from_path: &str, ignore_whitespace: bool) -> Patch {
+    engine::patch(
+        path,
+        content(&files.from_files, from_path),
+        content(&files.to_files, path),
+        ignore_whitespace,
+    )
+}
+
 /// What `files` has at `path`, where that is a file at all.
+///
+/// A directory is nothing, which is the engine's reading: its content is the
+/// empty string the extractor gave it. That is why a directory a caller named
+/// is refused before anything is rendered — see [`refuse_directory`] — or it
+/// would be told the path is in neither version.
 fn content<'a>(files: &'a FileMap, path: &str) -> Option<&'a str> {
     files.get(path).and_then(|entry| match entry.file_type {
         FileType::File => Some(entry.content.as_str()),
@@ -467,6 +479,47 @@ pub struct Comparison {
 }
 
 impl Comparison {
+    /// The patch for one file of this comparison, presented the way the
+    /// caller asked for it.
+    ///
+    /// The one answer to "what did this file change", for the two places
+    /// that ask: `get_file_diff` and the `diffpack://diff/{handle}/file/{path}`
+    /// resource. Behind it, in this order:
+    ///
+    /// 1. The patch this comparison is already holding for the file, where it
+    ///    was remembered with one. A warm call that gets one fetches nothing.
+    /// 2. A directory the tree names is refused. A directory never has a
+    ///    patch, so the first step answers nothing for one, and the tree
+    ///    already says what it is — two downloads would only say it again.
+    /// 3. Both versions' files, downloaded now if this comparison was
+    ///    remembered without them, and the file rendered out of them.
+    /// 4. The trim and the cut, which are `get_file_diff`'s
+    ///    ([`get_file_diff::presented`]), for a patch from either step.
+    ///
+    /// Asking per file and rendering when there is nothing stored is the
+    /// whole of the rule, and it is right whichever way a patch went missing
+    /// — over the per-patch cap, dropped with the rest because the entry was
+    /// too big, written before entries carried patches, or a file that did
+    /// not change and so never had one. It never asks whether the entry kept
+    /// its patches, and [`crate::store::DiffStore::get`] serving an entry
+    /// that lost them rests on that.
+    ///
+    /// A method rather than a function taking the handle, because a
+    /// comparison's files are only right for its own handle. Step 3 is the
+    /// one place the two meet, and it is inside the type that holds both.
+    pub async fn file_patch(
+        &self,
+        ctx: &Ctx,
+        asked: OneFile<'_>,
+    ) -> Result<get_file_diff::Patch, Failure> {
+        let rendered = match self.stored(asked.path, asked.old_path) {
+            Some(patch) => return Ok(get_file_diff::presented(patch, &asked)),
+            None => self.rendered(ctx, asked.path, asked.old_path).await?,
+        };
+
+        Ok(get_file_diff::presented(&rendered, &asked))
+    }
+
     /// The patch this comparison is already holding for the file at `path`,
     /// if it is the patch a caller asking about that file would be rendered.
     ///
@@ -477,37 +530,72 @@ impl Comparison {
     /// spelling this one: a renamed file asked about without its `old_path`
     /// is every line of it added, which is what `get_file_diff` has always
     /// said and has to keep saying whether or not anything asked before.
-    ///
-    /// Nothing for a file this comparison has no patch for, and that is the
-    /// whole of the rule. It is right whichever way one went missing — over
-    /// the per-patch cap, dropped with the rest because the entry was too
-    /// big, written before entries carried patches at all, or a file that did
-    /// not change and so never had one. Every one of those is a file to
-    /// render, and rendering it is what [`Comparison::files`] is for.
-    ///
-    /// Cloned rather than lent, because a caller that got nothing here goes
-    /// on to [`Comparison::files`], which takes the comparison: a borrow
-    /// would outlive the question it was asked. One patch is a quarter of a
-    /// megabyte at the very most, and the caller was about to render it.
-    pub fn patch(&self, path: &str, old_path: Option<&str>) -> Option<Patch> {
+    fn stored(&self, path: &str, old_path: Option<&str>) -> Option<&Patch> {
         let node = get_diff_tree::node_at(&self.tree, path)?;
 
         (node.old_path.as_deref() == old_path)
-            .then(|| self.patches.get(path).cloned())
+            .then(|| self.patches.get(path))
             .flatten()
+    }
+
+    /// The file at `path` rendered from both versions, diffed from
+    /// `old_path` in the first where the caller named one.
+    ///
+    /// A directory is refused twice over, and on purpose. The tree is asked
+    /// first, because it is here on every comparison and asking it costs no
+    /// download. The file maps are asked again once they are in hand, for the
+    /// directory the tree does not have: the engine drops one with nothing
+    /// under it, which is what a rename leaves of the directory it moved out
+    /// of.
+    async fn rendered(
+        &self,
+        ctx: &Ctx,
+        path: &str,
+        old_path: Option<&str>,
+    ) -> Result<Patch, Failure> {
+        let inputs = self.handle.inputs();
+        let from_path = old_path.unwrap_or(path);
+
+        refuse_directory(inputs, path, from_path, |end, path| {
+            get_diff_tree::node_at(&self.tree, path).is_some_and(|node| {
+                // A directory's status says which versions have it: `added`
+                // is the second alone and `removed` the first alone.
+                let absent = match end {
+                    End::From => DiffStatus::Added,
+                    End::To => DiffStatus::Removed,
+                };
+                matches!(node.file_type, FileType::Directory) && node.status != absent
+            })
+        })?;
+
+        let fetched;
+        let files = match &self.files {
+            Some(files) => files,
+            None => {
+                fetched = versions(&self.handle, ctx).await?;
+                &fetched
+            }
+        };
+
+        refuse_directory(inputs, path, from_path, |end, path| {
+            files
+                .of(end)
+                .get(path)
+                .is_some_and(|entry| matches!(entry.file_type, FileType::Directory))
+        })?;
+
+        Ok(patch_of(files, path, from_path, inputs.ignore_whitespace))
+    }
+
+    /// The patch this comparison is already holding for the file at `path`.
+    ///
+    /// Cloned, for the resource, which still asks the two questions itself.
+    pub fn patch(&self, path: &str, old_path: Option<&str>) -> Option<Patch> {
+        self.stored(path, old_path).cloned()
     }
 
     /// Both versions' files, downloaded now if this comparison was
     /// remembered without them.
-    ///
-    /// Takes `self`, because the two file maps are much the largest thing a
-    /// comparison carries and every caller that wants them wants them whole
-    /// — each has taken what it needed from the tree, and asked
-    /// [`Comparison::patch`] for the one file it is about, first.
-    ///
-    /// A remembered comparison spares the tree and the patches and not the
-    /// downloads. What is here is the file this call wants and the entry does
-    /// not have: one over a cap, or one that never changed.
     pub async fn files(self, ctx: &Ctx) -> Result<Versions, Failure> {
         let Self { handle, files, .. } = self;
 
@@ -515,6 +603,59 @@ impl Comparison {
             Some(files) => Ok(files),
             None => versions(&handle, ctx).await,
         }
+    }
+}
+
+/// One end of a comparison: the version it is from, or the one it is to.
+#[derive(Debug, Clone, Copy)]
+enum End {
+    From,
+    To,
+}
+
+impl Versions {
+    /// The files `end` ships.
+    fn of(&self, end: End) -> &FileMap {
+        match end {
+            End::From => &self.from_files,
+            End::To => &self.to_files,
+        }
+    }
+}
+
+/// The refusal for a caller that named a directory, if it did.
+///
+/// A directory has no content, so the engine reads one as absent on both
+/// sides and renders the sentence that says it is in neither version. That
+/// sentence is false about a path the package ships, and an agent has
+/// nothing in the answer to doubt it with — the failure `get_file_content`
+/// refuses a directory to avoid.
+///
+/// `is_directory` is where the answer comes from, because there are two
+/// places to ask and the refusal must not depend on which one answered: the
+/// tree, before anything is downloaded, and the file maps, once they are in
+/// hand. The second version first, because that is the one a caller's path
+/// usually names.
+fn refuse_directory(
+    inputs: &Inputs,
+    path: &str,
+    from_path: &str,
+    is_directory: impl Fn(End, &str) -> bool,
+) -> Result<(), Failure> {
+    let directory = [
+        (End::To, path, &inputs.to_version),
+        (End::From, from_path, &inputs.from_version),
+    ]
+    .into_iter()
+    .find(|(end, path, _)| is_directory(*end, path));
+
+    match directory {
+        Some((_, path, version)) => Err(Failure::PathIsDirectory {
+            package: inputs.package.clone(),
+            version: version.clone(),
+            path: path.to_owned(),
+        }),
+        None => Ok(()),
     }
 }
 
@@ -609,12 +750,7 @@ pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failu
     // are extracted at this moment, so a patch costs a comparison of two
     // strings already in memory — and on the other side of this call it
     // costs two downloads.
-    let patches = rendered(
-        &tree,
-        &files.from_files,
-        &files.to_files,
-        inputs.ignore_whitespace,
-    );
+    let patches = rendered(&tree, &files, inputs.ignore_whitespace);
 
     ctx.store().put(Entry {
         key,

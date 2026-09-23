@@ -129,7 +129,7 @@ pub async fn read(
     // type on it (ADR 0014) — a read that fetched where a call did not would
     // be the two disagreeing about what the cache is for.
     let patch = match comparison.patch(asked.path, asked.old_path) {
-        Some(patch) => get_file_diff::presented(patch, &asked),
+        Some(patch) => get_file_diff::presented(&patch, &asked),
         None => {
             let files = comparison.files(ctx).await?;
 

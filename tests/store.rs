@@ -887,6 +887,52 @@ async fn a_renamed_file_is_served_only_the_patch_it_was_asked_for() {
     );
 }
 
+/// A directory is refused out of the entry, without the archives.
+///
+/// A directory has no patch, so an entry never holds one for it, and asking
+/// the entry first answers nothing. What does answer is the tree: it says
+/// `src` is a directory in both versions, which is the whole of what the
+/// refusal needs. Fetching both archives to learn it again from their file
+/// maps is two downloads spent on a question already answered.
+///
+/// Driven through [`ONE_SIDED`], so a call that downloaded would fail on the
+/// second version. The served answer is held against the whole fixture set's
+/// cold answer rather than against a sentence: the two are the same refusal,
+/// and the control is the call that has to fetch and cannot.
+#[tokio::test]
+async fn a_directory_is_refused_out_of_the_entry_without_the_archives() {
+    let store = Memory::new();
+
+    let diffed = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+    let asked = json!({
+        "handle": diffed["structuredContent"]["handle"].clone(),
+        "path": "src",
+    });
+
+    let served = one_sided(|| store.store(), "get_file_diff", asked.clone()).await;
+    let cold = Memory::new();
+    assert_eq!(
+        served,
+        call_tool(|| cold.store(), "get_file_diff", asked.clone()).await,
+        "the tree says `src` is a directory, and the second version is not \
+         there to fetch: got {served}"
+    );
+    assert_eq!(
+        served["isError"],
+        json!(true),
+        "and that answer is the refusal a directory gets: got {served}"
+    );
+
+    let empty = Memory::new();
+    let missed = one_sided(|| empty.store(), "get_file_diff", asked).await;
+    assert_ne!(
+        missed, served,
+        "with nothing to be served the same call has to fetch, and fetching \
+         is what this fixture set cannot do"
+    );
+}
+
 /// So is the resource that answers with one file's diff.
 ///
 /// The document is the tool's answer with a media type on it (ADR 0014), so
