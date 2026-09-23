@@ -1160,6 +1160,54 @@ async fn a_path_that_stopped_being_a_directory_is_refused_warm_without_the_archi
     is_refused_as_a_directory_in_2(&served);
 }
 
+/// The resource answers that path as the tool does, in all four cells.
+///
+/// A read of `diffpack://diff/{handle}/file/lib` is the tool's answer with a
+/// media type on it (ADR 0014), and a refusal has no media type: it arrives
+/// as the JSON-RPC error rather than as `isError`, carrying the sentence the
+/// tool's error carries. So what is held is that sentence, the same on both
+/// channels, and that it is the refusal for a directory in 2.0.0.
+///
+/// A warm read and a warm call share one entry and go through `ONE_SIDED`
+/// together, so neither can have downloaded.
+#[tokio::test]
+async fn a_read_of_a_path_that_is_a_file_and_a_directory_is_the_tools_refusal() {
+    for (from, to) in [("1.0.0", "2.0.0"), ("2.0.0", "1.0.0")] {
+        let store = Memory::new();
+        let diffed = call(|| store.store(), shape(from, to)).await;
+        settles(&store, 2).await;
+        let handle = diffed["structuredContent"]["handle"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
+            .to_owned();
+        let asked = json!({ "handle": handle, "path": "lib" });
+        let uri = format!("diffpack://diff/{handle}/file/lib");
+
+        let cold = || Memory::new().store();
+        let cells = [
+            (
+                "warm",
+                one_sided(|| store.store(), "get_file_diff", asked.clone()).await,
+                read(ONE_SIDED, || store.store(), &uri).await,
+            ),
+            (
+                "cold",
+                call_tool(cold, "get_file_diff", asked.clone()).await,
+                read(FIXTURES, cold, &uri).await,
+            ),
+        ];
+
+        for (when, called, read) in cells {
+            is_refused_as_a_directory_in_2(&called);
+            assert_eq!(
+                read["error"]["message"], called["content"][0]["text"],
+                "{from} → {to} {when}: the resource refuses `lib` with the \
+                 tool's sentence, got {read} against {called}"
+            );
+        }
+    }
+}
+
 /// `shape` compared from `from` to `to`.
 fn shape(from: &str, to: &str) -> Value {
     json!({
