@@ -326,8 +326,8 @@ of the URLs this module builds — `archive` may fetch what `registry::allows`
 permits and nothing else — so a source added here is reachable the moment it exists,
 rather than through a second list someone has to remember to widen.
 
-The name rules and the version rule reach a tool's schema the same way.
-`package` and `version` (and `diff_package_versions`' `from_version` and
+A third reaches a tool's schema the same way: the name rules and the version
+rule. `package` and `version` (and `diff_package_versions`' `from_version` and
 `to_version`) are `registry::PackageName` and `registry::VersionName` rather
 than strings a tool describes for itself, the pattern `page::Limit` set. A
 version's description is `VERSION_RULE` itself. A package's states every
