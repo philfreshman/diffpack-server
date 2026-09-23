@@ -310,6 +310,31 @@ write "$empty/package/src/index.js" 'export {};
 '
 targz "empty-file-1.0.0.tgz" "package" "$empty"
 
+# --- a path that is a file in one version and a directory in the other ------
+#
+# `lib` is a file in 1.0.0 and a directory in 2.0.0, holding `lib/index.js`.
+# One path, two things, and the engine keeps one node per path: it is what
+# shows a comparison's tree losing one of the two, and a remembered answer
+# and a fresh one having to agree about `lib` anyway (#103).
+#
+# The two share nothing, so the engine has no rename to find between `lib`
+# and `lib/index.js` and what the tree says about them is the collision's
+# rather than the threshold's. `package.json` is byte-identical in both, so
+# the comparison has a file that did not move beside the one that did.
+shape=$work/shape
+for version in 1.0.0 2.0.0; do
+  write "$shape/$version/package/package.json" '{
+  "name": "shape"
+}
+'
+done
+write "$shape/1.0.0/package/lib" 'A plain file, where 2.0.0 has a directory.
+'
+write "$shape/2.0.0/package/lib/index.js" 'export const shape = "a directory now";
+'
+targz "shape-1.0.0.tgz" "package" "$shape/1.0.0"
+targz "shape-2.0.0.tgz" "package" "$shape/2.0.0"
+
 # --- the archive this server will not fetch -------------------------------
 #
 # A real archive at a host no registry names, referenced by a listing that
