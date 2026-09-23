@@ -497,6 +497,16 @@ impl Subtree {
         }
     }
 
+    /// The directory this Subtree is under, or nothing for the root.
+    ///
+    /// For the caller that finds the directory by descending a tree rather
+    /// than by testing every path in it: `get_diff_tree` follows one branch
+    /// down to it, because a tree of ten thousand files is not worth walking
+    /// to find one directory.
+    pub fn directory(&self) -> Option<&str> {
+        (!self.directory.is_empty()).then_some(self.directory.as_str())
+    }
+
     /// Whether `path` is inside this Subtree.
     ///
     /// Everything is inside the root. Otherwise `path` has to continue past

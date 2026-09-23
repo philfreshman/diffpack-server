@@ -121,6 +121,30 @@ async fn the_handle_this_tool_takes_is_described_by_the_module_that_mints_it() {
     );
 }
 
+/// `path` carries the one rule for a subtree, and `list_package_files`'
+/// `prefix` carries the same one.
+///
+/// Two tools take a directory whose subtree is asked for, and when each wrote
+/// its own description the two answered `/` differently (#97). So the schema
+/// an agent reads for either argument is one schema, and it says what `/`
+/// means rather than leaving it to be guessed from "omit it".
+#[tokio::test]
+async fn the_path_this_tool_takes_is_described_the_way_a_prefix_is() {
+    let path = listed(TOOL).await["inputSchema"]["properties"]["path"].clone();
+    let prefix = listed("list_package_files").await["inputSchema"]["properties"]["prefix"].clone();
+
+    assert_eq!(
+        path, prefix,
+        "one rule, written once, shown by both tools that take it"
+    );
+    assert!(
+        path["description"]
+            .as_str()
+            .is_some_and(|said| said.contains("`/`")),
+        "the description says what `/` asks for, got {path}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // What it answers
 // ---------------------------------------------------------------------------
