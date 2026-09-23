@@ -107,17 +107,18 @@ _Avoid_: prerelease (as a concept — the field is `prerelease`), unstable,
 beta, draft
 
 **FileMap**:
-An Archive after extraction: every file path in that version mapped to its
-entry, with the archive's top-level directory already stripped. It is what a
-diff is computed from, and it is the boundary the rest of the crate sees — a
-tool asks for a FileMap, never for an Archive. Every entry's content is text,
-because extraction decodes it that way: bytes that are not valid UTF-8 become
-replacement characters rather than an error, so a FileMap holds a readable
-rendering of a binary file and not the file. Nothing downstream can undo
-that, which is why a tool returning content says whether it happened — and
-whether it happened is asked of the FileMap. What is at a path is one of three
-answers: a file with its text, a directory, or nothing. A directory is not an
-empty file, even though the extractor gives it empty content.
+An Archive after extraction: every path in that version, file or directory,
+and what is at it, with the archive's top-level directory already stripped.
+It is what a diff is computed from, and it is the boundary the rest of the
+crate sees — a tool asks for a FileMap, never for an Archive. Every file's
+content is text, because extraction decodes it that way: bytes that are not
+valid UTF-8 become replacement characters rather than an error, so a FileMap
+holds a readable rendering of a binary file and not the file. Nothing
+downstream can undo that, which is why a tool returning content says whether
+it happened — and whether it happened is asked of the FileMap. What is at a
+path is one of three answers: a file with its text, a directory, or nothing.
+A directory is not an empty file, even though the extractor gives it empty
+content.
 _Avoid_: tree, file list, contents, extracted archive
 
 **Index**:

@@ -24,8 +24,8 @@
 //! rather than the maps inside them. A FileMap is the archive seam's type,
 //! with the extractor's map private to it (#95), and this is the one place
 //! that map is handed back to the engine — the crossing belongs in the module
-//! that names the engine, and a caller building a tree never sees the
-//! engine's entry type.
+//! that names the engine, and a caller building a tree hands over FileMaps
+//! rather than reading the entries inside them.
 //!
 //! # What is deliberately not re-exported
 //!

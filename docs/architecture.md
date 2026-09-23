@@ -333,8 +333,8 @@ cannot tell a directory from an empty file, and a file that was not UTF-8
 holds replacement characters rather than its bytes — so it is said once here
 rather than worked out again by every tool that reads one (#95). The engine is
 the one reader of the map itself, to build a tree, and it gets it through
-`engine::build_diff_tree`, which takes two FileMaps: the engine's entry type is
-still named in `src/engine.rs` alone.
+`engine::build_diff_tree`, which takes two FileMaps: the map crosses back to
+the engine in the one module that imports it.
 
 Three things are the same code for both adapters rather than the live one's
 alone, because each is a rule about what this server does rather than about
@@ -934,7 +934,7 @@ The second is written out for a smaller reason. `build_diff_tree` is the
 engine's own, but it takes the map a `FileMap` keeps private, so the version
 here takes two FileMaps and hands the engine the map inside each. That is the
 one place the map leaves `archive`, and it is here because this is the module
-allowed to name what it is a map of (#95).
+that imports the engine the map is handed to (#95).
 
 ### `src/health.rs` — the `/health` body
 

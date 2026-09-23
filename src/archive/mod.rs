@@ -56,7 +56,8 @@ use crate::registry::{ArchiveSource, Registry};
 ///
 /// The one thing that still reads the map is the engine, which builds a tree
 /// out of two of them. That goes through [`crate::engine::build_diff_tree`],
-/// so the engine's entry type is still named in one file (ADR 0007).
+/// so the map is handed back to the engine in the one module that imports it
+/// (ADR 0007).
 #[derive(Debug)]
 pub struct FileMap {
     entries: HashMap<String, engine::FileMapEntry>,
