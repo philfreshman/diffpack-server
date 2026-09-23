@@ -886,6 +886,28 @@ async fn a_directory_a_rename_emptied_is_not_in_the_tree_at_all() {
     assert_eq!(gone["isError"], json!(false), "got {gone}");
 }
 
+/// The description says so, because the argument's own description cannot.
+///
+/// `path` carries the rule every tool that takes a directory shares, and a
+/// directory a rename emptied is this tool's alone: `list_package_files`
+/// lists one version, where a directory is there or it is not. An agent that
+/// read `src/legacy` in the first version and then asks for it here should
+/// know before it asks that an empty page is the answer, not a sign of a
+/// broken call.
+#[tokio::test]
+async fn the_description_says_a_directory_a_rename_emptied_is_not_there() {
+    let tool = listed(TOOL).await;
+    let said = tool["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a described tool, got {tool}"));
+
+    assert!(
+        said.contains("rename") && said.contains("empty page"),
+        "a directory the first version had can be missing from the \
+         comparison, and asking for it is an empty page: {said}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The ceiling
 // ---------------------------------------------------------------------------
