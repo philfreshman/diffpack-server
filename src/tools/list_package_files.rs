@@ -19,9 +19,9 @@
 //! that reader and names nothing in this repository. Why a field is shaped
 //! the way it is belongs here or in an ordinary comment beside the code.
 //!
-//! Four fields have no doc comment at all, deliberately. `version` is
-//! [`crate::registry`]'s type, and that module writes its description: the
-//! version rule. `prefix`, `cursor` and `limit` are [`crate::page`]'s types
+//! Five fields have no doc comment at all, deliberately. `package` and
+//! `version` are [`crate::registry`]'s types, and that module writes their
+//! descriptions: every registry's name rule, and the version rule. `prefix`, `cursor` and `limit` are [`crate::page`]'s types
 //! and that module writes theirs — what a directory's subtree is and is not,
 //! the default, the range, and the rule that an out-of-range `limit` is
 //! clamped rather than refused. A doc comment here would *replace* those
@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use crate::archive::At;
 use crate::error::Failure;
 use crate::page::{self, Page};
-use crate::registry::{Registry, VersionName};
+use crate::registry::{PackageName, Registry, VersionName};
 use crate::tools::{Call, Tool};
 
 /// The tool.
@@ -56,15 +56,14 @@ pub struct Args {
     // shown is the list this server has rather than a description of one.
     pub registry: Registry,
 
-    /// The package name as the registry spells it, scope included:
-    /// `zod`, `@types/node`, `serde`.
-    pub package: String,
+    // No doc comment on this or the four below, on purpose: see the module
+    // header. `registry` writes the first two's descriptions — every
+    // registry's name rule, and the version rule — and `page` the others':
+    // the rule for a directory whose subtree is asked for, which
+    // `get_diff_tree` takes as well, and the numbers that bind. A sentence
+    // here would replace them.
+    pub package: PackageName,
 
-    // No doc comment on this or the three below, on purpose: see the module
-    // header. `registry` writes this one's description — the version rule —
-    // and `page` the others': the rule for a directory whose subtree is asked
-    // for, which `get_diff_tree` takes as well, and the numbers that bind. A
-    // sentence here would replace them.
     pub version: VersionName,
 
     #[serde(default)]
@@ -161,7 +160,7 @@ impl Tool for ListPackageFiles {
     async fn call(args: Args, call: &Call) -> Result<Page<Entry>, Failure> {
         let files = call
             .archive()
-            .fetch(args.registry, &args.package, args.version.as_str())
+            .fetch(args.registry, args.package.as_str(), args.version.as_str())
             .await?;
 
         // An absent prefix is the root, which is what `/` is: the whole

@@ -44,13 +44,17 @@
 //! that reader and names nothing in this repository. `cursor` and `limit`
 //! have no doc comment on purpose: they are [`crate::page`]'s types and that
 //! module writes their descriptions, including the rule that an out-of-range
-//! `limit` is clamped rather than refused.
+//! `limit` is clamped rather than refused. `package` has none for the same
+//! reason: [`crate::registry`] writes it, from every registry's name rule.
+//!
+//! [`Version::version`] is an answer rather than an argument, so it keeps a
+//! sentence of its own.
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::Failure;
 use crate::page::{self, Page};
-use crate::registry::Registry;
+use crate::registry::{PackageName, Registry};
 use crate::tools::{Call, Tool};
 
 /// The tool.
@@ -67,11 +71,10 @@ pub struct Args {
     /// The registry that publishes the package.
     pub registry: Registry,
 
-    /// The package name as the registry spells it, scope included:
-    /// `zod`, `@types/node`, `serde`.
-    pub package: String,
+    // No doc comment on this or the two below, on purpose: see the module
+    // header.
+    pub package: PackageName,
 
-    // No doc comment on either of these, on purpose: see the module header.
     #[serde(default)]
     pub cursor: Option<page::Cursor>,
 
@@ -158,7 +161,7 @@ impl Tool for ListPackageVersions {
     type Output = Output;
 
     async fn call(args: Args, call: &Call) -> Result<Output, Failure> {
-        let listed = call.catalogue().versions(args.registry, &args.package).await?;
+        let listed = call.catalogue().versions(args.registry, args.package.as_str()).await?;
 
         let versions: Vec<Version> = listed
             .all

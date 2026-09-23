@@ -28,7 +28,7 @@ mod common;
 use common::{Client, FIXTURES};
 use diffpack_server::error::Failure;
 use diffpack_server::page::{self, Excerpt};
-use diffpack_server::registry::{Registry, VersionName};
+use diffpack_server::registry::{PackageName, Registry, VersionName};
 use diffpack_server::tools::get_file_content::{Args, GetFileContent};
 use diffpack_server::tools::Tool;
 use diffpack_server::tools::{Call, Ctx};
@@ -559,7 +559,7 @@ async fn the_handler_answers_with_a_typed_excerpt() {
     let content = GetFileContent::call(
         Args {
             registry: Registry::Crates,
-            package: "serde".to_owned(),
+            package: PackageName::new("serde"),
             version: VersionName::new("1.0.0"),
             path: "src/lib.rs".to_owned(),
             max_bytes: None,
@@ -592,7 +592,7 @@ async fn the_handler_returns_the_failure_that_says_the_path_is_a_directory() {
     let failure = GetFileContent::call(
         Args {
             registry: Registry::Crates,
-            package: "serde".to_owned(),
+            package: PackageName::new("serde"),
             version: VersionName::new("1.0.0"),
             path: "src".to_owned(),
             max_bytes: None,
@@ -617,7 +617,7 @@ async fn the_handler_returns_the_failure_that_names_the_absent_path() {
     let failure = GetFileContent::call(
         Args {
             registry: Registry::Crates,
-            package: "serde".to_owned(),
+            package: PackageName::new("serde"),
             version: VersionName::new("1.0.0"),
             path: "src/nowhere.rs".to_owned(),
             max_bytes: None,

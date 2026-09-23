@@ -92,9 +92,10 @@
 //! *replace* that rather than add to it, which is how the tool that mints a
 //! handle ends up describing it differently from the three that take one.
 //!
-//! `from_version` and `to_version` have none either, for the same reason:
-//! [`crate::registry`] writes their description from the version rule, the
-//! one every tool that takes a version shows. What tells the two apart is
+//! `package`, `from_version` and `to_version` have none either, for the same
+//! reason: [`crate::registry`] writes their descriptions, from every
+//! registry's name rule and from the version rule, the ones every tool that
+//! takes a package or a version shows. What tells the two versions apart is
 //! their names and the tool's description, which says that order matters.
 
 use std::collections::BTreeMap;
@@ -107,7 +108,7 @@ use crate::archive::{At, FileMap};
 use crate::engine::{self, DiffFileEntry, DiffStatus, FileType, Patch};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
-use crate::registry::{Registry, VersionName};
+use crate::registry::{PackageName, Registry, VersionName};
 use crate::resources;
 use crate::store::Entry;
 use crate::tools::get_file_diff::{self, OneFile};
@@ -140,13 +141,11 @@ pub struct Args {
     // shown is the list this server has rather than a description of one.
     pub registry: Registry,
 
-    /// The package name as the registry spells it, scope included:
-    /// `zod`, `@types/node`, `serde`.
-    pub package: String,
+    // No doc comment on this or the two below, on purpose: see the module
+    // header. Which way round the versions go is in the tool's description,
+    // where an agent reads it before it reads either field.
+    pub package: PackageName,
 
-    // No doc comment on either, on purpose: see the module header. Which way
-    // round they go is in the tool's description, where an agent reads it
-    // before it reads either field.
     pub from_version: VersionName,
 
     pub to_version: VersionName,
@@ -809,7 +808,7 @@ impl Tool for DiffPackageVersions {
     async fn call(args: Args, call: &Call) -> Result<Output, Failure> {
         let handle = DiffHandle::mint(Inputs {
             registry: args.registry,
-            package: args.package,
+            package: args.package.into(),
             from_version: args.from_version.into(),
             to_version: args.to_version.into(),
             similarity_threshold: args.similarity_threshold,

@@ -8,6 +8,11 @@
 //! this module rather than describing it a second time. See [ADR
 //! 0004](../docs/adr/0004-one-registry-module.md).
 //!
+//! The rules for spelling a package and a version are this module's too, so
+//! the `package` and `version` arguments are its types, [`PackageName`] and
+//! [`VersionName`]: they check nothing, and write the rules into the schema a
+//! tool declares.
+//!
 //! # Why a `match` and not a trait
 //!
 //! Every per-registry fact below is a `match` over three variants in this
@@ -131,8 +136,8 @@ impl Registry {
     /// A name is taken verbatim here — the same rule `docs/cache-key.md`
     /// fixes for the key — and what that costs differs per registry, which is
     /// exactly what #23 says an agent cannot work out for itself. These are
-    /// the sentences `diffpack://registries` (#16) serves and a tool's schema
-    /// can quote.
+    /// the sentences `diffpack://registries` (#16) serves, and every package
+    /// argument's schema states all of them, through [`PackageName`].
     pub fn name_rule(self) -> &'static str {
         match self {
             Self::Npm => {
@@ -742,6 +747,75 @@ pub const VERSION_RULE: &str = "A version is one published version, spelled the 
 // Neither checks anything. A name rule is told, not enforced: the registry
 // decides what exists, and a value tidied or refused here would be this
 // server deciding it instead.
+
+/// A package name, exactly as a caller spelled it.
+///
+/// Taken as given and handed on as given: `@types/node` keeps its `@` and its
+/// `/`, `Typing.Extensions` its case and its dot. What makes it a type rather
+/// than a `String` is the schema, which states every registry's
+/// [`Registry::name_rule`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct PackageName(String);
+
+impl PackageName {
+    /// A package name as a caller spelled it, for the caller that builds one
+    /// rather than reading one off the wire.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    /// The name, as it arrived.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<PackageName> for String {
+    fn from(name: PackageName) -> Self {
+        name.0
+    }
+}
+
+/// Every registry's name rule, where an agent reads it.
+///
+/// All of them, because `registry` is an argument beside this one and a
+/// schema cannot know which of the two a caller will pick. Generated over
+/// [`Registry::ALL`], so a fourth registry's rule reaches every tool's schema
+/// in the commit that adds it. It also points at `diffpack://registries`,
+/// which serves the same sentences, but the rules are not left to the
+/// pointer: an agent reads `tools/list` and often nothing else.
+impl JsonSchema for PackageName {
+    fn schema_name() -> Cow<'static, str> {
+        "PackageName".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::PackageName").into()
+    }
+
+    /// Inline rather than a `$ref`, for [`Registry`]'s reason.
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        let rules: Vec<String> = Registry::ALL
+            .iter()
+            .map(|registry| format!("{}: {}", registry.name(), registry.name_rule()))
+            .collect();
+        json_schema!({
+            "type": "string",
+            "description": format!(
+                "The package name as the registry spells it, scope included: `zod`, \
+                 `@types/node`, `serde`. Nothing is normalised, and what that means \
+                 differs per registry. {} The same rules are served at \
+                 `diffpack://registries`.",
+                rules.join(" ")
+            ),
+        })
+    }
+}
 
 /// A version, exactly as a caller spelled it.
 ///
