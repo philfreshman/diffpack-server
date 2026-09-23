@@ -487,6 +487,98 @@ async fn a_tool_that_never_asks_the_store_says_nothing_about_it() {
     );
 }
 
+/// Two calls through one context each say what their own lookup found.
+///
+/// The context is built once and cloned into both requests, which is what a
+/// suite whose subject is something the context remembers does. The first
+/// call is served out of the store; the second is a tool that never asks it.
+/// A cache outcome that belonged to the context rather than to the call would
+/// carry the first call's hit into the second call's line — and a hit rate
+/// read off those lines would count a tool with no cache as a cache hit.
+#[tokio::test]
+async fn each_call_through_one_context_says_what_its_own_lookup_found() {
+    let store = Memory::new();
+
+    // Written through a context of its own, so the one under test has made
+    // no call before the hit it is asked for.
+    call_storing(&Capture::new(), &store, "diff_package_versions", diffable()).await;
+    settles(&store).await;
+
+    let log = Capture::new();
+    let client = Client::over(
+        Ctx::fixture(FIXTURES)
+            .logging_to(log.sink())
+            .storing_in(store.store()),
+    );
+
+    client.call("diff_package_versions", diffable()).await;
+    client
+        .call(
+            "list_package_files",
+            json!({ "registry": "npm", "package": "@types/node", "version": "20.1.0" }),
+        )
+        .await;
+
+    let lines = log.lines();
+    assert_eq!(
+        lines.len(),
+        2,
+        "two calls should leave two lines, got {lines:?}"
+    );
+
+    assert_eq!(
+        parse(&lines[0])["cache"],
+        "hit",
+        "the first call asked for exactly what was stored: {}",
+        lines[0]
+    );
+    assert_eq!(
+        parse(&lines[1]).get("cache"),
+        None,
+        "the second call never asked the store, whatever the first found: {}",
+        lines[1]
+    );
+}
+
+/// Two calls through one context each time their own fetches.
+///
+/// The other half of a call's tally. Both calls download an archive, and a
+/// pause between them is time neither spent. A window that belonged to the
+/// context rather than to the call would stretch from the first call's
+/// download to the second's, pause and all — a `fetch` longer than the
+/// `total` it sits beside, which is the one reading of the two that cannot
+/// be true of any call.
+#[tokio::test]
+async fn each_call_through_one_context_times_only_its_own_fetches() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    let files = json!({ "registry": "npm", "package": "@types/node", "version": "20.1.0" });
+
+    client.call("list_package_files", files.clone()).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    client.call("list_package_files", files).await;
+
+    let lines = log.lines();
+    assert_eq!(
+        lines.len(),
+        2,
+        "two calls should leave two lines, got {lines:?}"
+    );
+
+    let second = parse(&lines[1]);
+    let fetch = second["ms"]["fetch"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("the second call downloaded an archive: {second}"));
+    let total = second["ms"]["total"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("every line says how long its call took: {second}"));
+
+    assert!(
+        fetch <= total,
+        "the second call cannot have waited longer than it ran: {second}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // What never reaches a line
 // ---------------------------------------------------------------------------
