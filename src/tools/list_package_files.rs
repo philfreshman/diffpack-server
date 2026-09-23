@@ -21,14 +21,14 @@
 //!
 //! Five fields have no doc comment at all, deliberately. `package` and
 //! `version` are [`crate::registry`]'s types, and that module writes their
-//! descriptions: every registry's name rule, and the version rule. `prefix`, `cursor` and `limit` are [`crate::page`]'s types
-//! and that module writes theirs — what a directory's subtree is and is not,
-//! the default, the range, and the rule that an out-of-range `limit` is
-//! clamped rather than refused. A doc comment here would *replace* those
-//! rather than add to them, which is how a tool ends up telling an agent
-//! numbers no test compares against `page::MAX_LIMIT` — and how two tools
-//! that take a directory ended up with two rules for one, which disagreed
-//! about `/` (#97).
+//! descriptions: every registry's name rule, and the version rule. `prefix`,
+//! `cursor` and `limit` are [`crate::page`]'s types and that module writes
+//! theirs — what a directory's subtree is and is not, the default, the range,
+//! and the rule that an out-of-range `limit` is clamped rather than refused.
+//! A doc comment here would *replace* those rather than add to them, which is
+//! how a tool ends up telling an agent numbers no test compares against
+//! `page::MAX_LIMIT` — and how two tools that take a directory ended up with
+//! two rules for one, which disagreed about `/` (#97).
 
 use serde::{Deserialize, Serialize};
 
