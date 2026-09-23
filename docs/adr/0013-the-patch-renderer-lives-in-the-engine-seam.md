@@ -56,3 +56,12 @@ A module for one function, whose whole content is "what the engine does". It
 would need adding to `check-tool-seams.sh`'s allow-list, to the module map and
 to `docs/architecture.md`, and a reader looking for what this server takes
 from the engine would have two places to look instead of one.
+
+## Since: #95
+
+`patch` is no longer the one function `src/engine.rs` writes out rather than
+re-exports. `build_diff_tree` is written out there too, for a smaller reason
+than this record's: the engine's function takes the map a FileMap now keeps
+private (ADR 0001), so the version here takes two FileMaps and hands the
+engine the map inside each. Nothing of the engine's is re-implemented for it.
+The tree is still the engine's own, and only the crossing is written here.
