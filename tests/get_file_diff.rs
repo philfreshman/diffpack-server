@@ -1175,6 +1175,32 @@ async fn a_directory_is_refused_rather_than_called_absent() {
     );
 }
 
+/// So is the root, which is the directory everything else is in.
+///
+/// The tree names its root `/`, so asking for `/` is asking for a directory
+/// and gets that refusal. Until #93 it was told `/` was in neither version,
+/// because the refusal was made out of the file maps and those have no entry
+/// for the root. #97 is where the other tools' reading of `/` is settled.
+#[tokio::test]
+async fn the_root_is_refused_as_a_directory() {
+    let result = call(json!({ "handle": diffable(), "path": "/" })).await;
+
+    assert_eq!(
+        result["isError"],
+        json!(true),
+        "`/` is the root of the comparison, a directory both versions have: \
+         got {result}"
+    );
+
+    let message = result["content"][0]["text"]
+        .as_str()
+        .expect("a tool error carries text for the model");
+    assert!(
+        message.contains("directory"),
+        "the root gets the refusal every directory gets: got {message}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Getting there
 // ---------------------------------------------------------------------------
