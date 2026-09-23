@@ -1076,6 +1076,101 @@ async fn a_file_whose_patch_was_dropped_is_rendered_rather_than_missed() {
     );
 }
 
+/// The tool and the resource give one answer for every kind of file, warm
+/// or cold.
+///
+/// The document is the tool's answer at its defaults with a media type on
+/// it (ADR 0014), so the two are held against each other rather than each
+/// against a literal: a literal would pass with the two disagreeing, as long
+/// as each agreed with its own. Every way a file can reach an answer is
+/// here — the patch an entry holds (`src/added.js`), the one the per-patch
+/// cap took and has to be rendered (`src/index.js`), a file that did not
+/// change (`README.md`), a renamed file (`src/new-name.js`) and a path in
+/// neither version — and each is asked of an entry and of no entry at all.
+///
+/// A URI has room for one path, so the resource looks a renamed file's old
+/// path up in the tree, and its answer is the tool's with `old_path` passed.
+/// Without it the tool says every line was added, and it says so warm as it
+/// does cold: a remembered patch is never the answer to a different pair of
+/// paths.
+#[tokio::test]
+async fn the_tool_and_the_resource_answer_every_kind_of_file_alike() {
+    let store = Memory::new();
+    let capped = || store.store().capping_patches_at(100);
+
+    let diffed = call(capped, diffable()).await;
+    settles(&store, 2).await;
+    let handle = diffed["structuredContent"]["handle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
+        .to_owned();
+
+    let cold = Memory::new();
+    let warm_and_cold: [(&str, &dyn Fn() -> DiffStore); 2] =
+        [("warm", &capped), ("cold", &|| cold.store())];
+
+    for (when, store) in warm_and_cold {
+        for (path, old_path) in [
+            ("src/added.js", None),
+            ("src/index.js", None),
+            ("README.md", None),
+            ("src/new-name.js", Some("src/old-name.js")),
+            ("nowhere/at/all.js", None),
+        ] {
+            let mut asked = json!({ "handle": handle, "path": path });
+            if let Some(old_path) = old_path {
+                asked["old_path"] = json!(old_path);
+            }
+            let called = call_tool(store, "get_file_diff", asked).await;
+            let called = &called["structuredContent"];
+
+            let uri = format!("diffpack://diff/{handle}/file/{path}");
+            let read = read(FIXTURES, store, &uri).await;
+            let document = &read["result"]["contents"][0];
+
+            assert!(
+                called["text"].is_string(),
+                "`{path}` {when}: every one of these is an answer, not a \
+                 failure the two could agree on, got {called}"
+            );
+            assert_eq!(
+                document["text"], called["text"],
+                "`{path}` {when}: the resource and the tool should give one \
+                 answer, got {read} against {called}"
+            );
+            assert_eq!(
+                document["mimeType"],
+                json!(if called["isDiff"] == json!(true) {
+                    "text/x-diff"
+                } else {
+                    "text/plain"
+                }),
+                "`{path}` {when}: the media type says what `isDiff` says, got \
+                 {read} against {called}"
+            );
+        }
+    }
+
+    let bare = json!({ "handle": handle, "path": "src/new-name.js" });
+    let warm = call_tool(capped, "get_file_diff", bare.clone()).await;
+    assert_eq!(
+        warm,
+        call_tool(|| cold.store(), "get_file_diff", bare).await,
+        "a renamed file asked about without its `old_path` is the same answer \
+         warm and cold"
+    );
+    let read = read(
+        FIXTURES,
+        capped,
+        &format!("diffpack://diff/{handle}/file/src/new-name.js"),
+    )
+    .await;
+    assert_ne!(
+        read["result"]["contents"][0]["text"], warm["structuredContent"]["text"],
+        "and it is not the rename the resource reads out of the tree"
+    );
+}
+
 /// A store that is not there does not stop a reading path either.
 ///
 /// The rule the whole module is arranged around, held over the three paths
