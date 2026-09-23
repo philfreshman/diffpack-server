@@ -36,7 +36,7 @@ mod common;
 
 use common::{Client, FIXTURES};
 use diffpack_server::log::Capture;
-use diffpack_server::store::{DiffStore, Memory};
+use diffpack_server::store::{DiffStore, Memory, Operation};
 use diffpack_server::tools::Ctx;
 use serde_json::{json, Value};
 
@@ -1546,7 +1546,7 @@ async fn a_sweep_whose_deletes_all_fail_admits_nothing() {
 
     // Room for one entry, over a store that will not let go of anything.
     let log = Capture::new();
-    let stubborn = Memory::losing_deletes(&store);
+    let stubborn = Memory::failing(&store, Operation::Delete);
     let budgeted = || {
         stubborn
             .store()
@@ -1605,7 +1605,7 @@ async fn a_sweep_that_freed_less_than_it_needed_admits_nothing() {
     // Room for three of the five, swept down to two, over a store that takes
     // one delete and refuses every one after it.
     let log = Capture::new();
-    let stubborn = Memory::losing_deletes_after(&store, 1);
+    let stubborn = Memory::failing_after(&store, Operation::Delete, 1);
     let budgeted = || {
         stubborn
             .store()
@@ -1631,6 +1631,46 @@ async fn a_sweep_that_freed_less_than_it_needed_admits_nothing() {
     assert!(
         notes.iter().all(|note| note.contains("evicting an entry")),
         "every delete after the first says it could not happen: {notes:?}"
+    );
+}
+
+/// A listing that could not be taken refuses the entry, and writes nothing.
+///
+/// The budget is read from the store on every write, because a total carried
+/// in one invocation is a number two of them would disagree about. So a
+/// listing that fails is a total that is not known — and admitting against a
+/// total that is not known is how a ceiling gets exceeded. The cost of
+/// refusing is one entry not cached, which is the cost of every other
+/// failure the store has.
+///
+/// Under a budget with room for everything, so the listing is the only thing
+/// that can refuse it. The diff is still the answer, and the refusal is a
+/// Note saying which question went unanswered.
+#[tokio::test]
+async fn a_listing_that_fails_refuses_admission_and_writes_nothing() {
+    let store = Memory::new();
+
+    let log = Capture::new();
+    let blind = Memory::failing(&store, Operation::List);
+    let answer = call(|| blind.store().logging_to(log.sink()), diffable()).await;
+    let notes = noted(&log).await;
+    stays_out(&store, &answer).await;
+
+    assert_eq!(
+        answer["isError"],
+        json!(false),
+        "a store that cannot list is still a comparison that was answered, got \
+         {answer}"
+    );
+    assert_eq!(
+        store.written(),
+        Vec::<String>::new(),
+        "an entry admitted against a total nobody knows is how the ceiling \
+         gets exceeded"
+    );
+    assert!(
+        notes.iter().all(|note| note.contains("listing what")),
+        "the refusal says the listing is what could not be done: {notes:?}"
     );
 }
 

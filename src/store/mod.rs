@@ -919,18 +919,42 @@ pub struct Memory {
     /// the head before a put is there to stop.
     lose_reads: bool,
 
-    /// How many more deletes this store takes, if it is refusing them.
+    /// The operation this store fails, if a test told it to fail one.
     ///
-    /// `None` unless a test asks for otherwise, and then it is the number of
-    /// deletes that still work before every one after them fails. What a
-    /// real store does now and then, and the one state a test cannot reach
-    /// through the wire: an in-process map cannot fail to forget a blob, so
-    /// without this nothing can tell a sweep that credited itself bytes it
-    /// never freed from one that did not.
-    ///
-    /// Shared between the stores a view hands out, because a sweep's deletes
-    /// are one run against one allowance.
-    lose_deletes: Option<Arc<AtomicUsize>>,
+    /// What a real store does now and then, and what an in-process map
+    /// cannot do by itself: it cannot fail to list what it holds or to forget
+    /// a blob. So without this the failure branches of the policy above are
+    /// reached only against the real store, and nothing at the wire can tell
+    /// a sweep that credited itself bytes it never freed from one that did
+    /// not.
+    failing: Option<Failing>,
+}
+
+/// One of the operations a store is asked, named so that a test can tell a
+/// [`Memory`] to fail it.
+///
+/// Public for that and nothing else. The operations themselves are private
+/// to this module, behind [`DiffStore`]'s two methods; what a test gets to
+/// say is which of them goes wrong, and the policy it then watches is the
+/// one the real store's failures reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
+    /// Listing what the store holds, which is what the budget is counted
+    /// from.
+    List,
+
+    /// Deleting an entry's blobs, which is how a sweep makes room.
+    Delete,
+}
+
+/// Which operation a [`Memory`] fails, and how many of it it takes first.
+///
+/// The allowance is shared between the stores a view hands out, because the
+/// operations of one write or one sweep are one run against one allowance.
+#[derive(Debug, Clone)]
+struct Failing {
+    operation: Operation,
+    allowance: Arc<AtomicUsize>,
 }
 
 /// One blob this store holds.
@@ -987,24 +1011,27 @@ impl Memory {
         }
     }
 
-    /// `store`'s blobs, refusing every delete of them.
+    /// `store`'s blobs, failing every `operation` asked of them.
     ///
-    /// What the budget does with a delete it did not get is the half of a
-    /// sweep nothing else can state: bytes credited to a delete that never
-    /// happened are room the store does not have, and an entry admitted
-    /// against them is the ceiling exceeded by the code that keeps it.
-    pub fn losing_deletes(store: &Self) -> Self {
-        Self::losing_deletes_after(store, 0)
+    /// A view of another store rather than a flag on one, for the reason
+    /// [`Memory::losing_reads`] is: what fails is the store, and what it
+    /// fails over is blobs a test can still read back through the one it
+    /// started with.
+    pub fn failing(store: &Self, operation: Operation) -> Self {
+        Self::failing_after(store, operation, 0)
     }
 
-    /// `store`'s blobs, taking `kept` deletes and refusing every one after.
+    /// `store`'s blobs, taking `kept` of `operation` and failing every one
+    /// after.
     ///
-    /// A sweep that freed some of what it needed and not all of it, which is
-    /// the likelier failure than none of it: the store is smaller afterwards
-    /// and still has no room.
-    pub fn losing_deletes_after(store: &Self, kept: usize) -> Self {
+    /// A run that got partway, which is the likelier failure than none of
+    /// it: a sweep that freed some of what it needed and not all of it.
+    pub fn failing_after(store: &Self, operation: Operation, kept: usize) -> Self {
         Self {
-            lose_deletes: Some(Arc::new(AtomicUsize::new(kept))),
+            failing: Some(Failing {
+                operation,
+                allowance: Arc::new(AtomicUsize::new(kept)),
+            }),
             ..store.clone()
         }
     }
@@ -1067,6 +1094,7 @@ impl Memory {
     /// download is not forgetting what is there.
     async fn list(&self, prefix: &str) -> Result<Vec<blob::Blob>, Failure> {
         self.stalled().await;
+        self.refusing(Operation::List)?;
 
         let Ok(blobs) = self.blobs.lock() else {
             return Ok(Vec::new());
@@ -1086,20 +1114,10 @@ impl Memory {
     /// Lose every blob at `pathnames`, or fail.
     ///
     /// The answer a real store gives, because a sweep counts in it. A store
-    /// refusing deletes hands out its allowance until there is none left and
-    /// fails from then on, leaving the blobs where they are.
+    /// told to fail deletes leaves the blobs where they are.
     async fn delete(&self, pathnames: &[&str]) -> Result<(), Failure> {
         self.stalled().await;
-
-        if let Some(allowance) = &self.lose_deletes {
-            let taken = allowance.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                left.checked_sub(1)
-            });
-
-            if taken.is_err() {
-                return Err(STAGED);
-            }
-        }
+        self.refusing(Operation::Delete)?;
 
         if let Ok(mut blobs) = self.blobs.lock() {
             for pathname in pathnames {
@@ -1108,6 +1126,25 @@ impl Memory {
         }
 
         Ok(())
+    }
+
+    /// Fail, if this store was told to fail `operation` and has none of it
+    /// left to take.
+    ///
+    /// It hands out its allowance until there is none left and fails from
+    /// then on.
+    fn refusing(&self, operation: Operation) -> Result<(), Failure> {
+        let Some(failing) = self.failing.as_ref().filter(|f| f.operation == operation) else {
+            return Ok(());
+        };
+
+        failing
+            .allowance
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                left.checked_sub(1)
+            })
+            .map(|_| ())
+            .map_err(|_| STAGED)
     }
 
     /// Take as long over this as the store was asked to.
