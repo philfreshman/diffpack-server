@@ -155,14 +155,15 @@ of the archives they came from.
 So one file's patch is one question, and it is asked of the comparison:
 `Comparison::file_patch`, in the same module as `compare`, which
 `get_file_diff` and the file-diff resource each call once. Behind it, in
-order: the patch the comparison holds for that file; a directory the tree
-names, refused without a download; both versions' files — two downloads when
-the comparison was remembered without them — only for a file with neither;
-the file rendered through the same lookup the pre-render in `compare` uses;
-and `get_file_diff::presented` for the trim and the cut, which stay that
-tool's because `context_lines` is its argument. It is a method because the
-comparison keeps its handle private, so the files it fetches cannot be paired
-with another comparison's handle by a caller passing one in.
+order: a path the tree says is a directory in either version, refused
+without a download; the patch the comparison holds for that file; both
+versions' files — two downloads when the comparison was remembered without
+them — only for a file with neither; the file rendered through the same
+lookup the pre-render in `compare` uses; and `get_file_diff::presented` for
+the trim and the cut, which stay that tool's because `context_lines` is its
+argument. It is a method because the comparison keeps its handle private, so
+the files it fetches cannot be paired with another comparison's handle by a
+caller passing one in.
 
 Asking per file is the right question whichever way a patch went missing:
 over the per-patch cap, dropped with the rest because the entry was too big,
@@ -171,6 +172,22 @@ never had one. `patches_omitted` records that something is missing; it is not
 what an answer turns on, because an entry missing one file's patch still
 answers for every other — and `DiffStore::get` serving an entry that lost its
 patches rests on `file_patch` keeping it that way.
+
+The directory comes first, before the stored patch, because of one path the
+tree gets wrong: a file in one version and a directory in the other (#103).
+The engine keeps one node per path, so compared from the file it calls the
+path a removed file and hangs the directory's contents beneath it. `compare`
+used to store that file's patch, and a warm call served it where a cold one,
+reading the file maps, refused the directory. The rule now is the one
+`get_file_diff` stated before #93: a directory in either version is
+`PathIsDirectory` ([ADR
+0017](adr/0017-a-failure-carries-the-code-it-earned.md)), warm or cold, both
+ways round. The tree says so without a download — a file node never has
+children unless it is this collision — and `compare` asks the file maps it has
+in hand and renders no patch for such a path, so new entries do not hold one
+and old ones are refused all the same. Serving the patch on both paths was the
+alternative, and it could only ever be consistent one way round: compared from
+the directory, the tree has no file at that path at all.
 
 A tool writes down types rather than JSON. The `Tool` trait's associated
 `Args` and `Output` generate the input schema, the output schema and the
@@ -979,6 +996,18 @@ engine's own, but it takes the map a `FileMap` keeps private, so the version
 here takes two FileMaps and hands the engine the map inside each. That is the
 one place the map leaves `archive`, and it is here because this is the module
 that imports the engine the map is handed to (#95).
+
+One known limit comes through this seam unchanged. The engine's tree keeps one
+node per path, so a path that is a file in one version and a directory in the
+other loses one of the two: compared from the file, the directory's contents
+hang beneath a file node with the wrong statuses, and compared from the
+directory, the file is not in the tree at all. That is
+[philfreshman/diffpack-engine#7](https://github.com/philfreshman/diffpack-engine/issues/7).
+Until an engine release fixes it, `get_file_diff` and the file-diff resource
+refuse such a path as a directory both ways round (#103), and the other tools
+serve the tree as the engine built it. The fix is not one to wait on here:
+the engine version is a field in the cache key, so the release that carries it
+is also the one that retires every entry written under this one.
 
 ### `src/health.rs` — the `/health` body
 

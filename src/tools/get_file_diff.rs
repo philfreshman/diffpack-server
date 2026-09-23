@@ -40,6 +40,11 @@
 //! anything is downloaded, and out of the file maps for the one directory the
 //! tree does not have, the one a rename emptied.
 //!
+//! A directory in *either* version is refused, and that includes a path that
+//! is a file in the other. The engine's tree loses one of the two at such a
+//! path, and serving the file's patch could only be the answer one way round,
+//! so this refuses it both ways, warm or cold (#103).
+//!
 //! # Why `context_lines` is this tool's and not the engine's
 //!
 //! The engine emits every line of a file, unchanged ones included, because
