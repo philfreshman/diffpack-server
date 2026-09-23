@@ -70,8 +70,9 @@
 //! [ADR 0016](../../docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md)
 //! keep — the things a tool module makes public for a caller in another
 //! module, beside its own `Args` and answer — is take it from eleven to
-//! eight. `Comparison::patch`, `Comparison::files` and `Versions` went from
-//! this module and `render` from `get_file_diff`; `file_patch` came. That is
+//! eight. `Comparison::patch` and `Comparison::files` went from this module,
+//! `Versions` stopped being public, and `render` went from `get_file_diff`;
+//! `file_patch` came. That is
 //! 0014's closing paragraph applied rather than argued with: the resource
 //! stopped doing its own work through a tool's front door, because the work
 //! moved to the module that owns the thing it is about.
@@ -511,7 +512,9 @@ impl Comparison {
     ///    patch, so the first step answers nothing for one, and the tree
     ///    already says what it is — two downloads would only say it again.
     /// 3. Both versions' files, downloaded now if this comparison was
-    ///    remembered without them, and the file rendered out of them.
+    ///    remembered without them, and the file rendered out of them. A
+    ///    directory the tree does not have, the one a rename emptied, is
+    ///    refused here instead, out of the file maps.
     /// 4. The trim and the cut, which are `get_file_diff`'s
     ///    ([`get_file_diff::presented`]), for a patch from either step.
     ///

@@ -36,8 +36,9 @@
 //! is in neither of them. That is false about a path the package has and an
 //! agent has nothing in the answer to doubt it with, so it takes the
 //! refusal [`super::get_file_content`] gives a directory, for the same
-//! reason. The refusal is made where the rendering is, out of the tree before
-//! anything is downloaded.
+//! reason. The refusal is made where the rendering is: out of the tree before
+//! anything is downloaded, and out of the file maps for the one directory the
+//! tree does not have, the one a rename emptied.
 //!
 //! # Why `context_lines` is this tool's and not the engine's
 //!
@@ -471,8 +472,10 @@ impl Tool for GetFileDiff {
 /// [`Args`] without the handle, because by the time anything is rendered the
 /// handle has been spent: the comparison it named carries it, and a second
 /// copy here would be one that could name a different comparison. Public
-/// because the `diffpack://diff/{handle}/file/{path}` resource asks the same
-/// question, at the defaults a URI has room for.
+/// because it is what
+/// [`Comparison::file_patch`](super::diff_package_versions::Comparison::file_patch)
+/// is asked, by this tool and by the `diffpack://diff/{handle}/file/{path}`
+/// resource, which asks at the defaults a URI has room for.
 pub struct OneFile<'a> {
     pub path: &'a str,
     pub old_path: Option<&'a str>,

@@ -549,9 +549,9 @@ methods with the same absent `Result`s serve three more paths than they did.
 
 What comes back is read whole since #84. An entry's patches were rendered on
 every write from #21 and read by nothing for as long, which made them eight
-steps of implementation feeding no reader; `get_file_diff` and the file-diff
-resource are the reader, and they are what turns a warm call for one file's
-diff from two downloads into none.
+steps of implementation feeding no reader; `Comparison::file_patch` is the
+reader since #93, for `get_file_diff` and the file-diff resource both, and it
+is what turns a warm call for one file's diff from two downloads into none.
 
 Three things are the store's and not a caller's, and each is a rule about the
 cache rather than about the blobs underneath it. **A cache failure is never a

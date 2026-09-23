@@ -73,7 +73,14 @@ versions' files, then `get_file_diff::render` — the tool's own steps, in the
 tool's order, through three of its exports, with the handle passed back in
 beside files that belonged to it. The answer was the module that owns the
 thing: `diff_package_versions::Comparison::file_patch` now takes those steps
-for both callers, and the resource calls it the way the tool does. `render`
-is gone and `presented` has one caller outside its module rather than two;
-the things tool modules make public for another module went from eleven to
-eight.
+for both callers, and the resource calls it the way the tool does. `render`,
+in the list under *What this costs*, is gone. `presented` still has one
+caller outside its module, and it is `file_patch` now rather than the
+resource. The things tool modules make public for another module went from
+eleven to eight.
+
+That leaves two tool modules naming each other: `get_file_diff` asks
+`diff_package_versions` for the comparison and the patch, and
+`diff_package_versions` hands the patch to `get_file_diff::presented`, because
+`context_lines` is that tool's argument. It is the cycle above, between two
+tools rather than a tool and a resource, and it adds no export.
