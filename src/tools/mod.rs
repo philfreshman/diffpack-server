@@ -337,10 +337,16 @@ pub struct Call {
 impl Call {
     /// A call starting now, reaching `ctx`'s seams.
     ///
-    /// Public for the two places that run a handler without writing a line:
-    /// [`crate::mcp`]'s resource read, which writes none until #26 says what
-    /// it should hold, and the suites that call a handler directly. A call
-    /// that leaves a line behind is made by `run`, beside [`call`].
+    /// A `Call` is one call's. Hand it to one handler and drop it: a second
+    /// handler given the same one would add its fetches to the first one's
+    /// window and could inherit its hit. Nothing in this crate reuses one, and
+    /// the type cannot be cloned, but the compiler cannot stop a caller
+    /// holding one from passing the same reference twice.
+    ///
+    /// Public only because the suites that call a handler directly are a
+    /// crate of their own. Inside this one, [`crate::mcp`]'s resource read
+    /// makes one and writes no line, until #26 says what that line holds. A
+    /// call that leaves a line behind is made by `run`, beside [`call`].
     pub fn new(ctx: &Ctx) -> Self {
         Self {
             ctx: ctx.clone(),
@@ -634,7 +640,7 @@ pub async fn call(
 /// after the line is written can add to it. That is what makes the line's
 /// phases and its cache outcome this call's and not a neighbour's.
 ///
-/// One step rather than the three lines [`call`] used to hold, because a
+/// A step of its own rather than three lines inside [`call`], because a
 /// tool call is not the only thing that will leave a line. A resource read
 /// goes through the same seams and writes none today; #26 decides what its
 /// line holds, and this is what it calls when it does, rather than a copy of
