@@ -626,7 +626,9 @@ async fn the_handler_answers_with_typed_entries() {
             registry: Registry::Crates,
             package: "serde".to_owned(),
             version: "1.0.0".to_owned(),
-            prefix: Some(page::Subtree::new("src")),
+            // Read from JSON, the way the wire reads it: a Subtree has no
+            // other way in, so a hand-built one is held to the same rule.
+            prefix: serde_json::from_value(json!("src")).expect("a directory"),
             cursor: None,
             limit: None,
         },

@@ -471,7 +471,7 @@ const CURSOR_VERSION: &str = "p1";
 
 /// A directory whose Subtree is asked for.
 ///
-/// Normalised once, when it is built: a trailing slash a caller may or may not
+/// Normalised once, when it is read: a trailing slash a caller may or may not
 /// have written is gone, so `src/` and `src` are one directory. What is left
 /// of `/`, or of nothing, is nothing — and nothing is the root, so `/` and
 /// `""` ask for everything, the same as omitting the argument. `/` is not a
@@ -488,17 +488,6 @@ pub struct Subtree {
 }
 
 impl Subtree {
-    /// The Subtree under `directory`, normalised.
-    ///
-    /// Public for the caller that builds a tool's arguments by hand rather
-    /// than from JSON — a test asking about the answer's type — so that it is
-    /// held to the same rule as one that arrived on the wire.
-    pub fn new(directory: &str) -> Self {
-        Self {
-            directory: directory.trim_end_matches('/').to_owned(),
-        }
-    }
-
     /// The directory this Subtree is under, or nothing for the root.
     ///
     /// For the caller that finds the directory by descending a tree rather
@@ -529,7 +518,9 @@ impl<'de> Deserialize<'de> for Subtree {
         // `Cow` for `Cursor`'s reason: the arguments arrive as a parsed
         // `serde_json::Value`, with nothing to borrow from.
         let text = Cow::<str>::deserialize(deserializer)?;
-        Ok(Self::new(&text))
+        Ok(Self {
+            directory: text.trim_end_matches('/').to_owned(),
+        })
     }
 }
 
