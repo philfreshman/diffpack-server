@@ -131,8 +131,8 @@ impl Client {
     ///
     /// The router behind both constructors above. Private, because a suite
     /// that wants a context of its own builds it once and hands it to
-    /// [`Client::over`]: a factory per suite was a second way to say the same
-    /// thing, and the comments on the two had come to disagree about why.
+    /// [`Client::over`]. A factory per suite would be a second way to say the
+    /// same thing, and a second place to explain it.
     fn serving(build: impl Fn() -> Ctx + Send + Sync + 'static) -> Self {
         let build = Arc::new(build);
         Self::routed(move || {

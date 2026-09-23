@@ -228,7 +228,7 @@ as production does, and `Client::over` clones one the suite made. The two
 differ only in what the seams remember, since a call's tally is never in the
 context.
 
-It is built two ways and only two: `Ctx::new` is every seam live and
+`Ctx` itself is built two ways and only two: `Ctx::new` is every seam live and
 `Ctx::fixture` is every seam reading from the checked-in sets under
 `fixtures/`. Both name every field, so a seam added later is a compile error
 in each of them and its author answers for production and for the suite at
@@ -888,8 +888,8 @@ across calls, and a `Spent` held there measured the second call's window from
 the first call's fetches (#96). In production the two lifetimes are the same,
 because by [ADR 0008](adr/0008-no-sessions.md) a request is one call.
 `Call::archive()`, `Call::catalogue()` and `Call::search()` each hand back
-their seam with the stopwatch already on it, so a handler is unchanged and there is no way to
-wait on a registry uncounted. One wrapper over all three, because the phase
+their seam with the stopwatch already on it, so a handler is unchanged and
+there is no way to wait on a registry uncounted. One wrapper over all three, because the phase
 answers how long the call waited rather than which document it waited for —
 and a tool that only reads a catalogue reporting no wait at all is the
 reading an operator would take for "this one never left the process".
