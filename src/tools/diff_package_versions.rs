@@ -98,7 +98,7 @@ use futures::try_join;
 use rmcp::model::Resource;
 use serde::{Deserialize, Serialize};
 
-use crate::archive::FileMap;
+use crate::archive::{At, FileMap};
 use crate::engine::{self, DiffFileEntry, DiffStatus, FileType, Patch};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
@@ -413,26 +413,18 @@ fn collect(
 /// on demand, when [`Comparison::file_patch`] finds nothing stored for it. A
 /// remembered patch and a fresh one only agree while those two read a file
 /// the same way, so they read it here rather than each in its own copy.
+///
+/// What each version has at a path is the FileMap's answer, and a directory
+/// is nothing to diff in it, the same as an absent path. That is why a
+/// directory a caller named is refused before anything is rendered — see
+/// [`refuse_directory`] — or it would be told the path is in neither version.
 fn patch_of(files: &Versions, path: &str, from_path: &str, ignore_whitespace: bool) -> Patch {
     engine::patch(
         path,
-        content(&files.from_files, from_path),
-        content(&files.to_files, path),
+        files.from_files.at(from_path).text(),
+        files.to_files.at(path).text(),
         ignore_whitespace,
     )
-}
-
-/// What `files` has at `path`, where that is a file at all.
-///
-/// A directory is nothing, which is the engine's reading: its content is the
-/// empty string the extractor gave it. That is why a directory a caller named
-/// is refused before anything is rendered — see [`refuse_directory`] — or it
-/// would be told the path is in neither version.
-fn content<'a>(files: &'a FileMap, path: &str) -> Option<&'a str> {
-    files.get(path).and_then(|entry| match entry.file_type {
-        FileType::File => Some(entry.content.as_str()),
-        FileType::Directory => None,
-    })
 }
 
 /// How much one file moved: the number the listing is ranked by.
@@ -601,10 +593,7 @@ impl Comparison {
         };
 
         refuse_directory(inputs, path, from_path, |end, path| {
-            files
-                .of(end)
-                .get(path)
-                .is_some_and(|entry| matches!(entry.file_type, FileType::Directory))
+            files.of(end).at(path) == At::Directory
         })?;
 
         Ok(patch_of(files, path, from_path, inputs.ignore_whitespace))

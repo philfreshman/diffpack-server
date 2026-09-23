@@ -20,6 +20,13 @@
 //! rather than one in the tool that caches a result and another in the tool
 //! that renders one on demand.
 //!
+//! [`build_diff_tree`], which is the engine's own but takes two [`FileMap`]s
+//! rather than the maps inside them. A FileMap is the archive seam's type,
+//! with the extractor's map private to it (#95), and this is the one place
+//! that map is handed back to the engine — the crossing belongs in the module
+//! that names the engine, and a caller building a tree never sees the
+//! engine's entry type.
+//!
 //! # What is deliberately not re-exported
 //!
 //! The Go helpers (`build_go_zip_url`, `escape_go_module_path`,
@@ -30,10 +37,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::archive::FileMap;
+
 pub use diffpack_engine::{
-    build_diff_tree, build_tarball_url, extract_archive_bytes, get_diff_content,
-    select_pypi_sdist_url, whitespace_mode, DiffFileEntry, DiffStatus, FileMapEntry, FileType,
-    PyPiResponse, PyPiUrl, WhitespaceMode,
+    build_tarball_url, extract_archive_bytes, get_diff_content, select_pypi_sdist_url,
+    whitespace_mode, DiffFileEntry, DiffStatus, FileMapEntry, FileType, PyPiResponse, PyPiUrl,
+    WhitespaceMode,
 };
 
 /// One file's rendered diff.
@@ -110,6 +119,25 @@ pub fn patch(
             is_diff: true,
         },
     }
+}
+
+/// The tree of what changed between two versions' files.
+///
+/// `diffpack-engine`'s `build_diff_tree`, handed the maps inside two
+/// [`FileMap`]s. Written out rather than re-exported for the reason the
+/// module header gives: the engine takes the map a FileMap keeps private.
+pub fn build_diff_tree(
+    from: &FileMap,
+    to: &FileMap,
+    similarity_threshold: f64,
+    ignore_whitespace: bool,
+) -> DiffFileEntry {
+    diffpack_engine::build_diff_tree(
+        from.as_engine_map(),
+        to.as_engine_map(),
+        similarity_threshold,
+        ignore_whitespace,
+    )
 }
 
 /// `header`, then every line of `content` behind `sign`.
