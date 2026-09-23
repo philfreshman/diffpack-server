@@ -1105,9 +1105,10 @@ async fn the_tool_and_the_resource_answer_every_kind_of_file_alike() {
         .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
         .to_owned();
 
-    let cold = Memory::new();
-    let warm_and_cold: [(&str, &dyn Fn() -> DiffStore); 2] =
-        [("warm", &capped), ("cold", &|| cold.store())];
+    // A store of its own for every call, so each cold one is: a shared one
+    // would be written by the first call and serve the rest.
+    let cold = || Memory::new().store();
+    let warm_and_cold: [(&str, &dyn Fn() -> DiffStore); 2] = [("warm", &capped), ("cold", &cold)];
 
     for (when, store) in warm_and_cold {
         for (path, old_path) in [
@@ -1155,7 +1156,7 @@ async fn the_tool_and_the_resource_answer_every_kind_of_file_alike() {
     let warm = call_tool(capped, "get_file_diff", bare.clone()).await;
     assert_eq!(
         warm,
-        call_tool(|| cold.store(), "get_file_diff", bare).await,
+        call_tool(cold, "get_file_diff", bare).await,
         "a renamed file asked about without its `old_path` is the same answer \
          warm and cold"
     );
