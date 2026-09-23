@@ -16,7 +16,7 @@
 //! The live adapter is exercised in `tests/networked.rs`, which reaches the
 //! real registries and is `#[ignore]`d for that reason.
 
-use diffpack_server::archive::{self, Archive, FileMap};
+use diffpack_server::archive::{self, Archive, At, FileMap};
 use diffpack_server::error::Failure;
 use diffpack_server::registry::Registry;
 
@@ -40,7 +40,7 @@ async fn an_npm_tarball_arrives_as_the_files_inside_it() {
         "a file in the archive should arrive with its content"
     );
     assert!(
-        files.contains_key("index.d.ts"),
+        has(&files, "index.d.ts"),
         "every file in the archive should be in the map, got {:?}",
         paths(&files)
     );
@@ -82,7 +82,7 @@ async fn a_pypi_version_with_a_source_distribution_arrives_as_the_source() {
         .expect("the fixture adapter has this version's metadata and its sdist");
 
     assert!(
-        files.contains_key("setup.py"),
+        has(&files, "setup.py"),
         "a source distribution carries `setup.py`, and a wheel does not: got {:?}",
         paths(&files)
     );
@@ -120,7 +120,7 @@ async fn a_pypi_version_with_only_a_wheel_arrives_as_the_wheel() {
         "the wheel's files are the version's files"
     );
     assert!(
-        files.contains_key("tensorflow-2.16.1.dist-info/METADATA"),
+        has(&files, "tensorflow-2.16.1.dist-info/METADATA"),
         "a wheel's two top-level directories are both kept, got {:?}",
         paths(&files)
     );
@@ -142,7 +142,7 @@ async fn a_crates_io_crate_arrives_as_the_files_inside_it() {
         "pub fn serialize() {}\n",
         "a crate's files arrive under the paths inside it, one level up"
     );
-    assert!(files.contains_key("Cargo.toml"), "got {:?}", paths(&files));
+    assert!(has(&files, "Cargo.toml"), "got {:?}", paths(&files));
 }
 
 /// The fifth shape a registry serves: a zip source distribution, which PyPI
@@ -161,7 +161,7 @@ async fn a_pypi_zip_source_distribution_arrives_as_its_files() {
         "__version__ = \"1.9.0\"\n",
         "a zip's entries are files in the map like any other archive's"
     );
-    assert!(files.contains_key("setup.py"), "got {:?}", paths(&files));
+    assert!(has(&files, "setup.py"), "got {:?}", paths(&files));
 }
 
 // ---------------------------------------------------------------------------
@@ -216,17 +216,23 @@ fn fixtures() -> Archive {
     Archive::fixture(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/archives"))
 }
 
-/// The content of the file at `path`, or a panic naming what the map holds.
+/// The text of the file at `path`, or a panic naming what the map holds.
 fn text<'a>(files: &'a FileMap, path: &str) -> &'a str {
-    match files.get(path) {
-        Some(entry) => entry.content.as_str(),
-        None => panic!("`{path}` should be in the file map, got {:?}", paths(files)),
+    match files.at(path) {
+        At::File(file) => file.text(),
+        other => panic!(
+            "`{path}` should be a file in the file map, got {other:?} among {:?}",
+            paths(files)
+        ),
     }
 }
 
-/// Every path in the map, sorted, for a failure message worth reading.
+/// Whether the map has anything at `path`, a file or a directory.
+fn has(files: &FileMap, path: &str) -> bool {
+    files.at(path) != At::Nothing
+}
+
+/// Every path in the map, in order, for a failure message worth reading.
 fn paths(files: &FileMap) -> Vec<&str> {
-    let mut paths: Vec<&str> = files.keys().map(String::as_str).collect();
-    paths.sort_unstable();
-    paths
+    files.paths()
 }

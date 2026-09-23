@@ -16,7 +16,7 @@
 
 use std::time::Instant;
 
-use diffpack_server::archive::Archive;
+use diffpack_server::archive::{Archive, At};
 use diffpack_server::catalogue::Catalogue;
 use diffpack_server::error::Failure;
 use diffpack_server::registry::{Registry, Version, Versions};
@@ -36,7 +36,7 @@ async fn npm_serves_the_archive_this_server_asks_it_for() {
         .expect("npm serves this version");
 
     assert!(
-        files.contains_key("package.json"),
+        files.at("package.json") != At::Nothing,
         "every npm package has a `package.json` at its root"
     );
 }
@@ -51,7 +51,7 @@ async fn crates_io_serves_the_archive_this_server_asks_it_for() {
         .expect("crates.io serves this version");
 
     assert!(
-        files.contains_key("Cargo.toml"),
+        files.at("Cargo.toml") != At::Nothing,
         "every crate carries a `Cargo.toml` at its root"
     );
 }
@@ -71,11 +71,14 @@ async fn pypi_serves_the_source_distribution_it_lists() {
         .expect("PyPI lists and serves this version");
 
     assert!(
-        files.contains_key("setup.py"),
+        files.at("setup.py") != At::Nothing,
         "the source distribution is the one to diff, and it carries `setup.py`"
     );
     assert!(
-        !files.keys().any(|path| path.contains(".dist-info/")),
+        !files
+            .paths()
+            .iter()
+            .any(|path| path.contains(".dist-info/")),
         "`.dist-info/` means the wheel was taken where an sdist existed"
     );
 }

@@ -107,14 +107,18 @@ _Avoid_: prerelease (as a concept — the field is `prerelease`), unstable,
 beta, draft
 
 **FileMap**:
-An Archive after extraction: every file path in that version mapped to its
-entry, with the archive's top-level directory already stripped. It is what a
-diff is computed from, and it is the boundary the rest of the crate sees — a
-tool asks for a FileMap, never for an Archive. Every entry's content is text,
-because extraction decodes it that way: bytes that are not valid UTF-8 become
-replacement characters rather than an error, so a FileMap holds a readable
-rendering of a binary file and not the file. Nothing downstream can undo
-that, which is why a tool returning content says whether it happened.
+An Archive after extraction: every path in that version, file or directory,
+and what is at it, with the archive's top-level directory already stripped.
+It is what a diff is computed from, and it is the boundary the rest of the
+crate sees — a tool asks for a FileMap, never for an Archive. Every file's
+content is text, because extraction decodes it that way: bytes that are not
+valid UTF-8 become replacement characters rather than an error, so a FileMap
+holds a readable rendering of a binary file and not the file. Nothing
+downstream can undo that, which is why a tool returning content says whether
+it happened — and whether it happened is asked of the FileMap. What is at a
+path is one of three answers: a file with its text, a directory, or nothing.
+A directory is not an empty file, even though the extractor gives it empty
+content.
 _Avoid_: tree, file list, contents, extracted archive
 
 **Index**:
@@ -259,12 +263,12 @@ _Avoid_: change type, state, kind
 A Diff arranged the way the two versions' files are: every directory and
 every file in either of them, each with its Status and the lines it gained
 and lost. It is one Diff's shape where a FileMap is what one Version ships,
-and it is ordered where a FileMap is a map. Two things about it are the
-engine's and neither is guessable from an answer, so both are said out loud
-wherever one is served: a directory's counts are the sum of its children's,
-and a directory a rename left empty is not in the Tree at all. One file or
-one directory in it is a *node* — not an Entry, which is the cache's, and not
-a FileMap's entry either.
+and it is arranged by directory where a FileMap is a flat set of paths. Two
+things about it are the engine's and neither is guessable from an answer, so
+both are said out loud wherever one is served: a directory's counts are the
+sum of its children's, and a directory a rename left empty is not in the Tree
+at all. One file or one directory in it is a *node* — not an Entry, which is
+the cache's, and not a FileMap's entry either.
 _Avoid_: file tree, hierarchy, listing, entry (for a node)
 
 **Subtree**:

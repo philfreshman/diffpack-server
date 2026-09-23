@@ -160,7 +160,7 @@ async fn the_url_this_tool_answers_with_is_the_one_the_fetch_path_asks_for() {
         .expect("the fetch path asks for an archive the fixture set has");
 
     assert!(
-        !files.is_empty(),
+        !files.paths().is_empty(),
         "the fetch path came back with a version's files"
     );
     assert!(

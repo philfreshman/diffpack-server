@@ -16,13 +16,18 @@
 //! nothing in it — and an agent that concludes the package ships an empty
 //! module has nothing in the answer to notice it with. It is refused
 //! instead, on the channel the model reads, because the remedy is to ask for
-//! a file inside.
+//! a file inside. Which of the two a path is, is the FileMap's answer
+//! ([`crate::archive::At`]) rather than something this tool reads off the
+//! content.
 //!
 //! **Content is decoded lossily.** A file whose bytes are not UTF-8 arrives
 //! as replacement characters rather than as a failure, which is the right
 //! behaviour and useless on its own: a string of `U+FFFD` could be a PNG or
 //! a source file saved in the wrong encoding, and those have different next
-//! moves. `valid_utf8` is what separates them.
+//! moves. `valid_utf8` is what separates them, and whether it holds is
+//! asked of the file the FileMap answered with
+//! ([`crate::archive::File::decoded_cleanly`]), which also says why it is
+//! read off the whole file rather than off the excerpt.
 //!
 //! **A cut is loud.** A silently shortened file is how an agent concludes a
 //! function does not exist: it read what it was given, found nothing, and
@@ -53,7 +58,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine;
+use crate::archive::At;
 use crate::error::Failure;
 use crate::page::{self, Excerpt};
 use crate::registry::Registry;
@@ -145,42 +150,27 @@ impl Tool for GetFileContent {
             .fetch(args.registry, &args.package, &args.version)
             .await?;
 
-        let Some(entry) = files.get(&args.path) else {
-            return Err(Failure::NoSuchFile {
+        // The FileMap says what is at the path, and this is where the two
+        // answers that are not a file are refused. A directory is refused
+        // rather than read as empty, and the FileMap's answer is what keeps a
+        // genuinely empty file answering as one.
+        match files.at(&args.path) {
+            At::Nothing => Err(Failure::NoSuchFile {
                 package: args.package,
                 version: args.version,
                 path: args.path,
-            });
-        };
+            }),
 
-        // A directory's content is the empty string the extractor gave it, so
-        // the type is the only thing that tells the two apart. Reading the
-        // type rather than the emptiness is what keeps a genuinely empty file
-        // answering as one.
-        if matches!(entry.file_type, engine::FileType::Directory) {
-            return Err(Failure::PathIsDirectory {
+            At::Directory => Err(Failure::PathIsDirectory {
                 package: args.package,
                 version: args.version,
                 path: args.path,
-            });
+            }),
+
+            At::File(file) => Ok(Content {
+                excerpt: page::truncate(file.text(), args.max_bytes),
+                valid_utf8: file.decoded_cleanly(),
+            }),
         }
-
-        // Read off the whole file rather than off the excerpt: a cut that
-        // fell before the first undecodable byte would otherwise report a
-        // binary file as clean text.
-        //
-        // Derived from the decoded text rather than from the bytes, because
-        // the bytes are gone — extraction decodes lossily and what this tool
-        // is handed is the result. The cost is that a text file genuinely
-        // containing a replacement character is reported the same way. That
-        // is rare, and it is the safe direction to be wrong in: an agent told
-        // a file may not have decoded reads it more carefully, where one told
-        // a binary is clean text does not.
-        let valid_utf8 = !entry.content.contains(char::REPLACEMENT_CHARACTER);
-
-        Ok(Content {
-            excerpt: page::truncate(&entry.content, args.max_bytes),
-            valid_utf8,
-        })
     }
 }

@@ -233,6 +233,32 @@ async fn an_entry_says_what_it_is_and_how_big_it_is() {
     );
 }
 
+/// An empty file and a directory both have a size of zero, and the type is
+/// what still tells them apart. The extractor gives a directory the empty
+/// string for its content, so a listing that worked the type out from the
+/// size would call `empty.txt` a directory or `src` a file.
+///
+/// The sizes are the archive's own, from `tar tv`, not from this server.
+#[tokio::test]
+async fn an_empty_file_is_a_file_of_no_bytes_and_not_a_directory() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "empty-file",
+        "version": "1.0.0",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["items"],
+        json!([
+            { "path": "empty.txt", "type": "file", "size": 0 },
+            { "path": "src", "type": "directory", "size": 0 },
+            { "path": "src/index.js", "type": "file", "size": 11 },
+        ]),
+        "got {result}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Narrowing it
 // ---------------------------------------------------------------------------

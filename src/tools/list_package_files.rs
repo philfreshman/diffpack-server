@@ -30,7 +30,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine;
+use crate::archive::At;
 use crate::error::Failure;
 use crate::page::{self, Page};
 use crate::registry::Registry;
@@ -101,11 +101,11 @@ pub struct Entry {
 }
 
 /// A file, or a directory holding other entries.
-// Two variants mirroring `engine::FileType`, written here rather than
-// re-exported because the engine's type carries no JSON schema and a tool
-// declares types, not JSON. The `From` below is a total `match`, so a third
-// variant in the engine is a compile error here rather than a value this
-// server quietly renames.
+// Written here rather than taken from the archive seam because a tool
+// declares types, not JSON, and `archive::At` carries no JSON schema. The two
+// variants are the two of its three answers that are something to list, and
+// `Entry::at` below matches all three, so a fourth answer in the FileMap is a
+// compile error here rather than a value this server quietly renames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum EntryType {
@@ -113,12 +113,24 @@ pub enum EntryType {
     Directory,
 }
 
-impl From<engine::FileType> for EntryType {
-    fn from(file_type: engine::FileType) -> Self {
-        match file_type {
-            engine::FileType::File => Self::File,
-            engine::FileType::Directory => Self::Directory,
-        }
+impl Entry {
+    /// The entry for `path`, given what the FileMap has at it, or nothing
+    /// where it has nothing.
+    fn at(path: &str, at: At<'_>) -> Option<Self> {
+        let (entry_type, size) = match at {
+            At::File(file) => (EntryType::File, file.text().len()),
+            // A directory has no text, so it has no size. Stated rather than
+            // taken from the content the extractor gave it, which happens to
+            // be empty and is not this tool's to read.
+            At::Directory => (EntryType::Directory, 0),
+            At::Nothing => return None,
+        };
+
+        Some(Self {
+            path: path.to_owned(),
+            entry_type,
+            size,
+        })
     }
 }
 
@@ -157,24 +169,15 @@ impl Tool for ListPackageFiles {
         // and it is what knows that `sr` is not `src`.
         let under = args.prefix.unwrap_or_default();
 
-        // A `FileMap` is a map, so it has no order of its own and two calls
-        // would not agree on one. Sorting is what makes the sequence a
-        // sequence — without it a cursor names a position in an arrangement
-        // that existed for one request.
-        let mut entries: Vec<Entry> = files
+        // In the FileMap's order, which is the paths' own. A listing needs
+        // one that holds from call to call, or a cursor names a position in
+        // an arrangement that existed for one request.
+        let entries: Vec<Entry> = files
+            .paths()
             .into_iter()
-            .filter(|(path, _)| under.contains(path))
-            .map(|(path, entry)| Entry {
-                path,
-                entry_type: entry.file_type.into(),
-                // A directory's content is the empty string the extractor
-                // gave it, so this is already zero for one; taking the
-                // length rather than matching on the type keeps the two
-                // fields from being able to disagree.
-                size: entry.content.len(),
-            })
-            .collect::<Vec<_>>();
-        entries.sort_by(|a, b| a.path.cmp(&b.path));
+            .filter(|path| under.contains(path))
+            .filter_map(|path| Entry::at(path, files.at(path)))
+            .collect();
 
         page::paginate(entries, args.limit, args.cursor)
     }

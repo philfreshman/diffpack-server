@@ -47,3 +47,19 @@ in place of them, and a tool still cannot name it — the allow-list in
 `check-tool-seams.sh` does not have it, and what leaves it is bytes or a
 `Failure` rather than a status code. The leak this record is about is a tool
 knowing where crates.io puts a `.crate`, and no tool does.
+
+## Since: #95
+
+The seam is still a FileMap, and a FileMap now has an interface of its own.
+It was an alias for the extractor's map, so every tool that took one got the
+engine's entry type with it and worked out what an entry meant: that a
+directory's content is the empty string, so emptiness does not tell it from an
+empty file, and that a file that was not UTF-8 holds replacement characters.
+Five sites did that, and four carried a comment saying how.
+
+It is now a type of this module's with the map private. It answers what is at
+a path (a file with its text, a directory, or nothing), whether a file decoded
+cleanly, and its paths in order. That deepens this record rather than
+reopening it: what a tool is given is still a version's extracted files, and
+what it can no longer do is read them the wrong way. The engine still reads the
+map, to build a tree, and it gets it through `src/engine.rs` (ADR 0007).

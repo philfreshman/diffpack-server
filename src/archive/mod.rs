@@ -35,12 +35,147 @@ use crate::engine;
 use crate::error::Failure;
 use crate::registry::{ArchiveSource, Registry};
 
-/// An archive after extraction: every file path in a version mapped to its
-/// entry, with the archive's top-level directory already stripped.
+/// An archive after extraction: every path in a version and what is at it,
+/// with the archive's top-level directory already stripped.
 ///
 /// The boundary the rest of the crate sees. A tool asks for one of these and
 /// never for the bytes it was made from.
-pub type FileMap = HashMap<String, engine::FileMapEntry>;
+///
+/// # Three questions, and nothing else
+///
+/// What is at a path ([`FileMap::at`]), whether a file decoded cleanly
+/// ([`File::decoded_cleanly`]), and the paths in order ([`FileMap::paths`]).
+/// The map the extractor built is private, because what one of its entries
+/// means is not something a caller can read off it: a directory's content is
+/// the empty string, so emptiness cannot tell a directory from an empty file,
+/// and a file that was not UTF-8 holds replacement characters rather than
+/// its bytes. Five places in the tools used to work that out for themselves,
+/// and four of them carried a comment saying how (#95). A change to
+/// extraction — a symlink, or a flag for bytes that did not decode — is now an
+/// edit here rather than five.
+///
+/// The one thing that still reads the map is the engine, which builds a tree
+/// out of two of them. That goes through [`crate::engine::build_diff_tree`],
+/// so the map is handed back to the engine in the one module that imports it
+/// (ADR 0007), and no tool or resource may reach for it.
+#[derive(Debug)]
+pub struct FileMap {
+    entries: HashMap<String, engine::FileMapEntry>,
+}
+
+/// What is at one path of a [`FileMap`].
+///
+/// Three answers, and a caller matching on them is the one place a tool
+/// decides what each means to it: `get_file_content` refuses the second and
+/// the third, `list_package_files` lists the first two, and a patch reads
+/// both of the last two as nothing to diff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum At<'a> {
+    /// A file, with its text.
+    File(File<'a>),
+
+    /// A directory, which has no text of its own. Not an empty file.
+    Directory,
+
+    /// Nothing: the version has no such path.
+    Nothing,
+}
+
+/// One file of a [`FileMap`], as extraction left it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct File<'a> {
+    text: &'a str,
+}
+
+impl FileMap {
+    /// What is at `path`.
+    ///
+    /// The type is what answers, never the content. A directory's content is
+    /// the empty string the extractor gave it, so reading emptiness would
+    /// call every empty file a directory.
+    pub fn at(&self, path: &str) -> At<'_> {
+        match self.entries.get(path) {
+            None => At::Nothing,
+            Some(entry) => match entry.file_type {
+                engine::FileType::File => At::File(File {
+                    text: &entry.content,
+                }),
+                engine::FileType::Directory => At::Directory,
+            },
+        }
+    }
+
+    /// Every path in the version, files and directories alike, in order.
+    ///
+    /// The order is the paths' own, byte by byte. The map underneath has none
+    /// of its own, and two calls that each walked it would not agree on one,
+    /// which is what a cursor into a listing needs them to do.
+    pub fn paths(&self) -> Vec<&str> {
+        let mut paths: Vec<&str> = self.entries.keys().map(String::as_str).collect();
+        paths.sort_unstable();
+        paths
+    }
+
+    /// The map as the engine reads it, for [`crate::engine`] to hand back.
+    ///
+    /// Nothing else calls this, and `scripts/check-tool-seams.sh` fails the
+    /// build if a tool or a resource names it: `pub(crate)` is as narrow as
+    /// Rust goes, and a caller that read the entries off it would be working
+    /// out again what [`FileMap::at`] answers.
+    pub(crate) fn as_engine_map(&self) -> &HashMap<String, engine::FileMapEntry> {
+        &self.entries
+    }
+}
+
+/// A map as the extractor builds it.
+///
+/// Public so a test can build a FileMap by hand, the way `tests/engine.rs`
+/// builds two for the tree builder. Reading one back is still the three
+/// questions above.
+impl From<HashMap<String, engine::FileMapEntry>> for FileMap {
+    fn from(entries: HashMap<String, engine::FileMapEntry>) -> Self {
+        Self { entries }
+    }
+}
+
+impl<'a> At<'a> {
+    /// The text of the file at this path, or nothing where there is no file.
+    ///
+    /// A directory is nothing here, which is how the engine reads one when it
+    /// renders a patch: it has no text to diff. A caller that has to tell a
+    /// directory from an absent path matches on the answer instead.
+    pub fn text(self) -> Option<&'a str> {
+        match self {
+            At::File(file) => Some(file.text()),
+            At::Directory | At::Nothing => None,
+        }
+    }
+}
+
+impl<'a> File<'a> {
+    /// The file's text, decoded the way extraction decodes it.
+    pub fn text(self) -> &'a str {
+        self.text
+    }
+
+    /// Whether every byte of the file decoded as UTF-8, so the text is the
+    /// file.
+    ///
+    /// Read off the text rather than off the bytes, because the bytes are
+    /// gone: extraction decodes lossily, and what a FileMap holds is the
+    /// result. The cost is that a text file that really does contain a
+    /// replacement character is reported as not decoding cleanly. That is
+    /// rare, and it is the safe direction to be wrong in: an agent told a
+    /// file may not have decoded reads it more carefully, where one told a
+    /// binary is clean text does not.
+    ///
+    /// Always the whole file. A caller that cut the text first and asked of
+    /// the cut would report a binary as clean wherever the cut fell before
+    /// the first byte that did not decode.
+    pub fn decoded_cleanly(self) -> bool {
+        !self.text.contains(char::REPLACEMENT_CHARACTER)
+    }
+}
 
 /// The most any one body this server downloads may weigh.
 ///
@@ -162,11 +297,13 @@ impl Archive {
 /// a second implementation here would be two answers to "what is in this
 /// version" with nothing keeping them equal.
 fn extract(bytes: &[u8], package: &str, version: &str) -> Result<FileMap, Failure> {
-    engine::extract_archive_bytes(bytes).map_err(|reason| Failure::MalformedArchive {
-        package: package.to_owned(),
-        version: version.to_owned(),
-        reason,
-    })
+    engine::extract_archive_bytes(bytes)
+        .map(FileMap::from)
+        .map_err(|reason| Failure::MalformedArchive {
+            package: package.to_owned(),
+            version: version.to_owned(),
+            reason,
+        })
 }
 
 /// A version this server cannot get an archive for, in the words a model

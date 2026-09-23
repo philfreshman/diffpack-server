@@ -18,7 +18,8 @@ src/tools/          one module per tool: definition and handler together,
                     Comparison::file_patch, the one way to one file's patch
 src/resources/      one module per resource: URI and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
-src/archive/        fetch(registry, package, version) -> FileMap
+src/archive/        fetch(registry, package, version) -> FileMap, and what
+                    a FileMap answers: what is at a path, and its paths
 src/catalogue/      versions(registry, package) -> Versions, newest first
 src/search/         hits(registry, query, limit) -> Vec<Hit>, best match first
 src/document/       what the three above share: host check, adapters, fixtures, cap
@@ -43,8 +44,8 @@ Three, and all three are enforced rather than trusted. `./scripts/checks.sh
 seams` runs the first two; `cargo test` runs the third.
 
 **`src/engine.rs` is the only importer of `diffpack_engine`.** Everything the
-server needs from the engine is re-exported there, so a bump to a new engine
-release is one file to change and one file to read.
+server needs from the engine is re-exported or written there, so a bump to a
+new engine release is one file to change and one file to read.
 [`scripts/check-engine-seam.sh`](../scripts/check-engine-seam.sh) fails the
 build otherwise. See [ADR 0007](adr/0007-one-importer-of-the-engine.md).
 
@@ -55,8 +56,11 @@ waits on two fetches at once, and `crate::{archive, cache_key, catalogue,
 engine, error, handle, page, registry, resources, search, store, tools}`. It
 may not name an HTTP client or the blob store: those are `fetch`'s and
 `store`'s business, and eight tools that each know how to fetch is eight
-places to fix a timeout. Nothing checks that this paragraph and the script's
-list agree, so a module added to one is added to the other by hand.
+places to fix a timeout. Nor may it name the accessor that hands a FileMap's
+map to the engine, because a tool that read the entries would be working out
+again what the FileMap answers (#95). Nothing checks that this paragraph and
+the script's list agree, so a module added to one is added to the other by
+hand.
 
 `resources` and `tools` are on that list for each other, which is why the two
 directories name each other: a tool's answer carries a `resource_link` and so
@@ -321,6 +325,22 @@ behind the same interface: the live one over `reqwest`, and a fixture one
 reading `fixtures/archives/`, which is what lets the suite assert what a
 version's files are with no network and what lets the conformance suite (#24)
 run offline. See [ADR 0001](adr/0001-the-archive-seam-is-a-filemap.md).
+
+A `FileMap` is this module's own type, not an alias for the map the extractor
+builds, and that map is private to it. What a caller can ask it is three
+questions: `at(path)`, which is a file with its text, a directory, or nothing
+(`archive::At`); whether a file decoded cleanly (`File::decoded_cleanly`); and
+`paths()`, every path in order. Each answer is something the extractor's map
+cannot say plainly — a directory's content is the empty string, so emptiness
+cannot tell a directory from an empty file, and a file that was not UTF-8
+holds replacement characters rather than its bytes — so it is said once here
+rather than worked out again by every tool that reads one (#95). The engine is
+the one reader of the map itself, to build a tree, and it gets it through
+`engine::build_diff_tree`, which takes two FileMaps: the map crosses back to
+the engine in the one module that imports it. The accessor that crossing uses
+is `pub(crate)`, the narrowest Rust has, so `scripts/check-tool-seams.sh` has
+its name on the deny-list and a tool or a resource that reached for it fails
+the build.
 
 Three things are the same code for both adapters rather than the live one's
 alone, because each is a rule about what this server does rather than about
@@ -903,7 +923,7 @@ in the cache key rather than a label. The server computes diffs with the same
 code the browser runs; re-implementing any of it would mean two copies of an
 output format that has to stay byte-identical.
 
-One function here is written out rather than re-exported, and it is the
+Two functions here are written out rather than re-exported. The first is the
 exception that the paragraph above is the reason for. `patch` renders one
 file's Patch — the four cases a file can be in between two versions, and which
 of them is a diff at all. The engine has it, as `build_diff_result`, but
@@ -915,6 +935,12 @@ the module that names the engine version it is pinned to, where a drift is one
 file to fix. Both call it; the two arrived in parallel each with a copy, and
 collapsing them was the first thing the merge of the two was for. See [ADR
 0013](adr/0013-the-patch-renderer-lives-in-the-engine-seam.md).
+
+The second is written out for a smaller reason. `build_diff_tree` is the
+engine's own, but it takes the map a `FileMap` keeps private, so the version
+here takes two FileMaps and hands the engine the map inside each. That is the
+one place the map leaves `archive`, and it is here because this is the module
+that imports the engine the map is handed to (#95).
 
 ### `src/health.rs` — the `/health` body
 

@@ -435,6 +435,36 @@ async fn an_ordinary_file_says_it_is_valid_utf8() {
     );
 }
 
+/// An empty file is a file, and answers as one: no text, nothing cut, and
+/// clean. The extractor gives a directory the same empty string, so a tool
+/// that told the two apart by emptiness would refuse this as a directory —
+/// and an agent told `empty.txt` is a directory has been told something false
+/// about what the package ships.
+///
+/// The size is the fixture's own, from `tar tv` on the archive, not from
+/// this server.
+#[tokio::test]
+async fn an_empty_file_comes_back_empty_rather_than_refused_as_a_directory() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "empty-file",
+        "version": "1.0.0",
+        "path": "empty.txt",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "an empty file is a file with nothing in it, got {result}"
+    );
+    assert_eq!(
+        result["structuredContent"],
+        json!({ "text": "", "truncated": false, "bytes": 0, "validUtf8": true }),
+        "got {result}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // How it fails
 // ---------------------------------------------------------------------------
