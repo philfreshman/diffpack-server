@@ -4,6 +4,12 @@
 //! not a truncated answer — it is a platform error with nothing in it for the
 //! client, so every tool that returns a list, a tree, a file or a patch has
 //! to stay under it. This module is the one place that knows the number.
+//!
+//! It also owns the arguments a caller narrows a sequence with before any of
+//! it is paged: where to resume, how many to take, and which directory's
+//! [`Subtree`] to walk. Each carries a rule an agent has to read, so each is a
+//! type that writes its own schema, and the module that owns the rule is the
+//! one that writes it.
 
 use std::borrow::Cow;
 
@@ -446,6 +452,109 @@ impl JsonSchema for Cursor {
 
 /// The cursor format's version, and the whole of what makes it one format.
 const CURSOR_VERSION: &str = "p1";
+
+// ---------------------------------------------------------------------------
+// Which part of a sequence: one Subtree
+// ---------------------------------------------------------------------------
+//
+// Not the ceiling, and here anyway. `cursor` says where in a sequence to
+// resume and `limit` how much of it to take; this says which sequence, when
+// the whole one is a directory tree and a caller wants one directory of it.
+// Two tools take that argument, and each wrote the rule out for itself — the
+// description, and the trimming of a slash — until the two copies disagreed
+// about `/` (#97). The rule is a schema an agent reads and a
+// normalisation a handler must not redo, which is `Limit`'s shape exactly, so
+// it is a type that writes its own schema in the module that already owns
+// those. A module of its own for one type is what ADR 0013 turned down.
+
+/// A directory whose Subtree is asked for.
+///
+/// Normalised once, when it is built: a trailing slash a caller may or may not
+/// have written is gone, so `src/` and `src` are one directory. What is left
+/// of `/`, or of nothing, is nothing — and nothing is the root, so `/` and
+/// `""` ask for everything, the same as omitting the argument. `/` is not a
+/// refusal: it names a directory that exists (ADR 0017).
+///
+/// A directory, not a string to match on. `sr` does not narrow to `src/`, and
+/// `lib` does not swallow `libs/`, because [`Subtree::contains`] compares at
+/// the separator. And a directory is not inside its own Subtree: `src` is not
+/// under `src`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Subtree {
+    /// Empty for the root; otherwise a directory with no trailing slash.
+    directory: String,
+}
+
+impl Subtree {
+    /// The Subtree under `directory`, normalised.
+    ///
+    /// Public for the caller that builds a tool's arguments by hand rather
+    /// than from JSON — a test asking about the answer's type — so that it is
+    /// held to the same rule as one that arrived on the wire.
+    pub fn new(directory: &str) -> Self {
+        Self {
+            directory: directory.trim_end_matches('/').to_owned(),
+        }
+    }
+
+    /// Whether `path` is inside this Subtree.
+    ///
+    /// Everything is inside the root. Otherwise `path` has to continue past
+    /// the directory with a separator, which is the whole of what keeps `sr`
+    /// from matching `src/lib.rs` — and what keeps the directory out of its
+    /// own Subtree, since `src` does not continue past `src` at all.
+    pub fn contains(&self, path: &str) -> bool {
+        self.directory.is_empty()
+            || path
+                .strip_prefix(&self.directory)
+                .is_some_and(|rest| rest.starts_with('/'))
+    }
+}
+
+/// Reading an argument is normalising it, so no handler trims a slash.
+impl<'de> Deserialize<'de> for Subtree {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // `Cow` for `Cursor`'s reason: the arguments arrive as a parsed
+        // `serde_json::Value`, with nothing to borrow from.
+        let text = Cow::<str>::deserialize(deserializer)?;
+        Ok(Self::new(&text))
+    }
+}
+
+/// The rule, where an agent reads it, written once for every tool that takes
+/// a directory.
+///
+/// It says "all of it" rather than "the whole archive" or "the whole
+/// comparison", because it is one sentence for both and each tool's own
+/// description already says what it lists.
+impl JsonSchema for Subtree {
+    fn schema_name() -> Cow<'static, str> {
+        "Subtree".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::Subtree").into()
+    }
+
+    /// Inline rather than a `$ref`, for [`Limit`]'s reason.
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "description": "\
+                Only what is inside this directory, one level or many: `src`, or \
+                `src/util`. A trailing slash is allowed and makes no difference. \
+                It names a directory and is not matched by characters, so `sr` does \
+                not narrow to `src/`, and the directory itself is not in its own \
+                subtree. Omit it, or pass `/`, for all of it. A path with nothing \
+                under it is an empty page rather than an error: a file, or a \
+                directory that is not there.",
+        })
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The other half: one blob, cut loudly
