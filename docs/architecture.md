@@ -24,7 +24,8 @@ src/search/         hits(registry, query, limit) -> Vec<Hit>, best match first
 src/document/       what the three above share: host check, adapters, fixtures, cap
 src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, caps
 src/store/          DiffStore: get(&DiffKey) / put(entry), inside a budget
-src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs
+src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs;
+                    and the arguments that narrow a sequence, Subtree included
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
 src/error.rs        Failure, the two channels, the code each earns, redaction
@@ -719,6 +720,18 @@ tool inherits them by naming the type. `Cursor` deserialises by decoding, so a
 cursor that is not ours is `-32602` before a handler runs, the same way a
 `DiffHandle` is.
 
+`page::Subtree` is the fourth, and the one that is not about the ceiling. It
+is the directory whose subtree a caller asked for: `get_diff_tree`'s `path`
+and `list_package_files`' `prefix`. This module owns its rule — a trailing
+slash makes no difference, a directory is matched at the separator rather
+than by characters, a directory is not in its own subtree, and `/` and `""`
+are the root. The type normalises the directory once, as it is read, and
+writes the rule into its schema, so neither handler trims or appends a slash
+and both tools show one description. Each tool used to carry its own copy,
+and the two copies disagreed about `/` (#97). It lives here rather than in a
+module of its own because this is where the arguments that write their own
+schema already are, and ADR 0013 turned down a module for one function.
+
 The `Excerpt` a blob-shaped tool returns is flattened into that tool's own
 output, so `text`, `truncated` and `bytes` are fields of the answer rather
 than a nested object. Their descriptions reach a model that way, which is why
@@ -739,7 +752,8 @@ Page is a slice of a sequence and a cursor names a position in it, so the
 tree is walked into a flat list of nodes — each carrying its whole path,
 a directory immediately before what is under it — and handed here exactly as
 a file listing is. `path`, `depth` and `status` are how a caller asks for
-part of it, and they narrow the sequence before this module sees it. See
+part of it, and they narrow the sequence before `paginate` sees it — `path`
+included, though its type is this module's `Subtree`. See
 [ADR 0012](adr/0012-a-tree-is-paged-as-a-flat-sequence.md).
 
 Three things a caller does not do: count bytes, encode a cursor, or decide

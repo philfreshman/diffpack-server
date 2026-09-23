@@ -5,11 +5,11 @@
 //! client, so every tool that returns a list, a tree, a file or a patch has
 //! to stay under it. This module is the one place that knows the number.
 //!
-//! It also owns the arguments a caller narrows a sequence with before any of
-//! it is paged: where to resume, how many to take, and which directory's
-//! [`Subtree`] to walk. Each carries a rule an agent has to read, so each is a
-//! type that writes its own schema, and the module that owns the rule is the
-//! one that writes it.
+//! It also owns the arguments a caller shapes an answer with: where to
+//! resume, how many items to take, how many bytes of a blob, and which
+//! directory's [`Subtree`] to walk. Each carries a rule an agent has to read,
+//! so each is a type that writes its own schema, and the module that owns the
+//! rule is the one that writes it.
 
 use std::borrow::Cow;
 
@@ -187,16 +187,18 @@ fn measure<T: Serialize>(item: &T) -> Result<usize, Failure> {
 }
 
 // ---------------------------------------------------------------------------
-// The two arguments an agent sees
+// The arguments an agent sees for the ceiling
 // ---------------------------------------------------------------------------
 //
-// `limit` and `cursor` are the whole of this module's surface on the wire, and
-// they arrive as tool arguments. They are types rather than a `u32` and a
-// `String` for the same reason `Registry` is a type and not a string: the
-// schema a tool declares is where an agent reads the rule, so the module that
-// owns the rule has to be the one that writes the schema. A tool spelling out
-// `limit: Option<u32>` with a sentence about the default would be naming the
-// number again, in the one copy no test compares against `MAX_LIMIT`.
+// `limit`, `cursor` and `max_bytes` are the ceiling's whole surface on the
+// wire, and they arrive as tool arguments. (The `Subtree` further down is
+// this module's too, and is not about the ceiling; it says so where it is.)
+// They are types rather than a `u32` and a `String` for the same reason
+// `Registry` is a type and not a string: the schema a tool declares is where
+// an agent reads the rule, so the module that owns the rule has to be the one
+// that writes the schema. A tool spelling out `limit: Option<u32>` with a
+// sentence about the default would be naming the number again, in the one
+// copy no test compares against `MAX_LIMIT`.
 
 /// How many items one page was asked for.
 ///
