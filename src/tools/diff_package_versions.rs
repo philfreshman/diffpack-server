@@ -48,7 +48,7 @@
 //!
 //! [`Comparison::file_patch`] — one file's patch out of it, for
 //! `get_file_diff` and the `diffpack://diff/{handle}/file/{path}` resource.
-//! The stored patch, a directory refused out of the tree, both versions'
+//! A directory refused out of the tree, the stored patch, both versions'
 //! files only for a file with neither, and the file rendered through the same
 //! lookup the pre-render in [`compare`] uses. Before #93 the two callers each
 //! wrote those steps out, in the same order, and the resource did it through
@@ -500,11 +500,15 @@ impl Comparison {
     /// that ask: `get_file_diff` and the `diffpack://diff/{handle}/file/{path}`
     /// resource. Behind it, in this order:
     ///
-    /// 1. The patch this comparison is already holding for the file, where it
+    /// 1. A path the tree says is a directory in either version is refused.
+    ///    The tree is on every comparison and already says what the path is,
+    ///    so two downloads would only say it again. First, and before the
+    ///    stored patch, because of the one path that is a file in one version
+    ///    and a directory in the other: the tree calls it a file, the entry
+    ///    holds a patch for it, and serving that patch is the answer a fresh
+    ///    comparison refuses (see [`directory_in_tree`]).
+    /// 2. The patch this comparison is already holding for the file, where it
     ///    was remembered with one. A warm call that gets one fetches nothing.
-    /// 2. A directory the tree names is refused. A directory never has a
-    ///    patch, so the first step answers nothing for one, and the tree
-    ///    already says what it is — two downloads would only say it again.
     /// 3. Both versions' files, downloaded now if this comparison was
     ///    remembered without them, and the file rendered out of them. A
     ///    directory the tree does not have, the one a rename emptied, is
@@ -528,6 +532,11 @@ impl Comparison {
         call: &Call,
         asked: OneFile<'_>,
     ) -> Result<get_file_diff::Patch, Failure> {
+        let from_path = asked.old_path.unwrap_or(asked.path);
+        refuse_directory(self.handle.inputs(), asked.path, from_path, |end, path| {
+            directory_in_tree(&self.tree, end, path)
+        })?;
+
         if let Some(patch) = self.stored(asked.path, asked.old_path) {
             return Ok(get_file_diff::presented(patch, &asked));
         }
@@ -558,12 +567,12 @@ impl Comparison {
     /// The file at `path` rendered from both versions, diffed from
     /// `old_path` in the first where the caller named one.
     ///
-    /// A directory is refused twice over, and on purpose. The tree is asked
-    /// first, because it is here on every comparison and asking it costs no
-    /// download. The file maps are asked again once they are in hand, for the
-    /// directory the tree does not have: the engine drops one with nothing
-    /// under it, which is what a rename leaves of the directory it moved out
-    /// of.
+    /// A directory is refused here a second time, and on purpose.
+    /// [`Comparison::file_patch`] has already asked the tree, because asking
+    /// it costs no download. The file maps are asked again once they are in
+    /// hand, for the directory the tree does not have: the engine drops one
+    /// with nothing under it, which is what a rename leaves of the directory
+    /// it moved out of.
     async fn rendered(
         &self,
         call: &Call,
@@ -572,18 +581,6 @@ impl Comparison {
     ) -> Result<Patch, Failure> {
         let inputs = self.handle.inputs();
         let from_path = old_path.unwrap_or(path);
-
-        refuse_directory(inputs, path, from_path, |end, path| {
-            get_diff_tree::node_at(&self.tree, path).is_some_and(|node| {
-                // A directory's status says which versions have it: `added`
-                // is the second alone and `removed` the first alone.
-                let absent = match end {
-                    End::From => DiffStatus::Added,
-                    End::To => DiffStatus::Removed,
-                };
-                matches!(node.file_type, FileType::Directory) && node.status != absent
-            })
-        })?;
 
         let fetched;
         let files = match &self.files {
@@ -619,6 +616,41 @@ impl Versions {
     }
 }
 
+/// Whether `tree` says `path` is a directory in the version `end` names.
+///
+/// A directory's status says which versions have it: `added` is the second
+/// alone and `removed` the first alone, so a directory node is a directory in
+/// `end` unless its status is the one that leaves `end` out.
+///
+/// A file node can say it too, and that is the one surprise here. The engine
+/// keeps one node per path, so where a path is a file in one version and a
+/// directory in the other the two collide. Compared from the file, the tree
+/// calls the path a file that only the first version has, and puts the
+/// directory's contents beneath it as its children: a real file never has
+/// any. So a file node with children, whose status leaves `end` out, is a
+/// directory in `end`. Compared from the directory, the tree calls the path a
+/// directory and has lost the file, and the first rule already answers.
+/// Until the engine can hold both at one path this is the reading that makes
+/// the tree agree with the file maps; see `docs/architecture.md` on
+/// `src/engine.rs`.
+fn directory_in_tree(tree: &DiffFileEntry, end: End, path: &str) -> bool {
+    let Some(node) = get_diff_tree::node_at(tree, path) else {
+        return false;
+    };
+
+    let absent = match end {
+        End::From => DiffStatus::Added,
+        End::To => DiffStatus::Removed,
+    };
+
+    match node.file_type {
+        FileType::Directory => node.status != absent,
+        FileType::File => {
+            node.status == absent && node.children.as_ref().is_some_and(|children| !children.is_empty())
+        }
+    }
+}
+
 /// The refusal for a caller that named a directory, if it did.
 ///
 /// A directory has no content, so the engine reads one as absent on both
@@ -627,11 +659,17 @@ impl Versions {
 /// nothing in the answer to doubt it with — the failure `get_file_content`
 /// refuses a directory to avoid.
 ///
+/// A path that is a directory in *either* version is refused, including the
+/// one that is a file in the other (#103). That is the rule `get_file_diff`
+/// stated before #93, and it is the only one that can be the same answer
+/// both ways round: compared from the directory, the tree has no file at the
+/// path to serve a patch for.
+///
 /// `is_directory` is where the answer comes from, because there are two
 /// places to ask and the refusal must not depend on which one answered: the
-/// tree, before anything is downloaded, and the file maps, once they are in
-/// hand. The second version first, because that is the one a caller's path
-/// usually names.
+/// tree, before anything is downloaded ([`directory_in_tree`]), and the file
+/// maps, once they are in hand. The second version first, because that is
+/// the one a caller's path usually names.
 fn refuse_directory(
     inputs: &Inputs,
     path: &str,

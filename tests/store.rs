@@ -1086,6 +1086,112 @@ async fn a_read_of_a_directory_is_refused_out_of_the_entry_too() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// One path, a file in one version and a directory in the other
+// ---------------------------------------------------------------------------
+//
+// `lib` is a file in `shape` 1.0.0 and a directory in 2.0.0. The engine keeps
+// one node per path, so the tree loses one of the two: compared from 1.0.0 it
+// calls `lib` a removed file with `lib/index.js` beneath it, and compared from
+// 2.0.0 it calls `lib` a removed directory and has no file `lib` at all.
+//
+// A path that is a directory in either version is refused (#103), and the
+// four tests below are the four cells: each direction, cold and warm. A warm
+// one is asked through `ONE_SIDED`, which has `shape` 1.0.0 and not 2.0.0, so
+// it is also held to answering without a download.
+
+/// A path that became a directory is refused when nothing is stored.
+///
+/// The FileMaps say `lib` is a directory in 2.0.0, which is the refusal a
+/// directory gets, and that version is the one named.
+#[tokio::test]
+async fn a_path_that_became_a_directory_is_refused_cold() {
+    let refused = lib_cold("1.0.0", "2.0.0").await;
+
+    is_refused_as_a_directory_in_2(&refused);
+}
+
+/// And it is refused the same way when the comparison is stored.
+///
+/// The case #103 is about. The entry was written with the tree calling `lib`
+/// a removed file, and a removed file has a patch, so this used to serve that
+/// patch where the cold call refuses. The tree calling it a file and also
+/// listing `lib/index.js` beneath it is what says it is a directory in 2.0.0,
+/// and that is known without the archives.
+#[tokio::test]
+async fn a_path_that_became_a_directory_is_refused_warm_without_the_archives() {
+    let served = lib_warm("1.0.0", "2.0.0").await;
+
+    assert_eq!(
+        served,
+        lib_cold("1.0.0", "2.0.0").await,
+        "a stored comparison answers `lib` as a fresh one does, and without \
+         fetching 2.0.0, which this fixture set does not have: got {served}"
+    );
+    is_refused_as_a_directory_in_2(&served);
+}
+
+/// `shape` compared from `from` to `to`.
+fn shape(from: &str, to: &str) -> Value {
+    json!({
+        "registry": "npm",
+        "package": "shape",
+        "from_version": from,
+        "to_version": to,
+    })
+}
+
+/// A handle for `shape` compared from `from` to `to`, minted in a store that
+/// is dropped straight after.
+async fn shape_handle(from: &str, to: &str) -> Value {
+    let minted = Memory::new();
+    let diffed = call(|| minted.store(), shape(from, to)).await;
+
+    diffed["structuredContent"]["handle"].clone()
+}
+
+/// What `get_file_diff` answers for `lib` with nothing stored.
+async fn lib_cold(from: &str, to: &str) -> Value {
+    let asked = json!({ "handle": shape_handle(from, to).await, "path": "lib" });
+
+    let cold = Memory::new();
+    call_tool(|| cold.store(), "get_file_diff", asked).await
+}
+
+/// What `get_file_diff` answers for `lib` out of a stored comparison, through
+/// a fixture set that cannot fetch 2.0.0.
+async fn lib_warm(from: &str, to: &str) -> Value {
+    let store = Memory::new();
+    let diffed = call(|| store.store(), shape(from, to)).await;
+    settles(&store, 2).await;
+    let asked = json!({
+        "handle": diffed["structuredContent"]["handle"].clone(),
+        "path": "lib",
+    });
+
+    one_sided(|| store.store(), "get_file_diff", asked).await
+}
+
+/// Assert `answer` is the refusal for `lib` being a directory in 2.0.0.
+///
+/// The version is the part worth holding: whichever way round `shape` is
+/// compared, 2.0.0 is the one with the directory.
+fn is_refused_as_a_directory_in_2(answer: &Value) {
+    assert_eq!(
+        answer["isError"],
+        json!(true),
+        "`lib` is a directory in 2.0.0, so it has no patch: got {answer}"
+    );
+
+    let message = answer["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a tool error carries text for the model, got {answer}"));
+    assert!(
+        message.contains("`lib`") && message.contains("2.0.0") && message.contains("directory"),
+        "the refusal names the path and the version it is a directory in: got {message}"
+    );
+}
+
 /// A file the entry has no patch for is rendered, one file at a time.
 ///
 /// Why the redeem asks for the file rather than trusting the entry as a

@@ -9,8 +9,8 @@
 //!
 //! That includes not rendering it at all. What answers is
 //! [`diff_package_versions::Comparison::file_patch`], the one question both
-//! of them ask: the patch a remembered comparison already holds, a directory
-//! refused out of the tree, and both archives only for a file with neither.
+//! of them ask: a directory refused out of the tree, the patch a remembered
+//! comparison already holds, and both archives only for a file with neither.
 //! A read that downloaded where a call did not would be the two disagreeing
 //! about what the cache is for, and asking one function is what makes that a
 //! thing that cannot happen rather than two call sites kept in step.
