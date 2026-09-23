@@ -28,7 +28,7 @@ mod common;
 use common::{Client, FIXTURES};
 use diffpack_server::error::Failure;
 use diffpack_server::page;
-use diffpack_server::registry::Registry;
+use diffpack_server::registry::{Registry, VersionName};
 use diffpack_server::tools::list_package_files::{Args, Entry, EntryType, ListPackageFiles};
 use diffpack_server::tools::Tool;
 use diffpack_server::tools::{Call, Ctx};
@@ -676,7 +676,7 @@ async fn the_handler_answers_with_typed_entries() {
         Args {
             registry: Registry::Crates,
             package: "serde".to_owned(),
-            version: "1.0.0".to_owned(),
+            version: VersionName::new("1.0.0"),
             // Read from JSON, the way the wire reads it: a Subtree has no
             // other way in, so a hand-built one is held to the same rule.
             prefix: serde_json::from_value(json!("src")).expect("a directory"),
@@ -713,7 +713,7 @@ async fn the_handler_returns_the_failure_that_names_what_was_not_found() {
         Args {
             registry: Registry::Npm,
             package: "zod".to_owned(),
-            version: "99.99.99".to_owned(),
+            version: VersionName::new("99.99.99"),
             prefix: None,
             cursor: None,
             limit: None,

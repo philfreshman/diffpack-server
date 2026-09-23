@@ -719,9 +719,82 @@ impl JsonSchema for Registry {
 /// given [`Registry::name_rule`] and left to guess whether a range works will
 /// try one, and a range that resolved to something would be this server
 /// picking a version on a user's behalf.
+///
+/// It is also the whole description of every version argument a tool takes,
+/// through [`VersionName`], so an agent reads the same sentence in a schema
+/// and in `diffpack://registries`.
 pub const VERSION_RULE: &str = "A version is one published version, spelled the way the \
                                 registry spells it: not a range, not a tag, and nothing \
                                 normalised — `v4.0.0` and `4.0.0` are different versions.";
+
+// ---------------------------------------------------------------------------
+// The arguments an agent spells a package and a version in
+// ---------------------------------------------------------------------------
+//
+// Every tool but the two that take a handle asks for a package, and four ask
+// for a version. They were `String`s with a sentence each, and the sentences
+// were copies of the rules above — five of one, four of the other — which had
+// drifted from them: none said that a `v` is part of a version. They are
+// types for `Registry`'s reason and `page::Limit`'s: the schema is where an
+// agent reads the rule, so the module that owns the rule writes the schema,
+// and a tool names the type and cannot say anything else.
+//
+// Neither checks anything. A name rule is told, not enforced: the registry
+// decides what exists, and a value tidied or refused here would be this
+// server deciding it instead.
+
+/// A version, exactly as a caller spelled it.
+///
+/// Taken as given and handed on as given, `v` and all. What makes it a type
+/// rather than a `String` is the schema, which is [`VERSION_RULE`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct VersionName(String);
+
+impl VersionName {
+    /// A version as a caller spelled it, for the caller that builds one
+    /// rather than reading one off the wire.
+    pub fn new(version: impl Into<String>) -> Self {
+        Self(version.into())
+    }
+
+    /// The version, as it arrived.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<VersionName> for String {
+    fn from(version: VersionName) -> Self {
+        version.0
+    }
+}
+
+/// The version rule, where an agent reads it.
+///
+/// [`VERSION_RULE`] itself rather than a sentence beside it, so the schema and
+/// `diffpack://registries` cannot say two things.
+impl JsonSchema for VersionName {
+    fn schema_name() -> Cow<'static, str> {
+        "VersionName".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::VersionName").into()
+    }
+
+    /// Inline rather than a `$ref`, for [`Registry`]'s reason.
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "description": VERSION_RULE,
+        })
+    }
+}
 
 /// Where a package's versions are listed.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -29,6 +29,7 @@
 mod common;
 
 use common::Client;
+use diffpack_server::registry;
 use serde_json::{json, Value};
 
 /// The tools the `tools!` list in `src/tools/mod.rs` declares, in the order
@@ -170,6 +171,47 @@ async fn every_registry_argument_is_the_enum_the_registry_module_owns() {
     );
 }
 
+/// Every version argument says what a version is, in the words
+/// `src/registry.rs` owns.
+///
+/// The version rule is one sentence for every registry, and the schema is
+/// where an agent reads it before it sends a range or trims a `v`. A tool
+/// that wrote its own sentence would be one more copy of it, and the four
+/// there used to be had all dropped the part about the `v`. Over every tool
+/// and every argument that names a version, `from_version` and `to_version`
+/// included, because the copy that gets made is in the next tool written.
+#[tokio::test]
+async fn every_version_argument_states_the_version_rule() {
+    let mut asked = 0;
+
+    for tool in Client::fixture().tools().await {
+        let name = named(&tool);
+        for (field, schema) in arguments(&tool) {
+            if field != "version" && !field.ends_with("_version") {
+                continue;
+            }
+
+            asked += 1;
+            let said = schema["description"].as_str().unwrap_or_default();
+            assert!(
+                said.contains(registry::VERSION_RULE),
+                "`{name}`'s `{field}` should state the version rule, got {schema}"
+            );
+            assert!(
+                said.contains("`v4.0.0` and `4.0.0` are different versions"),
+                "`{name}`'s `{field}` should say that a `v` is part of a \
+                 version, got {schema}"
+            );
+        }
+    }
+
+    assert!(
+        asked >= 5,
+        "four tools take a version and one takes two, so finding {asked} \
+         means this walked the wrong field"
+    );
+}
+
 /// Nothing an agent reads names a Rust path.
 ///
 /// Every `description` in a tool's definition reaches a model, and one saying
@@ -212,6 +254,19 @@ fn names(tools: &[Value]) -> Vec<&str> {
 /// name the entry it was about.
 fn named(tool: &Value) -> &str {
     tool["name"].as_str().unwrap_or("<unnamed>")
+}
+
+/// A listed tool's arguments, each by name beside its schema.
+fn arguments(tool: &Value) -> Vec<(&str, &Value)> {
+    tool["inputSchema"]["properties"]
+        .as_object()
+        .map(|properties| {
+            properties
+                .iter()
+                .map(|(field, schema)| (field.as_str(), schema))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Every `description` anywhere in `value`, however deeply nested.

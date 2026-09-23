@@ -91,6 +91,11 @@
 //! and that a handle whose halves disagree is refused. A sentence here would
 //! *replace* that rather than add to it, which is how the tool that mints a
 //! handle ends up describing it differently from the three that take one.
+//!
+//! `from_version` and `to_version` have none either, for the same reason:
+//! [`crate::registry`] writes their description from the version rule, the
+//! one every tool that takes a version shows. What tells the two apart is
+//! their names and the tool's description, which says that order matters.
 
 use std::collections::BTreeMap;
 
@@ -102,7 +107,7 @@ use crate::archive::{At, FileMap};
 use crate::engine::{self, DiffFileEntry, DiffStatus, FileType, Patch};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
-use crate::registry::Registry;
+use crate::registry::{Registry, VersionName};
 use crate::resources;
 use crate::store::Entry;
 use crate::tools::get_file_diff::{self, OneFile};
@@ -139,14 +144,12 @@ pub struct Args {
     /// `zod`, `@types/node`, `serde`.
     pub package: String,
 
-    /// The version to compare from — the older one, normally. Spelled the
-    /// way the registry spells it: `4.0.0`. Not a range, not a tag.
-    pub from_version: String,
+    // No doc comment on either, on purpose: see the module header. Which way
+    // round they go is in the tool's description, where an agent reads it
+    // before it reads either field.
+    pub from_version: VersionName,
 
-    /// The version to compare to. Order matters: comparing `1.0.0` to
-    /// `2.0.0` is not the same as comparing `2.0.0` to `1.0.0`, and the two
-    /// have different identifiers.
-    pub to_version: String,
+    pub to_version: VersionName,
 
     /// How alike a removed file and an added file must be before the pair is
     /// reported as one renamed file, from `0` to `1`. Lower it to find
@@ -807,8 +810,8 @@ impl Tool for DiffPackageVersions {
         let handle = DiffHandle::mint(Inputs {
             registry: args.registry,
             package: args.package,
-            from_version: args.from_version,
-            to_version: args.to_version,
+            from_version: args.from_version.into(),
+            to_version: args.to_version.into(),
             similarity_threshold: args.similarity_threshold,
             ignore_whitespace: args.ignore_whitespace,
         });
