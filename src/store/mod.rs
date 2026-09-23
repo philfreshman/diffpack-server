@@ -49,6 +49,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cache_key::DiffKey;
 use crate::engine::{DiffFileEntry, Patch};
+use crate::error::Failure;
 use crate::log::{Note, Sink};
 
 /// One cached diff result: what a caller puts, and what it gets back.
@@ -226,25 +227,93 @@ enum Presence {
     Unknown,
 }
 
-/// Where a store's blobs actually live.
-///
-/// Variants rather than a trait, for the reason [ADR
-/// 0004](../docs/adr/0004-one-registry-module.md) gives: none of them can
-/// arrive from outside this crate, so the extensibility a trait buys has no
-/// buyer.
+/// Whether a store has anywhere to keep blobs at all.
 enum Source {
-    /// The blob store this project owns, which is what production writes to.
-    Live(blob::Api),
-
-    /// This process's own memory, which is what the suite writes to.
-    Memory(Memory),
+    /// Somewhere to keep them, which can still fail any one thing it is
+    /// asked.
+    Blobs(Blobs),
 
     /// No store at all, naming what could not be reached.
     ///
     /// Not a failure mode invented for the suite: it is what a deployment
     /// missing its credentials gets, and the server it produces is the
     /// server that existed before #21 — correct, and slower.
+    ///
+    /// Not a third adapter either. It gives up before it asks: there is no
+    /// operation to have failed, so what it says is why there is no store
+    /// rather than what it was about to do.
     Unavailable(&'static str),
+}
+
+/// Where a store's blobs actually live, and the five things it is asked of
+/// them.
+///
+/// The seam between this module's policy and the two adapters under it.
+/// Every operation answers or fails and does nothing else: what a failure
+/// means — a Note, then a miss, a write abandoned or a listing not taken — is
+/// [`DiffStore`]'s, and it is decided once, in [`DiffStore::answered`],
+/// rather than once per adapter. So a failure [`Memory`] is told to stage
+/// reaches the same line of policy a failure of the real store does, which
+/// is what lets the suite reach the budget's failure branches at the wire.
+///
+/// An enum rather than a trait, and not for [ADR
+/// 0004](../docs/adr/0004-one-registry-module.md)'s reason alone. A trait the
+/// store could hold either adapter through is a `dyn` over `async` methods,
+/// which is a boxed future on every call or a dependency to write one for
+/// us; and neither adapter can arrive from outside this module, which is the
+/// half of 0004's case that does carry over. The methods below only
+/// dispatch, so a third adapter would be one arm in each and no policy.
+enum Blobs {
+    /// The blob store this project owns, which is what production writes to.
+    Live(blob::Api),
+
+    /// This process's own memory, which is what the suite writes to.
+    Memory(Memory),
+}
+
+impl Blobs {
+    /// Every blob under `prefix`.
+    async fn list(&self, prefix: &str) -> Result<Vec<blob::Blob>, Failure> {
+        match self {
+            Self::Live(api) => api.list(prefix).await,
+            Self::Memory(memory) => memory.list(prefix).await,
+        }
+    }
+
+    /// Whether there is a blob at `pathname`.
+    ///
+    /// A `bool` rather than what the real store says about the blob, because
+    /// whether it is there is the whole of what a head is asked for here.
+    async fn head(&self, pathname: &str) -> Result<bool, Failure> {
+        match self {
+            Self::Live(api) => Ok(api.head(pathname).await?.is_some()),
+            Self::Memory(memory) => memory.head(pathname).await,
+        }
+    }
+
+    /// The bytes at `pathname`, or nothing if there is no blob there.
+    async fn read(&self, pathname: &str) -> Result<Option<Vec<u8>>, Failure> {
+        match self {
+            Self::Live(api) => api.read(pathname).await,
+            Self::Memory(memory) => memory.read(pathname).await,
+        }
+    }
+
+    /// Put `bytes` at `pathname`.
+    async fn write(&self, pathname: &str, bytes: Vec<u8>) -> Result<(), Failure> {
+        match self {
+            Self::Live(api) => api.put(pathname, bytes).await,
+            Self::Memory(memory) => memory.write(pathname, bytes).await,
+        }
+    }
+
+    /// Delete every blob at `pathnames`, together.
+    async fn delete(&self, pathnames: &[&str]) -> Result<(), Failure> {
+        match self {
+            Self::Live(api) => api.delete(pathnames).await,
+            Self::Memory(memory) => memory.delete(pathnames).await,
+        }
+    }
 }
 
 impl DiffStore {
@@ -255,7 +324,7 @@ impl DiffStore {
     /// instead of a failure on every call that touches it.
     pub fn live() -> Self {
         let source = match blob::Credentials::from_env() {
-            Ok(credentials) => Source::Live(blob::Api::live(credentials)),
+            Ok(credentials) => Source::Blobs(Blobs::Live(blob::Api::live(credentials))),
             Err(_) => Source::Unavailable(NO_CREDENTIALS),
         };
 
@@ -594,14 +663,8 @@ impl DiffStore {
 
     /// Every blob this store holds, or nothing if it could not say.
     async fn listed(&self) -> Option<Vec<blob::Blob>> {
-        match &self.source {
-            Source::Live(api) => match api.list(&self.prefix).await {
-                Ok(blobs) => Some(blobs),
-                Err(_) => self.gave_up(LISTING),
-            },
-            Source::Memory(memory) => Some(memory.list(&self.prefix).await),
-            Source::Unavailable(why) => self.gave_up(why),
-        }
+        let blobs = self.blobs()?;
+        self.answered(blobs.list(&self.prefix).await, LISTING)
     }
 
     /// Delete every blob at `pathnames`, and say whether they are gone.
@@ -614,26 +677,12 @@ impl DiffStore {
     /// failed are room the store does not have, which is the same mistake as
     /// admitting against a listing that was never taken.
     async fn remove(&self, pathnames: &[&str]) -> bool {
-        match &self.source {
-            Source::Live(api) => match api.delete(pathnames).await {
-                Ok(()) => true,
-                Err(_) => {
-                    self.gave_up::<()>(DELETING);
-                    false
-                }
-            },
-            Source::Memory(memory) => {
-                let gone = memory.delete(pathnames).await;
-                if !gone {
-                    self.gave_up::<()>(DELETING);
-                }
-                gone
-            }
-            Source::Unavailable(why) => {
-                self.gave_up::<()>(why);
-                false
-            }
-        }
+        let Some(blobs) = self.blobs() else {
+            return false;
+        };
+
+        self.answered(blobs.delete(pathnames).await, DELETING)
+            .is_some()
     }
 
     /// Whether this store holds a blob at `pathname`.
@@ -641,37 +690,25 @@ impl DiffStore {
     /// Not [`DiffStore::read`], and the difference is what a head is for: the
     /// question is whether a blob is there, and downloading one to find out
     /// would be paying for an entry's bytes to decide not to write them.
+    ///
+    /// A head is only ever asked on the way to a write, so a failed one says
+    /// the write is what could not be done.
     async fn holds(&self, pathname: &str) -> Presence {
-        match &self.source {
-            Source::Live(api) => match api.head(pathname).await {
-                Ok(Some(_)) => Presence::There,
-                Ok(None) => Presence::Missing,
-                Err(_) => {
-                    self.gave_up::<()>(WRITING);
-                    Presence::Unknown
-                }
-            },
-            Source::Memory(memory) => match memory.holds(pathname) {
-                true => Presence::There,
-                false => Presence::Missing,
-            },
-            Source::Unavailable(why) => {
-                self.gave_up::<()>(why);
-                Presence::Unknown
-            }
+        let Some(blobs) = self.blobs() else {
+            return Presence::Unknown;
+        };
+
+        match self.answered(blobs.head(pathname).await, WRITING) {
+            Some(true) => Presence::There,
+            Some(false) => Presence::Missing,
+            None => Presence::Unknown,
         }
     }
 
     /// The bytes at `pathname`, if the store holds any.
     async fn read(&self, pathname: &str) -> Option<Vec<u8>> {
-        match &self.source {
-            Source::Live(api) => match api.read(pathname).await {
-                Ok(found) => found,
-                Err(_) => self.gave_up(READING),
-            },
-            Source::Memory(memory) => memory.read(pathname),
-            Source::Unavailable(why) => self.gave_up(why),
-        }
+        let blobs = self.blobs()?;
+        self.answered(blobs.read(pathname).await, READING)?
     }
 
     /// Put `bytes` at `pathname`, unless something is already there.
@@ -685,34 +722,44 @@ impl DiffStore {
     /// What makes that happen at all is a read that missed although it
     /// should not have: a lookup that failed, or two invocations working out
     /// the same comparison at once.
+    ///
+    /// A head that could not be answered is not a reason to write either:
+    /// the entry may well be there, and the cost of skipping a write that
+    /// was needed is one more recomputed diff.
     async fn write(&self, pathname: &str, bytes: Vec<u8>) {
-        match &self.source {
-            Source::Live(api) => {
-                match api.head(pathname).await {
-                    Ok(Some(_)) => return,
-                    Ok(None) => {}
-                    // A head that could not be answered is not a reason to
-                    // overwrite: the entry may well be there, and the cost
-                    // of skipping a write that was needed is one more
-                    // recomputed diff.
-                    Err(_) => {
-                        self.gave_up::<()>(WRITING);
-                        return;
-                    }
-                }
+        let Presence::Missing = self.holds(pathname).await else {
+            return;
+        };
 
-                if api.put(pathname, bytes).await.is_err() {
-                    self.gave_up::<()>(WRITING);
-                }
-            }
-            Source::Memory(memory) => {
-                if !memory.holds(pathname) {
-                    memory.write(pathname, bytes).await;
-                }
-            }
-            Source::Unavailable(why) => {
-                self.gave_up::<()>(why);
-            }
+        if let Some(blobs) = self.blobs() {
+            self.answered(blobs.write(pathname, bytes).await, WRITING);
+        }
+    }
+
+    /// The blobs this store keeps, or nothing if it has none — having said
+    /// why.
+    ///
+    /// Where a store that is not there gives up, and it gives up here,
+    /// before anything is asked of it.
+    fn blobs(&self) -> Option<&Blobs> {
+        match &self.source {
+            Source::Blobs(blobs) => Some(blobs),
+            Source::Unavailable(why) => self.gave_up(why),
+        }
+    }
+
+    /// What the blobs answered, or nothing if they failed — having said
+    /// that the cache could not do `doing`.
+    ///
+    /// The one place a failure of the store becomes a Note, whichever
+    /// adapter failed. What each operation above does with the nothing is
+    /// its own: a miss, a write abandoned, a sweep that freed nothing. What
+    /// none of them can do is fail without saying so, or say so differently
+    /// for the real store and for the one the suite stages a failure in.
+    fn answered<T>(&self, answer: Result<T, Failure>, doing: &'static str) -> Option<T> {
+        match answer {
+            Ok(answer) => Some(answer),
+            Err(_) => self.gave_up(doing),
         }
     }
 
@@ -828,8 +875,8 @@ const TOO_BIG: &str = "admitting an entry larger than the whole budget";
 impl std::fmt::Debug for DiffStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let source = match &self.source {
-            Source::Live(_) => "live",
-            Source::Memory(_) => "memory",
+            Source::Blobs(Blobs::Live(_)) => "live",
+            Source::Blobs(Blobs::Memory(_)) => "memory",
             Source::Unavailable(why) => why,
         };
 
@@ -899,6 +946,16 @@ struct Held {
     uploaded_at: String,
 }
 
+/// What an operation a [`Memory`] was told to fail answers with.
+///
+/// Nothing reads it: what the store says about a failure is the policy's,
+/// and it says the same thing whichever adapter failed. It is here because
+/// the real store's failures are `Failure`s, and the seam between the two
+/// answers or fails in one type.
+const STAGED: Failure = Failure::Internal {
+    doing: "failing an operation this store was told to fail",
+};
+
 /// How many blobs this process has taken, across every [`Memory`].
 ///
 /// One counter for all of them, because what it stands in for is a clock and
@@ -965,7 +1022,7 @@ impl Memory {
     /// that could only count the blobs would be pinning where they are and
     /// not what they say.
     pub fn blob(&self, pathname: &str) -> Option<Vec<u8>> {
-        self.read(pathname)
+        Some(self.blobs.lock().ok()?.get(pathname)?.bytes.clone())
     }
 
     /// Lose the blob at `pathname`.
@@ -991,31 +1048,31 @@ impl Memory {
 
     /// The store that writes here, to hand to a [`Ctx`](crate::tools::Ctx).
     pub fn store(&self) -> DiffStore {
-        DiffStore::over(Source::Memory(self.clone()))
+        DiffStore::over(Source::Blobs(Blobs::Memory(self.clone())))
     }
 
-    fn read(&self, pathname: &str) -> Option<Vec<u8>> {
+    async fn read(&self, pathname: &str) -> Result<Option<Vec<u8>>, Failure> {
         if self.lose_reads {
-            return None;
+            return Ok(None);
         }
 
-        Some(self.blobs.lock().ok()?.get(pathname)?.bytes.clone())
+        Ok(self.blob(pathname))
     }
 
     /// Every blob this store holds under `prefix`.
     ///
     /// The three fields a real listing carries and no others, because they
     /// are the three the budget is built on. A store whose reads are lost
-    /// still answers this, for the reason [`Memory::holds`] does: losing a
+    /// still answers this, for the reason [`Memory::head`] does: losing a
     /// download is not forgetting what is there.
-    async fn list(&self, prefix: &str) -> Vec<blob::Blob> {
+    async fn list(&self, prefix: &str) -> Result<Vec<blob::Blob>, Failure> {
         self.stalled().await;
 
         let Ok(blobs) = self.blobs.lock() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
 
-        blobs
+        Ok(blobs
             .iter()
             .filter(|(pathname, _)| pathname.starts_with(prefix))
             .map(|(pathname, held)| blob::Blob {
@@ -1023,15 +1080,15 @@ impl Memory {
                 size: held.bytes.len() as u64,
                 uploaded_at: held.uploaded_at.clone(),
             })
-            .collect()
+            .collect())
     }
 
-    /// Lose every blob at `pathnames`, and say whether they are gone.
+    /// Lose every blob at `pathnames`, or fail.
     ///
     /// The answer a real store gives, because a sweep counts in it. A store
     /// refusing deletes hands out its allowance until there is none left and
-    /// says no from then on, leaving the blobs where they are.
-    async fn delete(&self, pathnames: &[&str]) -> bool {
+    /// fails from then on, leaving the blobs where they are.
+    async fn delete(&self, pathnames: &[&str]) -> Result<(), Failure> {
         self.stalled().await;
 
         if let Some(allowance) = &self.lose_deletes {
@@ -1040,7 +1097,7 @@ impl Memory {
             });
 
             if taken.is_err() {
-                return false;
+                return Err(STAGED);
             }
         }
 
@@ -1050,7 +1107,7 @@ impl Memory {
             }
         }
 
-        true
+        Ok(())
     }
 
     /// Take as long over this as the store was asked to.
@@ -1072,19 +1129,22 @@ impl Memory {
     /// before a put is for: a store whose reads are lost still knows what it
     /// holds, exactly as a blob store whose download failed still answers
     /// this.
-    fn holds(&self, pathname: &str) -> bool {
-        self.blobs
+    async fn head(&self, pathname: &str) -> Result<bool, Failure> {
+        Ok(self
+            .blobs
             .lock()
-            .is_ok_and(|blobs| blobs.contains_key(pathname))
+            .is_ok_and(|blobs| blobs.contains_key(pathname)))
     }
 
-    async fn write(&self, pathname: &str, bytes: Vec<u8>) {
+    async fn write(&self, pathname: &str, bytes: Vec<u8>) -> Result<(), Failure> {
         self.stalled().await;
 
         if let Ok(mut blobs) = self.blobs.lock() {
             let uploaded_at = format!("{:020}", UPLOADS.fetch_add(1, Ordering::Relaxed));
             blobs.insert(pathname.to_owned(), Held { bytes, uploaded_at });
         }
+
+        Ok(())
     }
 }
 
@@ -1160,7 +1220,7 @@ mod tests {
         // Room for three, swept down to two, and a fifth arriving: the three
         // oldest have to go.
         let credentials = blob::Credentials::from_env().expect("the same two variables");
-        let store = DiffStore::over(Source::Live(blob::Api::live(credentials)))
+        let store = DiffStore::over(Source::Blobs(Blobs::Live(blob::Api::live(credentials))))
             .budgeting(3 * entry, 2 * entry)
             .sweeping(&prefix);
 
