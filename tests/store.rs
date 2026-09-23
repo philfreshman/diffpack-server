@@ -26,9 +26,17 @@
 //! A test of the Vercel Blob client. That is #20's, in `src/store/blob.rs`,
 //! against a stub HTTP server, because the client is private to that module.
 //! What is asserted here is the policy above it — which blobs an entry is,
-//! when they are written, what happens when they are too big, and what
-//! happens when the store is not there — and that policy is the same code
-//! whichever adapter is underneath.
+//! when they are written, what happens when they are too big, what happens
+//! when the store fails, and what happens when it is not there.
+//!
+//! That policy sits over one seam inside `src/store/`, five operations that
+//! each answer or fail, and the store here and the real one are its two
+//! adapters. A failure from either becomes a Note in one place above it, so
+//! the store here can be told to fail any of the five
+//! ([`Memory::failing`]) and what a test then watches is the line of policy
+//! a real failure reaches. What is below the seam is not asserted here: the
+//! client, which is #20's, and what only the real service can settle, which
+//! is the one `#[ignore]`d test in `src/store/mod.rs`.
 
 use std::time::{Duration, Instant};
 

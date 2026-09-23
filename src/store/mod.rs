@@ -34,6 +34,18 @@
 //! itself, at every call site, and one of them would decide it differently.
 //! So [`DiffStore::get`] answers `None` and [`DiffStore::put`] answers
 //! nothing, and neither has a `Result` for a caller to handle.
+//!
+//! # The policy, and the blobs under it
+//!
+//! The rules above are policy, and they are written once. Under them is one
+//! seam private to this module — five operations on blobs, list, head, read,
+//! write and delete, each of which answers or fails — and two adapters fill
+//! it: the Vercel Blob client, and a [`Memory`] the suite holds. A failure
+//! from either becomes a Note in one place, so a cache failure not being a
+//! diff failure is kept by one line rather than by every arm that could
+//! fail, and a failure the suite stages is the same failure to the policy as
+//! one the real store has. A store with no credentials is neither adapter: it
+//! has no blobs to ask about, and gives up before it asks.
 
 mod blob;
 
@@ -898,6 +910,11 @@ impl std::fmt::Debug for DiffStore {
 /// Blob-shaped rather than entry-shaped on purpose. The pathnames are the
 /// contract #27 reads a result back from, so a map keyed by anything else
 /// would be a suite that passes while the layout is wrong.
+///
+/// One of the two adapters under the policy, the real store being the other,
+/// and it answers the same five operations. So what a test drives through
+/// it is the policy production runs — its failures included, because it can
+/// be told to fail any of the five ([`Memory::failing`]).
 #[derive(Debug, Clone, Default)]
 pub struct Memory {
     blobs: Arc<Mutex<BTreeMap<String, Held>>>,
@@ -1209,12 +1226,18 @@ impl Memory {
 // ADR 0003 keeps that client private to this module, so there is nowhere
 // outside it to write this from.
 //
-// Everything the sweep decides is proven at the wire in `tests/store.rs`,
-// against a store that keeps its blobs in this process. What that cannot
-// state is the half the store owns: that a real `uploadedAt` sorts the way
-// this code assumes, that a real `size` is the number the budget is counted
-// in, and that a blob a delete took is gone from a later listing. Those are
-// facts about somebody else's service, and only it can settle them.
+// What the sweep decides is proven at the wire in `tests/store.rs`, against
+// a store that keeps its blobs in this process. That includes what it
+// decides when the store fails — a listing that could not be taken, a
+// delete that did not happen — because the store there can be told to fail
+// any of the five operations, and a failure from either adapter reaches the
+// policy through the one line in `DiffStore::answered`.
+//
+// What that cannot state is the half the store owns: that a real
+// `uploadedAt` sorts the way this code assumes, that a real `size` is the
+// number the budget is counted in, and that a blob a delete took is gone
+// from a later listing. Those are facts about somebody else's service, and
+// only it can settle them.
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
