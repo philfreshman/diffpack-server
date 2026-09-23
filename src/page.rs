@@ -552,9 +552,9 @@ impl JsonSchema for Subtree {
                 `src/util`. A trailing slash is allowed and makes no difference. \
                 It names a directory and is not matched by characters, so `sr` does \
                 not narrow to `src/`, and the directory itself is not in its own \
-                subtree. Omit it, or pass `/`, for all of it. A path with nothing \
-                under it is an empty page rather than an error: a file, or a \
-                directory that is not there.",
+                subtree. Omit it, or pass `/` or an empty string, for all of it. \
+                A path with nothing under it is an empty page rather than an \
+                error: a file, or a directory that is not there.",
         })
     }
 }

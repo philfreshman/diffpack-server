@@ -127,7 +127,7 @@ async fn the_handle_this_tool_takes_is_described_by_the_module_that_mints_it() {
 /// Two tools take a directory whose subtree is asked for, and when each wrote
 /// its own description the two answered `/` differently (#97). So the schema
 /// an agent reads for either argument is one schema, and it says what `/`
-/// means rather than leaving it to be guessed from "omit it".
+/// and `""` mean rather than leaving it to be guessed from "omit it".
 #[tokio::test]
 async fn the_path_this_tool_takes_is_described_the_way_a_prefix_is() {
     let path = listed(TOOL).await["inputSchema"]["properties"]["path"].clone();
@@ -140,8 +140,8 @@ async fn the_path_this_tool_takes_is_described_the_way_a_prefix_is() {
     assert!(
         path["description"]
             .as_str()
-            .is_some_and(|said| said.contains("`/`")),
-        "the description says what `/` asks for, got {path}"
+            .is_some_and(|said| said.contains("`/`") && said.contains("empty string")),
+        "the description says what `/` and `\"\"` ask for, got {path}"
     );
 }
 
