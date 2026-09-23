@@ -735,35 +735,33 @@ async fn call_without_a_store(log: &Capture, tool: &str, arguments: Value) -> Va
 
 /// Call `tool` through the endpoint, against `store`.
 ///
-/// A fresh context per request, the way the factory in `src/router.rs` builds
-/// one: the phases a line reports are that call's, and a context cloned
-/// across two calls would put the first one's fetches in the second one's
-/// window.
+/// A context of its own for the one call, so the store is the only thing two
+/// calls share and only when a test hands them the same one. What a line
+/// reports would be that call's either way: the tally is made when the call
+/// starts, not when its context is built, and the two tests above that make
+/// two calls through one context are what hold that.
 async fn calling(log: &Capture, store: Store, tool: &str, arguments: Value) -> Value {
-    let log = log.clone();
+    let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
+    let ctx = match store {
+        Store::Fresh => ctx,
+        Store::Held(memory) => ctx.storing_in(memory.store()),
+        // Left writing to stderr, which is the store's own default and where
+        // its notes go in production. A store pointed at this buffer would
+        // put a note in it for every lookup it could not make, and `one`
+        // counts what is in the buffer — so the suite that asserts one call
+        // leaves one line would be reading the note instead. What a store
+        // says it could not do is `tests/store.rs`'s question.
+        Store::Absent => ctx.storing_in(DiffStore::unavailable()),
+    };
 
-    Client::building(move || {
-        let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
-        match &store {
-            Store::Fresh => ctx,
-            Store::Held(memory) => ctx.storing_in(memory.store()),
-            // Left writing to stderr, which is the store's own default and
-            // where its notes go in production. A store pointed at this
-            // buffer would put a note in it for every lookup it could not
-            // make, and `one` counts what is in the buffer — so the suite
-            // that asserts one call leaves one line would be reading the note
-            // instead. What a store says it could not do is
-            // `tests/store.rs`'s question.
-            Store::Absent => ctx.storing_in(DiffStore::unavailable()),
-        }
-    })
-    .post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": { "name": tool, "arguments": arguments },
-    }))
-    .await
+    Client::over(ctx)
+        .post(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": tool, "arguments": arguments },
+        }))
+        .await
 }
 
 /// The pair the cache outcome is driven with.
