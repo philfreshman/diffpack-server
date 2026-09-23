@@ -51,7 +51,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Failure;
 use crate::page::{self, Page};
 use crate::registry::Registry;
-use crate::tools::{Ctx, Tool};
+use crate::tools::{Call, Tool};
 
 /// The tool.
 pub struct ListPackageVersions;
@@ -157,8 +157,8 @@ impl Tool for ListPackageVersions {
     type Args = Args;
     type Output = Output;
 
-    async fn call(args: Args, ctx: &Ctx) -> Result<Output, Failure> {
-        let listed = ctx.catalogue().versions(args.registry, &args.package).await?;
+    async fn call(args: Args, call: &Call) -> Result<Output, Failure> {
+        let listed = call.catalogue().versions(args.registry, &args.package).await?;
 
         let versions: Vec<Version> = listed
             .all

@@ -110,7 +110,7 @@ use crate::engine;
 use crate::error::Failure;
 use crate::handle::DiffHandle;
 use crate::page::{self, Excerpt};
-use crate::tools::{diff_package_versions, Ctx, Tool};
+use crate::tools::{diff_package_versions, Call, Tool};
 
 /// The tool.
 pub struct GetFileDiff;
@@ -459,10 +459,10 @@ impl Tool for GetFileDiff {
     type Args = Args;
     type Output = Patch;
 
-    async fn call(args: Args, ctx: &Ctx) -> Result<Patch, Failure> {
-        let comparison = diff_package_versions::compare(&args.handle, ctx).await?;
+    async fn call(args: Args, call: &Call) -> Result<Patch, Failure> {
+        let comparison = diff_package_versions::compare(&args.handle, call).await?;
 
-        comparison.file_patch(ctx, args.asked()).await
+        comparison.file_patch(call, args.asked()).await
     }
 }
 

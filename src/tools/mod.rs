@@ -45,7 +45,7 @@
 //!
 //! # What a tool may reach
 //!
-//! [`Ctx`], and nothing else it has to build itself.
+//! The [`Call`] it is handed, and nothing else it has to build itself.
 //! `scripts/check-tool-seams.sh` enforces the rest: a module here cannot name
 //! an HTTP client or the blob store. See
 //! [`docs/architecture.md`](../../docs/architecture.md) and ADR 0002.
@@ -113,10 +113,10 @@ macro_rules! tools {
         async fn dispatch(
             name: &str,
             arguments: Option<JsonObject>,
-            ctx: &Ctx,
+            call: &Call,
         ) -> Result<CallToolResult, Failure> {
             match name {
-                $(<$module::$tool as Tool>::NAME => invoke::<$module::$tool>(arguments, ctx).await,)+
+                $(<$module::$tool as Tool>::NAME => invoke::<$module::$tool>(arguments, call).await,)+
                 unknown => Err(Failure::NoSuchTool {
                     name: unknown.to_owned(),
                 }),
@@ -144,9 +144,10 @@ tools! {
 
 /// What a tool is allowed to reach.
 ///
-/// Built once per request by the service factory in [`crate::router`] and
-/// handed to every handler, so that shared state is cloned in rather than
-/// rebuilt per call or stored somewhere that has to outlive an invocation.
+/// Built once per request by the service factory in [`crate::router`], so
+/// that shared state is cloned in rather than rebuilt per call or stored
+/// somewhere that has to outlive an invocation. A handler is not handed this
+/// but a [`Call`] made from it, which is where the one call's tally lives.
 ///
 /// Four seams today — [`Archive`], which arrived with #11, the first tool
 /// that reads a package's files, [`Catalogue`], which arrived with #18, the
@@ -159,14 +160,13 @@ tools! {
 /// reaching for anything that is neither here nor a pure module has gone
 /// around a seam.
 ///
-/// Beside the seams it carries what the dispatch needs and a handler never
-/// touches: the [`Sink`] the one line per call is written to, the [`Spent`]
-/// that call's phases add up in, and the [`Lookup`] saying what it found in
-/// the store. That is the whole of the difference between what a `Ctx` is for
-/// a handler and what it is for a request — a handler reaches the seams, and
-/// a request is also the line it leaves behind.
+/// Beside the seams it carries the [`Sink`] the one line per call is written
+/// to, which a handler never touches. That is all: everything here outlives
+/// a call, so cloning a `Ctx` shares nothing any call has written. What one
+/// call spent and what it found in the store is the [`Call`]'s, made when
+/// the call starts (#96).
 ///
-/// Each seam is behind an [`Arc`] because this is cloned into every handler
+/// Each seam is behind an [`Arc`] because this is cloned into every call
 /// and an adapter is not free to rebuild: a live one shares the process's
 /// HTTP client and a fixture one is a path it reads from.
 ///
@@ -200,20 +200,10 @@ pub struct Ctx {
     search: Arc<Search>,
     store: Arc<DiffStore>,
     log: Sink,
-
-    /// Where this request's time has gone so far. Behind an [`Arc`] because
-    /// a `Ctx` is cloned into every handler and the phases they spend have
-    /// to add up to one call's.
-    spent: Arc<Spent>,
-
-    /// What this request found in the store. Behind an [`Arc`] for the same
-    /// reason: the lookup is made inside a handler and the line is written
-    /// outside it.
-    lookup: Arc<Lookup>,
 }
 
 impl Ctx {
-    /// What production hands a handler: every seam reaching the registries.
+    /// What production builds: every seam reaching the registries.
     pub fn new() -> Self {
         Self {
             archive: Arc::new(Archive::live()),
@@ -221,12 +211,10 @@ impl Ctx {
             search: Arc::new(Search::live()),
             store: Arc::new(DiffStore::live()),
             log: Sink::default(),
-            spent: Arc::new(Spent::default()),
-            lookup: Arc::new(Lookup::default()),
         }
     }
 
-    /// What the suite hands a handler: every seam reading from `fixtures`.
+    /// What the suite builds: every seam reading from `fixtures`.
     ///
     /// `fixtures` is the root the checked-in sets live under, and each seam
     /// is given its own directory inside it. One argument rather than one per
@@ -246,8 +234,8 @@ impl Ctx {
     /// and readable the way a checked-in set is by the suite that wants to
     /// see what was written ([`Memory`]).
     ///
-    /// The log and the tally are the same here as in production: neither is a
-    /// seam, and a suite that wants the lines back asks for them with
+    /// The log is the same here as in production: it is not a seam, and a
+    /// suite that wants the lines back asks for them with
     /// [`Ctx::logging_to`].
     pub fn fixture(fixtures: impl AsRef<Path>) -> Self {
         let fixtures = fixtures.as_ref();
@@ -257,8 +245,6 @@ impl Ctx {
             search: Arc::new(Search::fixture(fixtures.join("searches"))),
             store: Arc::new(Memory::new().store()),
             log: Sink::default(),
-            spent: Arc::new(Spent::default()),
-            lookup: Arc::new(Lookup::default()),
         }
     }
 
@@ -294,9 +280,8 @@ impl Ctx {
     /// call for fails there instead of going unasserted until the day it is
     /// live.
     ///
-    /// The log, the tally and the lookup are not seams. Nothing outside this
-    /// process is behind any of them, which is the whole of what a seam is
-    /// here.
+    /// The log is not a seam. Nothing outside this process is behind it,
+    /// which is the whole of what a seam is here.
     pub fn seams(&self) -> &'static [&'static str] {
         let Self {
             archive: _,
@@ -304,11 +289,64 @@ impl Ctx {
             search: _,
             store: _,
             log: _,
-            spent: _,
-            lookup: _,
         } = self;
 
         &["archive", "catalogue", "search", "store"]
+    }
+}
+
+impl Default for Ctx {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One call, while it runs: a [`Ctx`]'s seams, and the tally they write into.
+///
+/// What a handler is handed. The seams are the context's, and the tally is
+/// this call's alone: the [`Spent`] its phases add up in, and the [`Lookup`]
+/// saying what it found in the store. Both are made with the call, which is
+/// what makes the line it leaves behind about this call and no other.
+///
+/// # Why the tally is not in the Ctx
+///
+/// It was, until #96, and nothing in production could tell: [ADR
+/// 0008](../../docs/adr/0008-no-sessions.md) means a request is one call and
+/// the factory in [`crate::router`] builds a `Ctx` per request, so a context
+/// and a call lived exactly as long. A `Ctx` cloned across two calls is where
+/// they came apart — a lookup keeps a hit once it has one, so every call
+/// after the first hit said `hit`, and a window measured from the context's
+/// birth put the first call's fetches in the second's. Held here, the tally
+/// cannot be shared: a `Call` is not `Clone`, a handler only borrows one, and
+/// [`Call::new`] is the only way to make one, with a tally of its own.
+///
+/// The context is cloned in rather than borrowed so that a handler's
+/// signature names one type and no lifetime. It is four [`Arc`]s and a
+/// [`Sink`], and cloning it is safe now that it holds nothing a call writes.
+#[derive(Debug)]
+pub struct Call {
+    ctx: Ctx,
+
+    /// Where this call's time has gone so far.
+    spent: Spent,
+
+    /// What this call found in the store.
+    lookup: Lookup,
+}
+
+impl Call {
+    /// A call starting now, reaching `ctx`'s seams.
+    ///
+    /// Public for the two places that run a handler without writing a line:
+    /// [`crate::mcp`]'s resource read, which writes none until #26 says what
+    /// it should hold, and the suites that call a handler directly. A call
+    /// that leaves a line behind is made by `run`, beside [`call`].
+    pub fn new(ctx: &Ctx) -> Self {
+        Self {
+            ctx: ctx.clone(),
+            spent: Spent::new(),
+            lookup: Lookup::default(),
+        }
     }
 
     /// Cached diff results.
@@ -321,13 +359,13 @@ impl Ctx {
     /// operator asks of a slow call.
     ///
     /// Returns the seam with that recording attached rather than the seam
-    /// itself, for the reason [`Ctx::archive`] does: a handler is unchanged
-    /// by it — `ctx.store().get(..)` is the same call it always was — and
+    /// itself, for the reason [`Call::archive`] does: a handler is unchanged
+    /// by it — `call.store().get(..)` is the same call it always was — and
     /// there is no way left to read the store without the line saying what
     /// came back.
     pub fn store(&self) -> Recorded<'_> {
         Recorded {
-            store: &self.store,
+            store: &self.ctx.store,
             lookup: &self.lookup,
         }
     }
@@ -336,10 +374,10 @@ impl Ctx {
     ///
     /// Returns the seam with a stopwatch on it rather than the seam itself,
     /// so that there is no way to read an archive that is not counted. A
-    /// handler is unchanged by it: `ctx.archive().fetch(..)` is the same
+    /// handler is unchanged by it: `call.archive().fetch(..)` is the same
     /// call it always was.
     pub fn archive(&self) -> Timed<'_, Archive> {
-        self.timed(&self.archive)
+        self.timed(&self.ctx.archive)
     }
 
     /// What a package has released.
@@ -350,7 +388,7 @@ impl Ctx {
     /// a call that waited on nobody — which is the reading an operator makes
     /// when the phase is absent.
     pub fn catalogue(&self) -> Timed<'_, Catalogue> {
-        self.timed(&self.catalogue)
+        self.timed(&self.ctx.catalogue)
     }
 
     /// Which packages a registry has.
@@ -361,10 +399,10 @@ impl Ctx {
     /// was, and a search left uncounted would read as a call that waited on
     /// nobody either way.
     pub fn search(&self) -> Timed<'_, Search> {
-        self.timed(&self.search)
+        self.timed(&self.ctx.search)
     }
 
-    /// `seam`, with this request's tally attached.
+    /// `seam`, with this call's tally attached.
     fn timed<'a, S>(&'a self, seam: &'a S) -> Timed<'a, S> {
         Timed {
             seam,
@@ -379,7 +417,7 @@ impl Ctx {
 /// property to something a caller already knows how to use, so that the
 /// property is not a thing each caller has to remember. One wrapper over both
 /// seams rather than one each, because "how long did this call wait on a
-/// registry" is a question about the request and not about which of them
+/// registry" is a question about the call and not about which of them
 /// answered it — two wrappers would be two places for that to drift.
 ///
 /// `Copy`, and each method takes it by value, because of how the one tool
@@ -387,12 +425,12 @@ impl Ctx {
 ///
 /// ```ignore
 /// try_join!(
-///     ctx.archive().fetch(registry, &package, &from),
-///     ctx.archive().fetch(registry, &package, &to),
+///     call.archive().fetch(registry, &package, &from),
+///     call.archive().fetch(registry, &package, &to),
 /// )
 /// ```
 ///
-/// Each `ctx.archive()` there is a temporary that the statement drops while
+/// Each `call.archive()` there is a temporary that the statement drops while
 /// the futures are still running. Taken by reference, the borrow outlives
 /// what it borrows and the tool does not compile; moved into the future, it
 /// is two pointers that go where the work goes. The alternative was a `let`
@@ -416,7 +454,7 @@ impl<S> Clone for Timed<'_, S> {
 
 impl<S> Copy for Timed<'_, S> {}
 
-/// The store, with what a lookup found written on the request.
+/// The store, with what a lookup found written on the call.
 ///
 /// The same shape as [`Timed`] and for the same reason, but not the same
 /// wrapper: what is recorded here is not a duration. A cache read is
@@ -429,8 +467,7 @@ pub struct Recorded<'a> {
 }
 
 impl Recorded<'_> {
-    /// The entry for `key`, and what that lookup found on the request's
-    /// line.
+    /// The entry for `key`, and what that lookup found on the call's line.
     ///
     /// A store that is not there is recorded as that rather than as the miss
     /// it looks like from here. Every `get` on one answers `None`, so a
@@ -452,8 +489,8 @@ impl Recorded<'_> {
     ///
     /// The handle is cloned here rather than by a caller, because writing an
     /// entry outlives the call that produced it: the work goes to the
-    /// runtime's `waitUntil` and the context it came from is gone by the
-    /// time it runs.
+    /// runtime's `waitUntil` and the call it came from is gone by the time
+    /// it runs.
     pub fn put(self, entry: Entry) {
         Arc::clone(self.store).put(entry);
     }
@@ -461,7 +498,7 @@ impl Recorded<'_> {
 
 impl Timed<'_, Archive> {
     /// The files in `version` of `package`, and the time it took on the
-    /// request's tally.
+    /// call's tally.
     pub async fn fetch(
         self,
         registry: Registry,
@@ -476,7 +513,7 @@ impl Timed<'_, Archive> {
 
 impl Timed<'_, Catalogue> {
     /// Every published version of `package`, newest first, the one the
-    /// registry points at, and the time it took on the request's tally.
+    /// registry points at, and the time it took on the call's tally.
     pub async fn versions(self, registry: Registry, package: &str) -> Result<Versions, Failure> {
         self.spent
             .while_fetching(self.seam.versions(registry, package))
@@ -486,7 +523,7 @@ impl Timed<'_, Catalogue> {
 
 impl Timed<'_, Search> {
     /// The packages on `registry` that answer to `query`, at most `limit` of
-    /// them, and the time it took on the request's tally.
+    /// them, and the time it took on the call's tally.
     pub async fn hits(
         self,
         registry: Registry,
@@ -496,12 +533,6 @@ impl Timed<'_, Search> {
         self.spent
             .while_fetching(self.seam.hits(registry, query, limit))
             .await
-    }
-}
-
-impl Default for Ctx {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -546,7 +577,7 @@ pub trait Tool {
     /// what keeps a handler from putting a failure on the wrong channel:
     /// [`call`] decides that once, for every tool, after the line describing
     /// the call has been written.
-    fn call(args: Self::Args, ctx: &Ctx) -> impl Future<Output = Result<Self::Output, Failure>>;
+    fn call(args: Self::Args, call: &Call) -> impl Future<Output = Result<Self::Output, Failure>>;
 
     /// What a client can read next, given this answer.
     ///
@@ -582,14 +613,10 @@ pub async fn call(
     // Summarised before the dispatch, because the dispatch consumes them.
     let line = Line::new(name).about(arguments.as_ref());
 
-    let started = Instant::now();
-    let answer = dispatch(name, arguments, ctx).await;
-    ctx.log.write(
-        &line
-            .taking(started.elapsed(), &ctx.spent)
-            .cached(&ctx.lookup)
-            .ending(&answer),
-    );
+    let answer = run(ctx, line, async |call| {
+        dispatch(name, arguments, call).await
+    })
+    .await;
 
     // The one place a `Failure` is put on its channel. Every path into this
     // function returns one, so there is no arm that can answer without
@@ -598,6 +625,37 @@ pub async fn call(
         Ok(result) => Ok(result),
         Err(failure) => failure.respond(),
     }
+}
+
+/// Run `work` as one call over `ctx`, and write `line` saying what happened.
+///
+/// The call is made here, so its tally starts when the work does and ends
+/// with this function: nothing outside `work` can reach it, and nothing
+/// after the line is written can add to it. That is what makes the line's
+/// phases and its cache outcome this call's and not a neighbour's.
+///
+/// One step rather than the three lines [`call`] used to hold, because a
+/// tool call is not the only thing that will leave a line. A resource read
+/// goes through the same seams and writes none today; #26 decides what its
+/// line holds, and this is what it calls when it does, rather than a copy of
+/// [`call`] with the dispatch swapped out.
+pub(crate) async fn run<T>(
+    ctx: &Ctx,
+    line: Line,
+    work: impl AsyncFnOnce(&Call) -> Result<T, Failure>,
+) -> Result<T, Failure> {
+    let call = Call::new(ctx);
+    let started = Instant::now();
+
+    let answer = work(&call).await;
+    ctx.log.write(
+        &line
+            .taking(started.elapsed(), &call.spent)
+            .cached(&call.lookup)
+            .ending(&answer),
+    );
+
+    answer
 }
 
 /// The definition of `T`, as `tools/list` returns it.
@@ -623,7 +681,7 @@ fn definition<T: Tool>() -> Definition {
 /// [`Failure::respond`] decides which channel it leaves on.
 async fn invoke<T: Tool>(
     arguments: Option<JsonObject>,
-    ctx: &Ctx,
+    call: &Call,
 ) -> Result<CallToolResult, Failure> {
     let args = serde_json::from_value::<T::Args>(arguments.unwrap_or_default().into()).map_err(
         |invalid| Failure::InvalidParams {
@@ -631,7 +689,7 @@ async fn invoke<T: Tool>(
         },
     )?;
 
-    let output = T::call(args, ctx).await?;
+    let output = T::call(args, call).await?;
     let links = T::links(&output);
 
     // A tool whose own output will not serialise is a bug in this crate, not

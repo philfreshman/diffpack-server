@@ -151,13 +151,22 @@ pub struct Phases {
     pub fetch: Option<f64>,
 }
 
-/// Where a request's time goes, while it is still being spent.
+/// Where a call's time goes, while it is still being spent.
 ///
-/// Shared across one request and written from wherever the phase actually
-/// happens — the seam, rather than a timer threaded down through a handler
-/// that would then have to pass it back up. Atomics rather than a lock
-/// because nothing here ever reads a value it is about to write, so there is
-/// no invariant a lock would be protecting.
+/// One per call, held by the [`Call`](crate::tools::Call) a handler is given
+/// and made when that call starts — not when its
+/// [`Ctx`](crate::tools::Ctx) is built, which lives as long as the seams do
+/// and can be cloned across calls. In production the two are the same
+/// moment, because by [ADR 0008](../docs/adr/0008-no-sessions.md) a request
+/// is one call; a context cloned across two calls is where they were not,
+/// and a window measured from the context put the first call's fetches in
+/// the second's (#96).
+///
+/// Written from wherever the phase actually happens — the seam, rather than
+/// a timer threaded down through a handler that would then have to pass it
+/// back up. Atomics rather than a lock because nothing here ever reads a
+/// value it is about to write, so there is no invariant a lock would be
+/// protecting.
 ///
 /// # Why a window and not a sum
 ///
@@ -177,7 +186,7 @@ pub struct Phases {
 /// something does it goes beside this rather than replacing it.
 #[derive(Debug)]
 pub struct Spent {
-    /// When the request started. Every offset below is from here, which is
+    /// When the call started. Every offset below is from here, which is
     /// what lets two of them be compared across threads without an `Instant`
     /// in an atomic.
     started: Instant,
@@ -194,12 +203,12 @@ pub struct Spent {
 }
 
 impl Spent {
-    /// A fresh tally for a request starting now.
+    /// A fresh tally for a call starting now.
     pub fn new() -> Self {
         Self::starting_at(Instant::now())
     }
 
-    /// The same, for a request that started at `started`.
+    /// The same, for a call that started at `started`.
     ///
     /// The seam `tests/log.rs` drives to put two overlapping fetches in by
     /// hand. It is the one thing about this module a call over the wire
@@ -222,7 +231,7 @@ impl Spent {
         self.last.fetch_max(self.offset(ended), Ordering::Relaxed);
     }
 
-    /// Run `work`, and put the window it took on this request's fetch phase.
+    /// Run `work`, and put the window it took on this call's fetch phase.
     ///
     /// What a seam calls, rather than reading the two instants itself. There
     /// is one seam per thing this server fetches and there will be more, and
@@ -249,7 +258,7 @@ impl Spent {
         })
     }
 
-    /// `at`, as microseconds since this request started.
+    /// `at`, as microseconds since this call started.
     ///
     /// Saturating rather than panicking on an instant before the start: a
     /// clock question is not worth failing a request that otherwise worked,
@@ -268,15 +277,17 @@ impl Default for Spent {
 
 /// What a call's lookup in the store found, while the call is still running.
 ///
-/// The cache's half of what [`Spent`] does for time, and shared the same way:
-/// written where the lookup happens rather than reported by the handler that
-/// made it, so that a tool cannot answer out of the store without the line
-/// saying so.
+/// The cache's half of what [`Spent`] does for time, and held the same way:
+/// one per call, in the [`Call`](crate::tools::Call), and written where the
+/// lookup happens rather than reported by the handler that made it, so that
+/// a tool cannot answer out of the store without the line saying so.
 ///
 /// One value per call and not one per lookup. A call asks once today, and a
 /// call that asked twice was either served or not — so a hit wins over a
 /// miss, which is the reading an operator makes of a call that avoided the
-/// downloads.
+/// downloads. It is also why this must never outlive its call: a hit is kept
+/// once there is one, so a value shared with the next call would hand it a
+/// hit it never made, whether or not it asked the store at all (#96).
 #[derive(Debug, Default)]
 pub struct Lookup {
     /// Whether the store was asked at all, which is what tells a tool that
@@ -292,7 +303,7 @@ pub struct Lookup {
     /// built, by whether there were credentials to build a client from, and
     /// is the same answer for every call this instance serves. Kept here
     /// rather than read off the store when the line is written because the
-    /// line is written by the dispatch, which has a `Ctx` and not a store —
+    /// line is written by the step that runs a call and not by the store —
     /// and putting it where the other two are keeps one rule for how this
     /// field is filled in.
     storeless: AtomicBool,

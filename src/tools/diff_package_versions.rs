@@ -106,7 +106,7 @@ use crate::registry::Registry;
 use crate::resources;
 use crate::store::Entry;
 use crate::tools::get_file_diff::{self, OneFile};
-use crate::tools::{get_diff_tree, Ctx, Tool};
+use crate::tools::{get_diff_tree, Call, Tool};
 
 /// The tool.
 pub struct DiffPackageVersions;
@@ -523,14 +523,14 @@ impl Comparison {
     /// one place the two meet, and it is inside the type that holds both.
     pub async fn file_patch(
         &self,
-        ctx: &Ctx,
+        call: &Call,
         asked: OneFile<'_>,
     ) -> Result<get_file_diff::Patch, Failure> {
         if let Some(patch) = self.stored(asked.path, asked.old_path) {
             return Ok(get_file_diff::presented(patch, &asked));
         }
 
-        let rendered = self.rendered(ctx, asked.path, asked.old_path).await?;
+        let rendered = self.rendered(call, asked.path, asked.old_path).await?;
 
         Ok(get_file_diff::presented(&rendered, &asked))
     }
@@ -564,7 +564,7 @@ impl Comparison {
     /// of.
     async fn rendered(
         &self,
-        ctx: &Ctx,
+        call: &Call,
         path: &str,
         old_path: Option<&str>,
     ) -> Result<Patch, Failure> {
@@ -587,7 +587,7 @@ impl Comparison {
         let files = match &self.files {
             Some(files) => files,
             None => {
-                fetched = versions(&self.handle, ctx).await?;
+                fetched = versions(&self.handle, call).await?;
                 &fetched
             }
         };
@@ -659,13 +659,13 @@ fn refuse_directory(
 /// a tool may import. The two downloads do not depend on each other and a
 /// version pair is the only place this server waits on the network twice, so
 /// waiting on them one after the other would double the wait for nothing.
-async fn versions(handle: &DiffHandle, ctx: &Ctx) -> Result<Versions, Failure> {
+async fn versions(handle: &DiffHandle, call: &Call) -> Result<Versions, Failure> {
     let inputs = handle.inputs();
 
     let (from_files, to_files) = try_join!(
-        ctx.archive()
+        call.archive()
             .fetch(inputs.registry, &inputs.package, &inputs.from_version),
-        ctx.archive()
+        call.archive()
             .fetch(inputs.registry, &inputs.package, &inputs.to_version),
     )?;
 
@@ -713,14 +713,14 @@ async fn versions(handle: &DiffHandle, ctx: &Ctx) -> Result<Versions, Failure> {
 /// write that could not be made is a note in the log ([ADR
 /// 0003](../../docs/adr/0003-the-cache-seam-is-a-store.md)). The `Failure`
 /// here is the archive seam's and nothing else's.
-pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failure> {
+pub async fn compare(handle: &DiffHandle, call: &Call) -> Result<Comparison, Failure> {
     let key = handle.key();
 
     // Everything below the cache is the same either way, because what is
     // remembered is the tree and not an answer: every caller walks what it
     // wants out of the tree, so a cached comparison and a fresh one cannot
     // differ without the tree differing.
-    if let Some(entry) = ctx.store().get(&key).await {
+    if let Some(entry) = call.store().get(&key).await {
         return Ok(Comparison {
             tree: entry.tree,
             cached: true,
@@ -731,7 +731,7 @@ pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failu
     }
 
     let inputs = handle.inputs();
-    let files = versions(handle, ctx).await?;
+    let files = versions(handle, call).await?;
 
     let tree = engine::build_diff_tree(
         &files.from_files,
@@ -746,7 +746,7 @@ pub async fn compare(handle: &DiffHandle, ctx: &Ctx) -> Result<Comparison, Failu
     // costs two downloads.
     let patches = rendered(&tree, &files, inputs.ignore_whitespace);
 
-    ctx.store().put(Entry {
+    call.store().put(Entry {
         key,
         tree: tree.clone(),
         patches,
@@ -803,7 +803,7 @@ impl Tool for DiffPackageVersions {
         vec![resources::diff::link(&output.handle)]
     }
 
-    async fn call(args: Args, ctx: &Ctx) -> Result<Output, Failure> {
+    async fn call(args: Args, call: &Call) -> Result<Output, Failure> {
         let handle = DiffHandle::mint(Inputs {
             registry: args.registry,
             package: args.package,
@@ -812,7 +812,7 @@ impl Tool for DiffPackageVersions {
             similarity_threshold: args.similarity_threshold,
             ignore_whitespace: args.ignore_whitespace,
         });
-        let comparison = compare(&handle, ctx).await?;
+        let comparison = compare(&handle, call).await?;
 
         // The totals and the sample are walked out of the tree here, on both
         // paths, so a remembered answer and a fresh one cannot differ without

@@ -69,7 +69,7 @@ use crate::engine::{DiffFileEntry, DiffStatus, FileType};
 use crate::error::Failure;
 use crate::handle::DiffHandle;
 use crate::page::{self, Page};
-use crate::tools::{diff_package_versions, Ctx, Tool};
+use crate::tools::{diff_package_versions, Call, Tool};
 
 /// The tool.
 pub struct GetDiffTree;
@@ -364,8 +364,8 @@ impl Tool for GetDiffTree {
     type Args = Args;
     type Output = Page<Node>;
 
-    async fn call(args: Args, ctx: &Ctx) -> Result<Page<Node>, Failure> {
-        let tree = diff_package_versions::compare(&args.handle, ctx).await?.tree;
+    async fn call(args: Args, call: &Call) -> Result<Page<Node>, Failure> {
+        let tree = diff_package_versions::compare(&args.handle, call).await?.tree;
 
         // An absent path is the root, which is what `/` is: the whole
         // comparison. The Subtree has already normalised what was asked for,

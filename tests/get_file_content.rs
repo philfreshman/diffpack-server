@@ -30,8 +30,8 @@ use diffpack_server::error::Failure;
 use diffpack_server::page::{self, Excerpt};
 use diffpack_server::registry::Registry;
 use diffpack_server::tools::get_file_content::{Args, GetFileContent};
-use diffpack_server::tools::Ctx;
 use diffpack_server::tools::Tool;
+use diffpack_server::tools::{Call, Ctx};
 use serde_json::{json, Value};
 
 const TOOL: &str = "get_file_content";
@@ -564,7 +564,7 @@ async fn the_handler_answers_with_a_typed_excerpt() {
             path: "src/lib.rs".to_owned(),
             max_bytes: None,
         },
-        &Ctx::fixture(FIXTURES),
+        &Call::new(&Ctx::fixture(FIXTURES)),
     )
     .await
     .expect("the fixture set has this crate");
@@ -597,7 +597,7 @@ async fn the_handler_returns_the_failure_that_says_the_path_is_a_directory() {
             path: "src".to_owned(),
             max_bytes: None,
         },
-        &Ctx::fixture(FIXTURES),
+        &Call::new(&Ctx::fixture(FIXTURES)),
     )
     .await
     .expect_err("`src` is a directory of this crate's");
@@ -622,7 +622,7 @@ async fn the_handler_returns_the_failure_that_names_the_absent_path() {
             path: "src/nowhere.rs".to_owned(),
             max_bytes: None,
         },
-        &Ctx::fixture(FIXTURES),
+        &Call::new(&Ctx::fixture(FIXTURES)),
     )
     .await
     .expect_err("this crate has no such file");
