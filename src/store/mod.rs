@@ -560,7 +560,7 @@ impl DiffStore {
         .await;
     }
 
-    /// Write every one of `blobs` this store does not already hold, inside
+    /// Write every blob of `entry` this store does not already hold, inside
     /// the budget.
     ///
     /// # Why the store is asked what it holds before it is asked for room
@@ -599,10 +599,14 @@ impl DiffStore {
     /// blob that is missing, and writing the rest of the entry around it is
     /// how a `patches.json` ends up without the `meta.json` that names it —
     /// an orphan nothing ever reads and the budget counts forever.
-    async fn writing_whatever_is_missing(&self, blobs: Vec<(String, Vec<u8>)>) {
-        let mut missing = Vec::with_capacity(blobs.len());
-        for (pathname, bytes) in blobs {
-            match self.holds(&pathname).await {
+    async fn writing_whatever_is_missing(&self, entry: Vec<(String, Vec<u8>)>) {
+        let Some(blobs) = self.blobs() else {
+            return;
+        };
+
+        let mut missing = Vec::with_capacity(entry.len());
+        for (pathname, bytes) in entry {
+            match self.holds(blobs, &pathname).await {
                 Presence::There => {}
                 Presence::Missing => missing.push((pathname, bytes)),
                 Presence::Unknown => return,
@@ -619,7 +623,7 @@ impl DiffStore {
         }
 
         for (pathname, bytes) in missing {
-            self.write(&pathname, bytes).await;
+            self.write(blobs, &pathname, bytes).await;
         }
     }
 
@@ -706,11 +710,7 @@ impl DiffStore {
     ///
     /// A head is only ever asked on the way to a write, so a failed one says
     /// the write is what could not be done.
-    async fn holds(&self, pathname: &str) -> Presence {
-        let Some(blobs) = self.blobs() else {
-            return Presence::Unknown;
-        };
-
+    async fn holds(&self, blobs: &Blobs, pathname: &str) -> Presence {
         match self.answered(blobs.head(pathname).await, WRITING) {
             Some(true) => Presence::There,
             Some(false) => Presence::Missing,
@@ -739,14 +739,12 @@ impl DiffStore {
     /// A head that could not be answered is not a reason to write either:
     /// the entry may well be there, and the cost of skipping a write that
     /// was needed is one more recomputed diff.
-    async fn write(&self, pathname: &str, bytes: Vec<u8>) {
-        let Presence::Missing = self.holds(pathname).await else {
+    async fn write(&self, blobs: &Blobs, pathname: &str, bytes: Vec<u8>) {
+        let Presence::Missing = self.holds(blobs, pathname).await else {
             return;
         };
 
-        if let Some(blobs) = self.blobs() {
-            self.answered(blobs.write(pathname, bytes).await, WRITING);
-        }
+        self.answered(blobs.write(pathname, bytes).await, WRITING);
     }
 
     /// The blobs this store keeps, or nothing if it has none — having said
