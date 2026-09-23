@@ -411,6 +411,11 @@ async fn a_trailing_slash_on_a_path_makes_no_difference() {
 /// nothing is the root. `list_package_files` once read the same argument as a
 /// directory called `/` and answered an empty page, so this is pinned from
 /// both tools rather than assumed of either.
+///
+/// This one pins the answer and not how it is reached. The comparison's own
+/// root node is named `/`, so a descent that looked for a directory called
+/// `/` would land on the root as well. The empty path below is the one a
+/// missing normalisation would fail.
 #[tokio::test]
 async fn a_path_of_a_slash_is_the_whole_comparison() {
     let whole = walk(json!({ "handle": diffable() })).await;
@@ -421,7 +426,28 @@ async fn a_path_of_a_slash_is_the_whole_comparison() {
         "the control: the whole comparison has the top level in it, got {:?}",
         paths(&whole)
     );
-    assert_eq!(rooted, whole, "`/` is the root, not a directory named `/`");
+    assert_eq!(
+        rooted, whole,
+        "`/` is the root, and its subtree is everything"
+    );
+}
+
+/// A `null` path is the root, the same as leaving it out.
+///
+/// The argument is optional rather than a Subtree that defaults to the root,
+/// so its schema still admits `null`, the way `cursor` and `limit` do. A
+/// client that sends every argument, with `null` for the ones it has no value
+/// for, is asking for the whole comparison and not making a bad call.
+#[tokio::test]
+async fn a_null_path_is_the_whole_comparison() {
+    let whole = walk(json!({ "handle": diffable() })).await;
+    let null = walk(json!({ "handle": diffable(), "path": null })).await;
+
+    assert!(
+        !whole.is_empty(),
+        "the control: a comparison with nodes in it"
+    );
+    assert_eq!(null, whole, "`null` is the argument left out");
 }
 
 /// An empty `path` is the root too.

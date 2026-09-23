@@ -362,6 +362,31 @@ async fn an_empty_prefix_is_the_whole_archive() {
     );
 }
 
+/// A `null` prefix is the root, the same as leaving it out, for the reason
+/// `get_diff_tree`'s `null` path is: the argument is optional, so its schema
+/// admits `null`, and a client that sends it is asking for everything.
+#[tokio::test]
+async fn a_null_prefix_is_the_whole_archive() {
+    let whole = call(json!({
+        "registry": "crates", "package": "serde", "version": "1.0.0",
+    }))
+    .await;
+    let null = call(json!({
+        "registry": "crates", "package": "serde", "version": "1.0.0", "prefix": null,
+    }))
+    .await;
+
+    assert_eq!(
+        whole["structuredContent"]["total"],
+        json!(3),
+        "the control: the archive has three entries, got {whole}"
+    );
+    assert_eq!(
+        null["structuredContent"], whole["structuredContent"],
+        "`null` is the argument left out"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Reading it a page at a time
 // ---------------------------------------------------------------------------
