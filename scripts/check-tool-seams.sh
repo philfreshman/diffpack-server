@@ -62,6 +62,13 @@
 # list for the same reason the token is: a tool that read one would be building
 # a client of its own out of sight of the seam.
 #
+# `as_engine_map` is on it for the same reason from the other direction. It
+# hands the map inside a FileMap to the engine, and it is `pub(crate)` because
+# Rust has nothing narrower: one sibling module cannot be named as its only
+# caller. A tool that read the entries off it would be working out again what
+# the FileMap answers — a directory's content is the empty string, so
+# emptiness does not tell it from an empty file (#95).
+#
 # Mentions in a comment count, because a grep cannot tell a comment from code
 # and a name written in a comment is a name someone can move into one. Write
 # around it: reference the issue or the ADR rather than the crate.
@@ -111,7 +118,7 @@ readonly ALLOWED_ROOTS=(crate self super std core alloc futures rmcp serde serde
 readonly ALLOWED_MODULES=(archive cache_key catalogue engine error handle page registry resources search store tools)
 
 # Names that mean a seam was crossed, wherever they appear.
-readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN|BLOB_STORE_ID|VERCEL_OIDC_TOKEN'
+readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN|BLOB_STORE_ID|VERCEL_OIDC_TOKEN|as_engine_map'
 
 guarded=()
 for directory in "$TOOLS" "$RESOURCES"; do

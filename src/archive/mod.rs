@@ -57,7 +57,7 @@ use crate::registry::{ArchiveSource, Registry};
 /// The one thing that still reads the map is the engine, which builds a tree
 /// out of two of them. That goes through [`crate::engine::build_diff_tree`],
 /// so the map is handed back to the engine in the one module that imports it
-/// (ADR 0007).
+/// (ADR 0007), and no tool or resource may reach for it.
 #[derive(Debug)]
 pub struct FileMap {
     entries: HashMap<String, engine::FileMapEntry>,
@@ -118,8 +118,10 @@ impl FileMap {
 
     /// The map as the engine reads it, for [`crate::engine`] to hand back.
     ///
-    /// Nothing else calls this. A caller that read the entries off it would
-    /// be working out again what [`FileMap::at`] answers.
+    /// Nothing else calls this, and `scripts/check-tool-seams.sh` fails the
+    /// build if a tool or a resource names it: `pub(crate)` is as narrow as
+    /// Rust goes, and a caller that read the entries off it would be working
+    /// out again what [`FileMap::at`] answers.
     pub(crate) fn as_engine_map(&self) -> &HashMap<String, engine::FileMapEntry> {
         &self.entries
     }

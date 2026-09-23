@@ -56,8 +56,11 @@ waits on two fetches at once, and `crate::{archive, cache_key, catalogue,
 engine, error, handle, page, registry, resources, search, store, tools}`. It
 may not name an HTTP client or the blob store: those are `fetch`'s and
 `store`'s business, and eight tools that each know how to fetch is eight
-places to fix a timeout. Nothing checks that this paragraph and the script's
-list agree, so a module added to one is added to the other by hand.
+places to fix a timeout. Nor may it name the accessor that hands a FileMap's
+map to the engine, because a tool that read the entries would be working out
+again what the FileMap answers (#95). Nothing checks that this paragraph and
+the script's list agree, so a module added to one is added to the other by
+hand.
 
 `resources` and `tools` are on that list for each other, which is why the two
 directories name each other: a tool's answer carries a `resource_link` and so
@@ -334,7 +337,10 @@ holds replacement characters rather than its bytes — so it is said once here
 rather than worked out again by every tool that reads one (#95). The engine is
 the one reader of the map itself, to build a tree, and it gets it through
 `engine::build_diff_tree`, which takes two FileMaps: the map crosses back to
-the engine in the one module that imports it.
+the engine in the one module that imports it. The accessor that crossing uses
+is `pub(crate)`, the narrowest Rust has, so `scripts/check-tool-seams.sh` has
+its name on the deny-list and a tool or a resource that reached for it fails
+the build.
 
 Three things are the same code for both adapters rather than the live one's
 alone, because each is a rule about what this server does rather than about
