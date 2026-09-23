@@ -942,9 +942,9 @@ pub struct Memory {
 /// [`Memory`] to fail it.
 ///
 /// Public for that and nothing else. The operations themselves are private
-/// to this module, behind [`DiffStore`]'s two methods; what a test gets to
-/// say is which of them goes wrong, and the policy it then watches is the
-/// one the real store's failures reach.
+/// to this module, behind [`DiffStore::get`] and [`DiffStore::put`]; what a
+/// test gets to say is which of them goes wrong, and the policy it then
+/// watches is the one the real store's failures reach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
     /// Listing what the store holds, which is what the budget is counted
@@ -1089,11 +1089,12 @@ impl Memory {
 
     /// Lose the blob at `pathname`.
     ///
-    /// What a write that failed after its partner landed leaves behind, and
-    /// the one state nothing else here can put a store in: the two blobs of
-    /// an entry are written one after the other, so a `meta.json` whose
-    /// `patches.json` never arrived is a real outcome and not an invented
-    /// one.
+    /// What a write that failed after its partner landed leaves behind: the
+    /// two blobs of an entry are written one after the other, so a
+    /// `meta.json` whose `patches.json` never arrived is a real outcome and
+    /// not an invented one. A store told to fail its second put reaches the
+    /// same state through a write; this puts a store in it directly, for the
+    /// tests about reading such an entry rather than about how one is left.
     pub fn forget(&self, pathname: &str) {
         if let Ok(mut blobs) = self.blobs.lock() {
             blobs.remove(pathname);
