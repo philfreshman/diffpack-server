@@ -889,10 +889,11 @@ the first call's fetches (#96). In production the two lifetimes are the same,
 because by [ADR 0008](adr/0008-no-sessions.md) a request is one call.
 `Call::archive()`, `Call::catalogue()` and `Call::search()` each hand back
 their seam with the stopwatch already on it, so a handler is unchanged and
-there is no way to wait on a registry uncounted. One wrapper over all three, because the phase
-answers how long the call waited rather than which document it waited for —
-and a tool that only reads a catalogue reporting no wait at all is the
-reading an operator would take for "this one never left the process".
+there is no way to wait on a registry uncounted. One wrapper over all three,
+because the phase answers how long the call waited rather than which
+document it waited for — and a tool that only reads a catalogue reporting no
+wait at all is the reading an operator would take for "this one never left
+the process".
 
 What the call found in the store is recorded the same way and by the same
 kind of wrapper, into a `Lookup` the `Call` holds beside its `Spent`:
