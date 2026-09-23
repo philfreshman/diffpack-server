@@ -1131,6 +1131,35 @@ async fn a_path_that_became_a_directory_is_refused_warm_without_the_archives() {
     is_refused_as_a_directory_in_2(&served);
 }
 
+/// A path that stops being a directory is refused when nothing is stored.
+///
+/// The other way round: `lib` is a directory in 2.0.0, which is now the
+/// version compared from. The tree calls it a removed directory and has no
+/// file `lib` at all, so the refusal comes out of the tree.
+#[tokio::test]
+async fn a_path_that_stopped_being_a_directory_is_refused_cold() {
+    let refused = lib_cold("2.0.0", "1.0.0").await;
+
+    is_refused_as_a_directory_in_2(&refused);
+}
+
+/// And it is refused the same way when the comparison is stored.
+///
+/// The entry holds no patch for `lib`, because the tree it was written from
+/// has no file there, and the stored tree still says it is a directory.
+#[tokio::test]
+async fn a_path_that_stopped_being_a_directory_is_refused_warm_without_the_archives() {
+    let served = lib_warm("2.0.0", "1.0.0").await;
+
+    assert_eq!(
+        served,
+        lib_cold("2.0.0", "1.0.0").await,
+        "a stored comparison answers `lib` as a fresh one does, and without \
+         fetching 2.0.0, which this fixture set does not have: got {served}"
+    );
+    is_refused_as_a_directory_in_2(&served);
+}
+
 /// `shape` compared from `from` to `to`.
 fn shape(from: &str, to: &str) -> Value {
     json!({
