@@ -14,7 +14,8 @@ src/router.rs       routes, panic guard over the transport, origin config
 src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
 src/tools/          one module per tool: definition and handler together,
                     and diff_package_versions::compare, the one walk from a
-                    handle to a comparison that every diff path takes
+                    handle to a comparison that every diff path takes, with
+                    Comparison::file_patch, the one way to one file's patch
 src/resources/      one module per resource: URI and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap
@@ -143,14 +144,25 @@ comparison worked out now carries both versions' files, and one that came out
 of the store carries the patches rendered when the entry was written and none
 of the archives they came from.
 
-So `get_file_diff` and the file-diff resource ask `Comparison::patch` for the
-one file they are about, and reach `Comparison::files` — two downloads — only
-for a file the comparison has no patch for. That is the right question
-whichever way a patch went missing: over the per-patch cap, dropped with the
-rest because the entry was too big, written before entries carried patches, or
-a file that never changed and so never had one. `patches_omitted` records that
-something is missing; it is not what an answer turns on, because an entry
-missing one file's patch still answers for every other.
+So one file's patch is one question, and it is asked of the comparison:
+`Comparison::file_patch`, in the same module as `compare`, which
+`get_file_diff` and the file-diff resource each call once. Behind it, in
+order: the patch the comparison holds for that file; a directory the tree
+names, refused without a download; both versions' files — two downloads when
+the comparison was remembered without them — only for a file with neither;
+the file rendered through the same lookup the pre-render in `compare` uses;
+and `get_file_diff::presented` for the trim and the cut, which stay that
+tool's because `context_lines` is its argument. It is a method because the
+comparison keeps its handle private, so the files it fetches cannot be paired
+with another comparison's handle by a caller passing one in.
+
+Asking per file is the right question whichever way a patch went missing:
+over the per-patch cap, dropped with the rest because the entry was too big,
+written before entries carried patches, or a file that never changed and so
+never had one. `patches_omitted` records that something is missing; it is not
+what an answer turns on, because an entry missing one file's patch still
+answers for every other — and `DiffStore::get` serving an entry that lost its
+patches rests on `file_patch` keeping it that way.
 
 A tool writes down types rather than JSON. The `Tool` trait's associated
 `Args` and `Output` generate the input schema, the output schema and the
@@ -236,8 +248,16 @@ client followed literally and got `-32602` for.
 **Nothing here computes an answer a tool already computes.** The catalogue is
 `registry` serialised, the comparison is `diff_package_versions::compare`, the
 totals are that module's walk, the tree is `get_diff_tree`'s, and one file's
-patch is `get_file_diff`'s renderer. See [ADR
-0014](adr/0014-a-resource-is-a-projection-of-the-tools.md).
+patch is `Comparison::file_patch`, the same call `get_file_diff` makes. See
+[ADR 0014](adr/0014-a-resource-is-a-projection-of-the-tools.md).
+
+That last one is since #93, and it is where the fallback lives: the stored
+patch, the directory refused out of the tree, the two downloads and the
+render are all behind that method, and the file-diff resource keeps only what
+is its own — the decoded path, a renamed file's old path looked up in the
+tree, and the document with its media type. Before it the resource wrote the
+tool's steps out a second time through three of `get_file_diff`'s exports,
+which is the direction 0014 names as the one to watch.
 
 The comparison is on that list since #83 and was the one exception to it:
 `src/resources/diff.rs` held the fetch, the extraction and the tree build, and
@@ -529,9 +549,9 @@ methods with the same absent `Result`s serve three more paths than they did.
 
 What comes back is read whole since #84. An entry's patches were rendered on
 every write from #21 and read by nothing for as long, which made them eight
-steps of implementation feeding no reader; `get_file_diff` and the file-diff
-resource are the reader, and they are what turns a warm call for one file's
-diff from two downloads into none.
+steps of implementation feeding no reader; `Comparison::file_patch` is the
+reader since #93, for `get_file_diff` and the file-diff resource both, and it
+is what turns a warm call for one file's diff from two downloads into none.
 
 Three things are the store's and not a caller's, and each is a rule about the
 cache rather than about the blobs underneath it. **A cache failure is never a

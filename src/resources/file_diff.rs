@@ -7,12 +7,13 @@
 //! which is all a URI has room for. The tool is *called* rather than
 //! reproduced, so the two cannot render one file two ways.
 //!
-//! That includes not rendering it at all. A comparison that came out of the
-//! store carries the patch for every file that changed, so this asks
-//! [`diff_package_versions::Comparison::patch`] for the file it is about
-//! before it asks for the archives — the same two steps in the same order as
-//! the tool, because a read that downloaded where a call did not would be the
-//! two disagreeing about what the cache is for.
+//! That includes not rendering it at all. What answers is
+//! [`diff_package_versions::Comparison::file_patch`], the one question both
+//! of them ask: the patch a remembered comparison already holds, a directory
+//! refused out of the tree, and both archives only for a file with neither.
+//! A read that downloaded where a call did not would be the two disagreeing
+//! about what the cache is for, and asking one function is what makes that a
+//! thing that cannot happen rather than two call sites kept in step.
 //!
 //! # What the media type carries
 //!
@@ -109,10 +110,6 @@ pub async fn read(
 
     let comparison = diff_package_versions::compare(handle, ctx).await?;
 
-    // Read off the tree before the files are asked for, because asking for
-    // them takes the comparison. Bound rather than written into the struct
-    // below, where it would be a temporary living exactly as long as the
-    // statement that reads it.
     let moved = moved_from(&comparison.tree, &wanted);
     let asked = OneFile {
         path: &wanted,
@@ -123,19 +120,11 @@ pub async fn read(
         max_bytes: None,
     };
 
-    // The patch the comparison is already holding, where it was remembered
-    // with one for this file. The same two steps the tool takes, and in the
-    // same order, because this document is that tool's answer with a media
-    // type on it (ADR 0014) — a read that fetched where a call did not would
-    // be the two disagreeing about what the cache is for.
-    let patch = match comparison.patch(asked.path, asked.old_path) {
-        Some(patch) => get_file_diff::presented(patch, &asked),
-        None => {
-            let files = comparison.files(ctx).await?;
-
-            get_file_diff::render(&files.from_files, &files.to_files, handle.inputs(), asked)?
-        }
-    };
+    // The tool's own answer, asked of the comparison the way the tool asks
+    // it, because this document is that answer with a media type on it (ADR
+    // 0014). Whether it was stored, and what it costs when it was not, is the
+    // comparison's to decide rather than this module's.
+    let patch = comparison.file_patch(ctx, asked).await?;
 
     // The segment as it arrived rather than as it decoded, so a client that
     // encoded its path is answered at the URI it asked about. The two are

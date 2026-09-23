@@ -16,8 +16,13 @@
 //! transcriptions that drifted would answer it differently depending on
 //! whether anyone had asked for it before.
 //!
-//! What stays here is everything the engine has no opinion about: the
-//! directory refusal below, and the trimming two sections down.
+//! Nor is the rendering of one file this module's. Which patch answers a
+//! file — the one a remembered comparison holds, or one rendered out of both
+//! versions — is
+//! [`Comparison::file_patch`](super::diff_package_versions::Comparison::file_patch)'s,
+//! beside the pre-render that fills the cache, so the two read a file through
+//! one lookup rather than two copies of it. What stays here is what the engine
+//! has no opinion about: the trimming two sections down, and the cut.
 //!
 //! Only the fourth case — both versions have the file and it changed — goes
 //! through anything public, so it is the only one `tests/get_file_diff.rs`
@@ -31,7 +36,9 @@
 //! is in neither of them. That is false about a path the package has and an
 //! agent has nothing in the answer to doubt it with, so it takes the
 //! refusal [`super::get_file_content`] gives a directory, for the same
-//! reason.
+//! reason. The refusal is made where the rendering is: out of the tree before
+//! anything is downloaded, and out of the file maps for the one directory the
+//! tree does not have, the one a rename emptied.
 //!
 //! # Why `context_lines` is this tool's and not the engine's
 //!
@@ -55,23 +62,22 @@
 //! store before it looks at a registry. What comes back carries one of two
 //! halves beside the tree, and both of them can answer this tool.
 //!
-//! A comparison that was remembered carries the patches rendered when the
-//! entry was written — every changed file's, made at the moment both archives
-//! were in hand, which is the whole bet #21 placed. So the first thing this
-//! tool asks is
-//! [`super::diff_package_versions::Comparison::patch`], for the one file it
-//! is about, and a warm call that gets one is a patch served with nothing
-//! fetched at all.
+//! Which one answers is not this tool's to decide. It asks
+//! [`super::diff_package_versions::Comparison::file_patch`] for the one file
+//! it is about and is handed the patch: the one the entry was written with,
+//! where the comparison was remembered with one for this file, and a warm call
+//! that gets one fetches nothing at all. Otherwise both versions' files — the
+//! ones this very call downloaded, or two downloads now — and the file
+//! rendered out of them. That covers one over the store's per-patch cap, one
+//! dropped with the rest because the entry was too big, one in an entry
+//! written before there were patches to write, and a file that did not change
+//! and so never had a patch at all. Every one of those is a file to render,
+//! which is why the question is "does this comparison hold this file's patch"
+//! and never "did this entry keep its patches".
 //!
-//! A comparison that was worked out by this very call carries both versions'
-//! files instead, and [`trim`] below renders out of those. So does a warm
-//! call for a file the entry has no patch for — one over the store's
-//! per-patch cap, one dropped with the rest because the entry was too big,
-//! one in an entry written before there were patches to write, or a file
-//! that did not change and so never had a patch at all. Every one of those
-//! is a file to render, which is why the question is "does this comparison
-//! hold this file's patch" and never "did this entry keep its patches": an
-//! entry missing one of them still answers for the rest.
+//! A directory is answered before either, out of the tree, which already says
+//! what it is. It has no patch to find and nothing to render, so two
+//! downloads to learn it again would be spent on nothing.
 //!
 //! On a cold call this tool pays more than it did before #83, and on
 //! purpose. It used to fetch two archives and render one file and build no
@@ -100,10 +106,9 @@ use std::borrow::Cow;
 use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 use serde::{de, Deserialize, Deserializer, Serialize};
 
-use crate::archive::FileMap;
-use crate::engine::{self, FileType};
+use crate::engine;
 use crate::error::Failure;
-use crate::handle::{DiffHandle, Inputs};
+use crate::handle::DiffHandle;
 use crate::page::{self, Excerpt};
 use crate::tools::{diff_package_versions, Ctx, Tool};
 
@@ -418,20 +423,6 @@ fn hunks(placed: &[Placed], context: usize) -> Vec<(usize, usize)> {
     hunks
 }
 
-/// The content of `path` in `files`, or nothing when the version has no file
-/// there.
-///
-/// A directory is nothing, which is the engine's reading and the reason the
-/// two are separated before this is called: a directory's content is the
-/// empty string the extractor gave it, so a caller that named one would
-/// otherwise be told the file is in neither version.
-fn content<'f>(files: &'f FileMap, path: &str) -> Option<&'f str> {
-    files.get(path).and_then(|entry| match entry.file_type {
-        FileType::File => Some(entry.content.as_str()),
-        FileType::Directory => None,
-    })
-}
-
 impl Tool for GetFileDiff {
     const NAME: &'static str = "get_file_diff";
     const TITLE: &'static str = "Get file diff";
@@ -470,24 +461,8 @@ impl Tool for GetFileDiff {
 
     async fn call(args: Args, ctx: &Ctx) -> Result<Patch, Failure> {
         let comparison = diff_package_versions::compare(&args.handle, ctx).await?;
-        let asked = args.asked();
 
-        // The entry's own patch, where this comparison was remembered and
-        // holds one for the file that was asked about. It is the only thing
-        // in an entry that can answer this tool — a tree carries statuses,
-        // paths and line counts and never a file's contents — and it is what
-        // makes a warm call cost no download at all.
-        if let Some(patch) = comparison.patch(asked.path, asked.old_path) {
-            return Ok(presented(patch, &asked));
-        }
-
-        // Nothing there for this file, whichever of the ways that is: a
-        // comparison worked out by this very call, a patch over a cap, or a
-        // file that never changed and so was never rendered. Each of them is
-        // a file to render, and rendering it needs both versions.
-        let files = comparison.files(ctx).await?;
-
-        render(&files.from_files, &files.to_files, args.handle.inputs(), asked)
+        comparison.file_patch(ctx, args.asked()).await
     }
 }
 
@@ -495,9 +470,12 @@ impl Tool for GetFileDiff {
 /// is settled.
 ///
 /// [`Args`] without the handle, because by the time anything is rendered the
-/// handle has been spent: `inputs` says which comparison this is, and the
-/// handle would be a second copy of the same fact. A resource building one of
-/// these would otherwise clone a handle so that [`render`] could ignore it.
+/// handle has been spent: the comparison it named carries it, and a second
+/// copy here would be one that could name a different comparison. Public
+/// because it is what
+/// [`Comparison::file_patch`](super::diff_package_versions::Comparison::file_patch)
+/// is asked, by this tool and by the `diffpack://diff/{handle}/file/{path}`
+/// resource, which asks at the defaults a URI has room for.
 pub struct OneFile<'a> {
     pub path: &'a str,
     pub old_path: Option<&'a str>,
@@ -517,95 +495,40 @@ impl Args {
     }
 }
 
-/// One file's patch, given both versions' files.
-///
-/// Everything this tool does once the archives are in hand, and public
-/// because there are two callers: this tool, and the
-/// `diffpack://diff/{handle}/file/{path}` resource (#16). That resource has
-/// already asked for the comparison — it reads the tree to find where a
-/// renamed file was, and takes both versions' files off the same answer — so
-/// one that called the tool instead would ask for it twice and download both
-/// archives twice, which on a package of any size is the whole cost of the
-/// read paid twice.
-///
-/// What is shared is the whole answer rather than a piece of it: the
-/// directory refusal, which of the engine's four cases this is, the trim and
-/// the cut. A resource that reused only the renderer would still have to
-/// decide the other three, which is the drift ADR 0013 records for the
-/// renderer itself, one level up.
-pub fn render(
-    from_files: &FileMap,
-    to_files: &FileMap,
-    inputs: &Inputs,
-    asked: OneFile<'_>,
-) -> Result<Patch, Failure> {
-    let from_path = asked.old_path.unwrap_or(asked.path);
-
-    // A directory has no content, so the engine reads one as absent on
-    // both sides and renders the sentence that says it is in neither
-    // version. That sentence is false about a path the package ships,
-    // and an agent has nothing in the answer to doubt it with — the
-    // failure `get_file_content` refuses a directory to avoid. The
-    // second version first, because that is the one a caller's path
-    // usually names.
-    let directory = [
-        (to_files, asked.path, &inputs.to_version),
-        (from_files, from_path, &inputs.from_version),
-    ]
-    .into_iter()
-    .find(|(files, path, _)| {
-        files
-            .get(*path)
-            .is_some_and(|entry| matches!(entry.file_type, FileType::Directory))
-    });
-
-    if let Some((_, path, version)) = directory {
-        return Err(Failure::PathIsDirectory {
-            package: inputs.package.clone(),
-            version: version.clone(),
-            path: path.to_owned(),
-        });
-    }
-
-    let from = content(from_files, from_path);
-    let to = content(to_files, asked.path);
-
-    Ok(presented(
-        engine::patch(asked.path, from, to, inputs.ignore_whitespace),
-        &asked,
-    ))
-}
-
 /// One file's patch, out of a rendering that has already been made.
 ///
 /// The trim and the cut, which is everything this tool does to the engine's
-/// output and nothing it does to work out what the output is. Public because
-/// a rendering can arrive two ways: [`render`] has just made one out of both
-/// versions' contents, and
-/// [`diff_package_versions::Comparison::patch`](crate::tools::diff_package_versions::Comparison::patch)
-/// hands back one the cache rendered when the entry was written. Those two
-/// are the same bytes by [ADR
-/// 0013](../../docs/adr/0013-the-patch-renderer-lives-in-the-engine-seam.md),
-/// and what is done to them afterwards has to be the same as well or a
+/// output and nothing it does to work out what the output is. Public for one
+/// caller:
+/// [`Comparison::file_patch`](crate::tools::diff_package_versions::Comparison::file_patch),
+/// which answers one file's patch for this tool and for the resource that
+/// reads it, and hands every patch it finds or renders through here. A
+/// rendering arrives two ways — made just now out of both versions' contents,
+/// or made by the cache when the entry was written — and those two are the
+/// same bytes by [ADR
+/// 0013](../../docs/adr/0013-the-patch-renderer-lives-in-the-engine-seam.md).
+/// What is done to them afterwards has to be the same as well, or a
 /// remembered patch is a differently trimmed one.
+///
+/// Here and not beside the lookup, because the rule it applies is this
+/// tool's: `context_lines` is its argument, and [`trim`] is what that
+/// argument means.
 ///
 /// `context_lines` and `max_bytes` are the caller's either way. They are
 /// presentation and not part of what was rendered, which is why a cached
 /// patch can answer a call that asks for a different amount of context from
 /// the one before it.
-pub fn presented(rendered: engine::Patch, asked: &OneFile<'_>) -> Patch {
-    let is_diff = rendered.is_diff;
-
+pub fn presented(rendered: &engine::Patch, asked: &OneFile<'_>) -> Patch {
     // Only a diff is trimmed. The other two answers are a file's own
     // content and a sentence, and neither has a header to keep or a
     // change to keep lines around.
-    let text = match asked.context_lines {
-        ContextLines::Around(lines) if is_diff => trim(&rendered.data, lines),
-        _ => rendered.data,
+    let text: Cow<'_, str> = match asked.context_lines {
+        ContextLines::Around(lines) if rendered.is_diff => Cow::Owned(trim(&rendered.data, lines)),
+        _ => Cow::Borrowed(&rendered.data),
     };
 
     Patch {
         excerpt: page::truncate(&text, asked.max_bytes),
-        is_diff,
+        is_diff: rendered.is_diff,
     }
 }

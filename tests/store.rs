@@ -887,6 +887,57 @@ async fn a_renamed_file_is_served_only_the_patch_it_was_asked_for() {
     );
 }
 
+/// A directory is refused out of the entry, without the archives.
+///
+/// A directory has no patch, so an entry never holds one for it, and asking
+/// the entry first answers nothing. What does answer is the tree: it says
+/// `src` is a directory in both versions, which is the whole of what the
+/// refusal needs. Fetching both archives to learn it again from their file
+/// maps is two downloads spent on a question already answered.
+///
+/// Driven through [`ONE_SIDED`], so a call that downloaded would fail on the
+/// second version. The served answer is held against the whole fixture set's
+/// cold answer rather than against a sentence: the two are the same refusal,
+/// and the control is the call that has to fetch and cannot.
+#[tokio::test]
+async fn a_directory_is_refused_out_of_the_entry_without_the_archives() {
+    let store = Memory::new();
+
+    let diffed = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+    let asked = json!({
+        "handle": diffed["structuredContent"]["handle"].clone(),
+        "path": "src",
+    });
+
+    let served = one_sided(|| store.store(), "get_file_diff", asked.clone()).await;
+    let cold = Memory::new();
+    assert_eq!(
+        served,
+        call_tool(|| cold.store(), "get_file_diff", asked.clone()).await,
+        "the tree says `src` is a directory, and the second version is not \
+         there to fetch: got {served}"
+    );
+    assert_eq!(
+        served["isError"],
+        json!(true),
+        "and that answer is the refusal a directory gets: got {served}"
+    );
+
+    let empty = Memory::new();
+    let missed = one_sided(|| empty.store(), "get_file_diff", asked).await;
+    assert_eq!(
+        missed["isError"],
+        json!(true),
+        "with nothing to be served the same call has to fetch, and fetching \
+         is what this fixture set cannot do: got {missed}"
+    );
+    assert_ne!(
+        missed, served,
+        "and that failure is the fetch, not the directory refusal"
+    );
+}
+
 /// So is the resource that answers with one file's diff.
 ///
 /// The document is the tool's answer with a media type on it (ADR 0014), so
@@ -931,6 +982,57 @@ async fn a_read_of_one_files_diff_is_served_the_stored_patch_too() {
         missed["error"]["code"], NOT_PUBLISHED,
         "with nothing to be served the same read has to fetch, and the version \
          it goes for is not published in this set: got {missed}"
+    );
+}
+
+/// So is a read of a directory's diff.
+///
+/// The same question as the call above, asked through the resource, and it
+/// has to cost the same: a read that downloaded two archives to refuse a
+/// directory the tool refused without them would be the two disagreeing
+/// about what the tree is for.
+///
+/// Held against the whole fixture set's cold read rather than against the
+/// code, because the code does not tell the two failures apart: a directory
+/// and a version the registry does not publish are both `-32001`. The
+/// message beside the code does, and comparing two envelopes reads it without
+/// pinning a sentence.
+#[tokio::test]
+async fn a_read_of_a_directory_is_refused_out_of_the_entry_too() {
+    let store = Memory::new();
+
+    let diffed = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+    let uri = format!(
+        "diffpack://diff/{}/file/src",
+        diffed["structuredContent"]["handle"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
+    );
+
+    let served = read(ONE_SIDED, || store.store(), &uri).await;
+    let cold = Memory::new();
+    assert_eq!(
+        served,
+        read(FIXTURES, || cold.store(), &uri).await,
+        "the tree says `src` is a directory, and the second version is not \
+         there to fetch: got {served}"
+    );
+    assert!(
+        served.get("error").is_some(),
+        "and that answer is the refusal a directory gets: got {served}"
+    );
+
+    let empty = Memory::new();
+    let missed = read(ONE_SIDED, || empty.store(), &uri).await;
+    assert_eq!(
+        missed["error"]["code"], NOT_PUBLISHED,
+        "with nothing to be served the same read has to fetch, and the version \
+         it goes for is not published in this set: got {missed}"
+    );
+    assert_ne!(
+        missed, served,
+        "and that failure is the fetch, not the directory refusal"
     );
 }
 
@@ -980,6 +1082,102 @@ async fn a_file_whose_patch_was_dropped_is_rendered_rather_than_missed() {
         call_tool(capped, "get_file_diff", asking("src/index.js")).await,
         call_tool(|| cold.store(), "get_file_diff", asking("src/index.js")).await,
         "and where it can, the answer is the patch it always was"
+    );
+}
+
+/// The tool and the resource give one answer for every kind of file, warm
+/// or cold.
+///
+/// The document is the tool's answer at its defaults with a media type on
+/// it (ADR 0014), so the two are held against each other rather than each
+/// against a literal: a literal would pass with the two disagreeing, as long
+/// as each agreed with its own. Every way a file can reach an answer is
+/// here — the patch an entry holds (`src/added.js`), the one the per-patch
+/// cap took and has to be rendered (`src/index.js`), a file that did not
+/// change (`README.md`), a renamed file (`src/new-name.js`) and a path in
+/// neither version — and each is asked of an entry and of no entry at all.
+///
+/// A URI has room for one path, so the resource looks a renamed file's old
+/// path up in the tree, and its answer is the tool's with `old_path` passed.
+/// Without it the tool says every line was added, and it says so warm as it
+/// does cold: a remembered patch is never the answer to a different pair of
+/// paths.
+#[tokio::test]
+async fn the_tool_and_the_resource_answer_every_kind_of_file_alike() {
+    let store = Memory::new();
+    let capped = || store.store().capping_patches_at(100);
+
+    let diffed = call(capped, diffable()).await;
+    settles(&store, 2).await;
+    let handle = diffed["structuredContent"]["handle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
+        .to_owned();
+
+    // A store of its own for every call, so each cold one is: a shared one
+    // would be written by the first call and serve the rest.
+    let cold = || Memory::new().store();
+    let warm_and_cold: [(&str, &dyn Fn() -> DiffStore); 2] = [("warm", &capped), ("cold", &cold)];
+
+    for (when, store) in warm_and_cold {
+        for (path, old_path) in [
+            ("src/added.js", None),
+            ("src/index.js", None),
+            ("README.md", None),
+            ("src/new-name.js", Some("src/old-name.js")),
+            ("nowhere/at/all.js", None),
+        ] {
+            let mut asked = json!({ "handle": handle, "path": path });
+            if let Some(old_path) = old_path {
+                asked["old_path"] = json!(old_path);
+            }
+            let called = call_tool(store, "get_file_diff", asked).await;
+            let called = &called["structuredContent"];
+
+            let uri = format!("diffpack://diff/{handle}/file/{path}");
+            let read = read(FIXTURES, store, &uri).await;
+            let document = &read["result"]["contents"][0];
+
+            assert!(
+                called["text"].is_string(),
+                "`{path}` {when}: every one of these is an answer, not a \
+                 failure the two could agree on, got {called}"
+            );
+            assert_eq!(
+                document["text"], called["text"],
+                "`{path}` {when}: the resource and the tool should give one \
+                 answer, got {read} against {called}"
+            );
+            assert_eq!(
+                document["mimeType"],
+                json!(if called["isDiff"] == json!(true) {
+                    "text/x-diff"
+                } else {
+                    "text/plain"
+                }),
+                "`{path}` {when}: the media type says what `isDiff` says, got \
+                 {read} against {called}"
+            );
+        }
+    }
+
+    let bare = json!({ "handle": handle, "path": "src/new-name.js" });
+    let warm = call_tool(capped, "get_file_diff", bare.clone()).await;
+    assert_eq!(
+        warm,
+        call_tool(cold, "get_file_diff", bare).await,
+        "a renamed file asked about without its `old_path` is the same answer \
+         warm and cold"
+    );
+    let read = read(
+        FIXTURES,
+        capped,
+        &format!("diffpack://diff/{handle}/file/src/new-name.js"),
+    )
+    .await;
+    assert_ne!(
+        read["result"]["contents"][0]["text"], warm["structuredContent"]["text"],
+        "and it is not the rename the resource reads out of the tree"
     );
 }
 
