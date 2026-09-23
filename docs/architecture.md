@@ -25,7 +25,7 @@ src/document/       what the three above share: host check, adapters, fixtures, 
 src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, caps
 src/store/          DiffStore: get(&DiffKey) / put(entry), inside a budget
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs;
-                    and the arguments that narrow a sequence, Subtree included
+                    and the arguments that shape an answer, Subtree included
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
 src/error.rs        Failure, the two channels, the code each earns, redaction
