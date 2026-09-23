@@ -1674,6 +1674,47 @@ async fn a_listing_that_fails_refuses_admission_and_writes_nothing() {
     );
 }
 
+/// A head that fails for one blob of an entry abandons the whole entry.
+///
+/// A head that could not be answered is not a blob that is missing, and
+/// writing the rest of the entry around it is how a blob ends up without its
+/// partner. A `patches.json` with no `meta.json` to name it is an orphan
+/// nothing ever reads and the budget counts forever; a `meta.json` with no
+/// `patches.json` is half an entry, read as a miss on every call until
+/// something repairs it.
+///
+/// The store fails the head for `meta.json`, once, and answers every head
+/// after it. So it says of `patches.json` that it is missing and worth
+/// writing, and says the same of `meta.json` if it is asked again — which is
+/// what a write that went ahead around the first failure would act on, and
+/// the orphan it would leave behind.
+#[tokio::test]
+async fn a_head_that_fails_for_one_blob_of_an_entry_writes_neither_blob() {
+    let store = Memory::new();
+
+    let log = Capture::new();
+    let unsure = Memory::failing_once(&store, Operation::Head);
+    let answer = call(|| unsure.store().logging_to(log.sink()), diffable()).await;
+    let notes = noted(&log).await;
+    stays_out(&store, &answer).await;
+
+    assert_eq!(
+        answer["isError"],
+        json!(false),
+        "a store that cannot say what it holds is still a comparison that was \
+         answered, got {answer}"
+    );
+    assert_eq!(
+        store.written(),
+        Vec::<String>::new(),
+        "the blob the store did answer for was written without its partner"
+    );
+    assert!(
+        notes.iter().all(|note| note.contains("writing to")),
+        "the store says the write is what could not be done: {notes:?}"
+    );
+}
+
 /// Fail if `store` ever writes the entry `answer` is about.
 ///
 /// A refusal is an absence, and an absence is not something to wait for: it

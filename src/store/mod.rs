@@ -39,6 +39,7 @@ mod blob;
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::ops::Range;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -943,18 +944,29 @@ pub enum Operation {
     /// from.
     List,
 
+    /// Asking whether a blob is there, which is how a write decides what it
+    /// has to write.
+    Head,
+
     /// Deleting an entry's blobs, which is how a sweep makes room.
     Delete,
 }
 
-/// Which operation a [`Memory`] fails, and how many of it it takes first.
+/// Which operation a [`Memory`] fails, and which of them.
 ///
-/// The allowance is shared between the stores a view hands out, because the
-/// operations of one write or one sweep are one run against one allowance.
+/// Counted rather than chosen by pathname, because what a test knows before
+/// a call is the order a write or a sweep asks in, and not the `diff_id` it
+/// will ask about. The count is shared between the stores a view hands out,
+/// because the operations of one write or one sweep are one run.
 #[derive(Debug, Clone)]
 struct Failing {
     operation: Operation,
-    allowance: Arc<AtomicUsize>,
+
+    /// How many of `operation` this store has been asked so far.
+    asked: Arc<AtomicUsize>,
+
+    /// Which of them fail, counting from the first as `0`.
+    fails: Range<usize>,
 }
 
 /// One blob this store holds.
@@ -1018,7 +1030,7 @@ impl Memory {
     /// fails over is blobs a test can still read back through the one it
     /// started with.
     pub fn failing(store: &Self, operation: Operation) -> Self {
-        Self::failing_after(store, operation, 0)
+        Self::failing_for(store, operation, 0..usize::MAX)
     }
 
     /// `store`'s blobs, taking `kept` of `operation` and failing every one
@@ -1027,10 +1039,26 @@ impl Memory {
     /// A run that got partway, which is the likelier failure than none of
     /// it: a sweep that freed some of what it needed and not all of it.
     pub fn failing_after(store: &Self, operation: Operation, kept: usize) -> Self {
+        Self::failing_for(store, operation, kept..usize::MAX)
+    }
+
+    /// `store`'s blobs, failing the next `operation` asked of them and
+    /// answering every one after.
+    ///
+    /// A failure that passes, which is what a real store's usually is. It is
+    /// the one that says whether a later answer can undo it: a policy that
+    /// asks the same question again, or asks about the next blob, gets an
+    /// answer this time, and acts on it.
+    pub fn failing_once(store: &Self, operation: Operation) -> Self {
+        Self::failing_for(store, operation, 0..1)
+    }
+
+    fn failing_for(store: &Self, operation: Operation, fails: Range<usize>) -> Self {
         Self {
             failing: Some(Failing {
                 operation,
-                allowance: Arc::new(AtomicUsize::new(kept)),
+                asked: Arc::new(AtomicUsize::new(0)),
+                fails,
             }),
             ..store.clone()
         }
@@ -1128,23 +1156,17 @@ impl Memory {
         Ok(())
     }
 
-    /// Fail, if this store was told to fail `operation` and has none of it
-    /// left to take.
-    ///
-    /// It hands out its allowance until there is none left and fails from
-    /// then on.
+    /// Fail, if this store was told to fail this one of `operation`.
     fn refusing(&self, operation: Operation) -> Result<(), Failure> {
         let Some(failing) = self.failing.as_ref().filter(|f| f.operation == operation) else {
             return Ok(());
         };
 
-        failing
-            .allowance
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                left.checked_sub(1)
-            })
-            .map(|_| ())
-            .map_err(|_| STAGED)
+        let nth = failing.asked.fetch_add(1, Ordering::Relaxed);
+        match failing.fails.contains(&nth) {
+            true => Err(STAGED),
+            false => Ok(()),
+        }
     }
 
     /// Take as long over this as the store was asked to.
@@ -1167,6 +1189,8 @@ impl Memory {
     /// holds, exactly as a blob store whose download failed still answers
     /// this.
     async fn head(&self, pathname: &str) -> Result<bool, Failure> {
+        self.refusing(Operation::Head)?;
+
         Ok(self
             .blobs
             .lock()
