@@ -75,3 +75,20 @@ The honest cost is that a registry needing genuinely different *behaviour* —
 an authenticated fetch, a paged version source — will strain a `match` where a
 trait would absorb it. Three registries and a known fourth are not that, and
 this decision is worth revisiting when a fifth is.
+
+## Since: #98
+
+A third thing now follows from the module: the rules for spelling a package
+and a version, in every tool's schema. Five tools had copied a sentence about
+package names into their arguments and four a sentence about versions, beside
+`Registry::name_rule()` and `VERSION_RULE`, which only `diffpack://registries`
+read. The copies had drifted, and none of them said that `v4.0.0` and `4.0.0`
+are different versions. The arguments are now `registry::PackageName` and
+`registry::VersionName`, which write their own schema the way `Registry` does
+and check nothing.
+
+A name rule is per registry and a schema is per tool, so a package's
+description states all three rules, generated over `Registry::ALL`, and points
+at `diffpack://registries` as well. Pointing alone was the other choice. It is
+shorter, but an agent reads `tools/list` and often nothing else, so the rules
+would reach it only if it went looking.

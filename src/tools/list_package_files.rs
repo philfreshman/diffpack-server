@@ -19,21 +19,23 @@
 //! that reader and names nothing in this repository. Why a field is shaped
 //! the way it is belongs here or in an ordinary comment beside the code.
 //!
-//! Three fields have no doc comment at all, deliberately. `prefix`, `cursor`
-//! and `limit` are [`crate::page`]'s types and that module writes their
-//! descriptions — what a directory's subtree is and is not, the default, the
-//! range, and the rule that an out-of-range `limit` is clamped rather than
-//! refused. A doc comment here would *replace* those rather than add to them,
-//! which is how a tool ends up telling an agent numbers no test compares
-//! against `page::MAX_LIMIT` — and how two tools that take a directory ended
-//! up with two rules for one, which disagreed about `/` (#97).
+//! Five fields have no doc comment at all, deliberately. `package` and
+//! `version` are [`crate::registry`]'s types, and that module writes their
+//! descriptions: every registry's name rule, and the version rule. `prefix`,
+//! `cursor` and `limit` are [`crate::page`]'s types and that module writes
+//! theirs — what a directory's subtree is and is not, the default, the range,
+//! and the rule that an out-of-range `limit` is clamped rather than refused.
+//! A doc comment here would *replace* those rather than add to them, which is
+//! how a tool ends up telling an agent numbers no test compares against
+//! `page::MAX_LIMIT` — and how two tools that take a directory ended up with
+//! two rules for one, which disagreed about `/` (#97).
 
 use serde::{Deserialize, Serialize};
 
 use crate::archive::At;
 use crate::error::Failure;
 use crate::page::{self, Page};
-use crate::registry::Registry;
+use crate::registry::{PackageName, Registry, VersionName};
 use crate::tools::{Call, Tool};
 
 /// The tool.
@@ -54,19 +56,16 @@ pub struct Args {
     // shown is the list this server has rather than a description of one.
     pub registry: Registry,
 
-    /// The package name as the registry spells it, scope included:
-    /// `zod`, `@types/node`, `serde`.
-    pub package: String,
+    // No doc comment on this or the four below, on purpose: see the module
+    // header. `registry` writes the first two's descriptions — every
+    // registry's name rule, and the version rule — and `page` the others':
+    // the rule for a directory whose subtree is asked for, which
+    // `get_diff_tree` takes as well, and the numbers that bind. A sentence
+    // here would replace them.
+    pub package: PackageName,
 
-    /// The version as the registry spells it: `4.0.0`. Not a range, not a
-    /// tag — one published version.
-    pub version: String,
+    pub version: VersionName,
 
-    // No doc comment on this or the two below, on purpose: see the module
-    // header. `page` writes their descriptions — this one the rule for a
-    // directory whose subtree is asked for, which `get_diff_tree` takes as
-    // well, and the other two the numbers that bind — and a sentence here
-    // would replace them.
     #[serde(default)]
     pub prefix: Option<page::Subtree>,
 
@@ -161,7 +160,7 @@ impl Tool for ListPackageFiles {
     async fn call(args: Args, call: &Call) -> Result<Page<Entry>, Failure> {
         let files = call
             .archive()
-            .fetch(args.registry, &args.package, &args.version)
+            .fetch(args.registry, args.package.as_str(), args.version.as_str())
             .await?;
 
         // An absent prefix is the root, which is what `/` is: the whole

@@ -11,10 +11,11 @@
 //! What is new since then is the *over all of them*. There are eight tools,
 //! and the rules below are collection-wide facts about them — a description
 //! an agent can act on, a declared output shape, the hints a client decides
-//! on, the registry enum coming from one module — so each is asserted once,
-//! here, by walking what the server offers. A rule written per tool is a rule
-//! the ninth tool is not held to, which is the whole reason a tool implements
-//! a trait rather than being one of eight files that happen to look alike.
+//! on, the registry enum and the package and version rules coming from one
+//! module — so each is asserted once, here, by walking what the server
+//! offers. A rule written per tool is a rule the ninth tool is not held to,
+//! which is the whole reason a tool implements a trait rather than being one
+//! of eight files that happen to look alike.
 //!
 //! [`TOOLS`] is the one thing in this file written by hand rather than read
 //! from the wire, and that is the point: the `tools!` list in
@@ -29,6 +30,7 @@
 mod common;
 
 use common::Client;
+use diffpack_server::registry::{self, Registry};
 use serde_json::{json, Value};
 
 /// The tools the `tools!` list in `src/tools/mod.rs` declares, in the order
@@ -170,6 +172,106 @@ async fn every_registry_argument_is_the_enum_the_registry_module_owns() {
     );
 }
 
+/// Every version argument says what a version is, in the words
+/// `src/registry.rs` owns.
+///
+/// The version rule is one sentence for every registry, and the schema is
+/// where an agent reads it before it sends a range or trims a `v`. A tool
+/// that wrote its own sentence would be one more copy of it, and the four
+/// there used to be had all dropped the part about the `v`. Over every tool
+/// and every argument that names a version, `from_version` and `to_version`
+/// included, because the copy that gets made is in the next tool written.
+#[tokio::test]
+async fn every_version_argument_states_the_version_rule() {
+    let mut asked = 0;
+
+    for tool in Client::fixture().tools().await {
+        let name = named(&tool);
+        for (field, schema) in arguments(&tool) {
+            if field != "version" && !field.ends_with("_version") {
+                continue;
+            }
+
+            asked += 1;
+            let said = schema["description"].as_str().unwrap_or_default();
+            assert!(
+                said.contains(registry::VERSION_RULE),
+                "`{name}`'s `{field}` should state the version rule, got {schema}"
+            );
+            assert!(
+                said.contains("`v4.0.0` and `4.0.0` are different versions"),
+                "`{name}`'s `{field}` should say that a `v` is part of a \
+                 version, got {schema}"
+            );
+        }
+    }
+
+    assert!(
+        asked >= 5,
+        "four tools take a version and one takes two, so finding {asked} \
+         means this walked the wrong field"
+    );
+}
+
+/// Every package argument states every registry's name rule, and says where
+/// they are served.
+///
+/// A name rule is per registry and a schema is per tool, and `registry` is
+/// an argument beside `package`, so one description cannot know which rule
+/// applies. It states all of them: an agent reads `tools/list` and often
+/// nothing else, so a schema that only pointed at a resource would leave it
+/// guessing whether `types/node` is the same package as `@types/node`. The
+/// pointer is there as well, and it has to be a resource this server lists,
+/// or it is a pointer at nothing.
+#[tokio::test]
+async fn every_package_argument_states_every_registrys_name_rule() {
+    let client = Client::fixture();
+    let listed = client
+        .post(json!({ "jsonrpc": "2.0", "id": 1, "method": "resources/list" }))
+        .await;
+    let served: Vec<&str> = listed["result"]["resources"]
+        .as_array()
+        .map(|resources| {
+            resources
+                .iter()
+                .filter_map(|resource| resource["uri"].as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        served.contains(&"diffpack://registries"),
+        "the catalogue of registries should be listed, got {listed}"
+    );
+
+    let mut asked = 0;
+    for tool in client.tools().await {
+        let name = named(&tool);
+        let Some(schema) = tool["inputSchema"]["properties"].get("package") else {
+            continue;
+        };
+
+        asked += 1;
+        let said = schema["description"].as_str().unwrap_or_default();
+        for registry in Registry::ALL {
+            assert!(
+                said.contains(registry.name_rule()),
+                "`{name}`'s `package` should state {}'s name rule, got {schema}",
+                registry.name()
+            );
+        }
+        assert!(
+            said.contains("diffpack://registries"),
+            "`{name}`'s `package` should say where the rules are served, got {schema}"
+        );
+    }
+
+    assert!(
+        asked >= 5,
+        "five tools take a package, so finding {asked} means this walked the \
+         wrong field"
+    );
+}
+
 /// Nothing an agent reads names a Rust path.
 ///
 /// Every `description` in a tool's definition reaches a model, and one saying
@@ -212,6 +314,19 @@ fn names(tools: &[Value]) -> Vec<&str> {
 /// name the entry it was about.
 fn named(tool: &Value) -> &str {
     tool["name"].as_str().unwrap_or("<unnamed>")
+}
+
+/// A listed tool's arguments, each by name beside its schema.
+fn arguments(tool: &Value) -> Vec<(&str, &Value)> {
+    tool["inputSchema"]["properties"]
+        .as_object()
+        .map(|properties| {
+            properties
+                .iter()
+                .map(|(field, schema)| (field.as_str(), schema))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Every `description` anywhere in `value`, however deeply nested.

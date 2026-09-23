@@ -92,6 +92,26 @@ async fn a_scoped_npm_package_drops_its_scope_from_the_filename() {
     );
 }
 
+/// A version is spelled the way it arrived, `v` and all: `v4.0.0` and
+/// `4.0.0` are different versions, and the URL is the registry's answer to
+/// which one exists. A tool that tidied the `v` away would resolve a
+/// version nobody asked for. The expected URL is npm's pattern with the
+/// version pasted in as written, not the output of running the code.
+#[tokio::test]
+async fn a_version_reaches_the_registry_exactly_as_it_was_written() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "zod",
+        "version": "v4.0.0",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["url"],
+        "https://registry.npmjs.org/zod/-/zod-v4.0.0.tgz"
+    );
+}
+
 /// crates.io serves from the static host rather than the API one.
 #[tokio::test]
 async fn crates_io_resolves_to_the_static_host() {

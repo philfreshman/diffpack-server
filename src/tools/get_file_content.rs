@@ -49,7 +49,9 @@
 //! range, and the rule that a value above the ceiling is narrowed rather
 //! than refused. A doc comment here would *replace* that rather than add to
 //! it, which is how a tool ends up telling an agent a number no test
-//! compares against [`crate::page::PAYLOAD_CEILING`].
+//! compares against [`crate::page::PAYLOAD_CEILING`]. `package` and `version`
+//! have none for the same reason: [`crate::registry`] writes them, from every
+//! registry's name rule and from the version rule.
 //!
 //! The three fields of the answer that describe the cut come from that
 //! module too, flattened into [`Content`] so that they are this tool's own
@@ -61,7 +63,7 @@ use serde::{Deserialize, Serialize};
 use crate::archive::At;
 use crate::error::Failure;
 use crate::page::{self, Excerpt};
-use crate::registry::Registry;
+use crate::registry::{PackageName, Registry, VersionName};
 use crate::tools::{Call, Tool};
 
 /// The tool.
@@ -74,13 +76,12 @@ pub struct Args {
     /// The registry that publishes the package.
     pub registry: Registry,
 
-    /// The package name as the registry spells it, scope included:
-    /// `zod`, `@types/node`, `serde`.
-    pub package: String,
+    // No doc comment on either, on purpose: `registry` writes both
+    // descriptions — every registry's name rule, and the version rule — and a
+    // sentence here would replace them.
+    pub package: PackageName,
 
-    /// The version as the registry spells it: `4.0.0`. Not a range, not a
-    /// tag — one published version.
-    pub version: String,
+    pub version: VersionName,
 
     /// Where the file is inside the archive, with the archive's top-level
     /// directory already removed: `src/index.js`, never
@@ -147,7 +148,7 @@ impl Tool for GetFileContent {
     async fn call(args: Args, call: &Call) -> Result<Content, Failure> {
         let files = call
             .archive()
-            .fetch(args.registry, &args.package, &args.version)
+            .fetch(args.registry, args.package.as_str(), args.version.as_str())
             .await?;
 
         // The FileMap says what is at the path, and this is where the two
@@ -156,14 +157,14 @@ impl Tool for GetFileContent {
         // genuinely empty file answering as one.
         match files.at(&args.path) {
             At::Nothing => Err(Failure::NoSuchFile {
-                package: args.package,
-                version: args.version,
+                package: args.package.into(),
+                version: args.version.into(),
                 path: args.path,
             }),
 
             At::Directory => Err(Failure::PathIsDirectory {
-                package: args.package,
-                version: args.version,
+                package: args.package.into(),
+                version: args.version.into(),
                 path: args.path,
             }),
 

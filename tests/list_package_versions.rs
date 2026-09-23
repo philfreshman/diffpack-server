@@ -36,7 +36,7 @@ mod common;
 use common::{Client, FIXTURES};
 use diffpack_server::error::Failure;
 use diffpack_server::page;
-use diffpack_server::registry::Registry;
+use diffpack_server::registry::{PackageName, Registry};
 use diffpack_server::tools::list_package_versions::{Args, ListPackageVersions, Version};
 use diffpack_server::tools::Tool;
 use diffpack_server::tools::{Call, Ctx};
@@ -803,7 +803,7 @@ async fn the_handler_answers_with_typed_versions() {
     let answer = ListPackageVersions::call(
         Args {
             registry: Registry::Crates,
-            package: "tokio".to_owned(),
+            package: PackageName::new("tokio"),
             cursor: None,
             limit: None,
         },
@@ -838,7 +838,7 @@ async fn the_handler_returns_the_failure_that_names_the_absent_package() {
     let failure = ListPackageVersions::call(
         Args {
             registry: Registry::Npm,
-            package: "not-a-real-package".to_owned(),
+            package: PackageName::new("not-a-real-package"),
             cursor: None,
             limit: None,
         },

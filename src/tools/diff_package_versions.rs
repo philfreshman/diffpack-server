@@ -91,6 +91,12 @@
 //! and that a handle whose halves disagree is refused. A sentence here would
 //! *replace* that rather than add to it, which is how the tool that mints a
 //! handle ends up describing it differently from the three that take one.
+//!
+//! `package`, `from_version` and `to_version` have none either, for the same
+//! reason: [`crate::registry`] writes their descriptions, from every
+//! registry's name rule and from the version rule, the ones every tool that
+//! takes a package or a version shows. What tells the two versions apart is
+//! their names and the tool's description, which says that order matters.
 
 use std::collections::BTreeMap;
 
@@ -102,7 +108,7 @@ use crate::archive::{At, FileMap};
 use crate::engine::{self, DiffFileEntry, DiffStatus, FileType, Patch};
 use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
-use crate::registry::Registry;
+use crate::registry::{PackageName, Registry, VersionName};
 use crate::resources;
 use crate::store::Entry;
 use crate::tools::get_file_diff::{self, OneFile};
@@ -135,18 +141,14 @@ pub struct Args {
     // shown is the list this server has rather than a description of one.
     pub registry: Registry,
 
-    /// The package name as the registry spells it, scope included:
-    /// `zod`, `@types/node`, `serde`.
-    pub package: String,
+    // No doc comment on this or the two below, on purpose: see the module
+    // header. Which way round the versions go is in the tool's description,
+    // where an agent reads it before it reads either field.
+    pub package: PackageName,
 
-    /// The version to compare from — the older one, normally. Spelled the
-    /// way the registry spells it: `4.0.0`. Not a range, not a tag.
-    pub from_version: String,
+    pub from_version: VersionName,
 
-    /// The version to compare to. Order matters: comparing `1.0.0` to
-    /// `2.0.0` is not the same as comparing `2.0.0` to `1.0.0`, and the two
-    /// have different identifiers.
-    pub to_version: String,
+    pub to_version: VersionName,
 
     /// How alike a removed file and an added file must be before the pair is
     /// reported as one renamed file, from `0` to `1`. Lower it to find
@@ -772,10 +774,13 @@ impl Tool for DiffPackageVersions {
         Compare two published versions of a package and summarise what \
         changed between them. Takes a registry, a package name and two exact \
         versions, all spelled the way the registry spells them. Order \
-        matters: from `1.0.0` to `2.0.0` is not the same comparison as from \
-        `2.0.0` to `1.0.0`. Answers with a summary and a handle you pass to \
-        the tools that read the comparison in detail — not with the whole \
-        list of changed files, which can be far too large to return at once.";
+        matters: the comparison runs from `from_version` to `to_version`, \
+        normally the older to the newer, and swapping the two is a different \
+        comparison with a different handle — what one reports as added, the \
+        other reports as removed. Answers with a summary and a handle you \
+        pass to the tools that read the comparison in detail — not with the \
+        whole list of changed files, which can be far too large to return at \
+        once.";
 
     /// It downloads and compares; it changes nothing anywhere.
     const READ_ONLY: bool = true;
@@ -806,9 +811,9 @@ impl Tool for DiffPackageVersions {
     async fn call(args: Args, call: &Call) -> Result<Output, Failure> {
         let handle = DiffHandle::mint(Inputs {
             registry: args.registry,
-            package: args.package,
-            from_version: args.from_version,
-            to_version: args.to_version,
+            package: args.package.into(),
+            from_version: args.from_version.into(),
+            to_version: args.to_version.into(),
             similarity_threshold: args.similarity_threshold,
             ignore_whitespace: args.ignore_whitespace,
         });

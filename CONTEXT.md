@@ -24,12 +24,14 @@ _Avoid_: package manager, source, ecosystem, repository
 **Package**:
 One named thing on a registry, across all of its versions. The name is taken
 verbatim — `@types/node` keeps the `@` and the `/`, `Typing.Extensions` keeps
-its case.
+its case. A tool takes the name as `registry::PackageName`, which checks
+nothing and whose schema states every registry's Name rule.
 _Avoid_: library, crate, module, dependency
 
 **Version**:
 One release of a package, as the registry spells it. `v4.0.0` and `4.0.0` are
-different versions here, because nothing is normalised.
+different versions here, because nothing is normalised. A tool takes one as
+`registry::VersionName`, whose schema is the version rule word for word.
 _Avoid_: release, tag, revision
 
 **Archive**:
@@ -155,7 +157,11 @@ What one registry's spelling of a package name costs a caller, in a sentence
 that can be shown to it: npm's scopes, crates.io's `-` against `_`, PyPI's
 absent normalisation. A rule is told, not enforced — nothing here refuses a
 name for breaking one, because the registry decides what exists. The version
-rule is the same kind of sentence, and is one sentence for all three.
+rule is the same kind of sentence, and is one sentence for all three. Every
+package argument's schema states all three name rules, not the one that
+applies: the registry is a separate argument, so the schema cannot know which
+one a caller will pick, and an agent reads a tool's schema without reading
+`diffpack://registries`.
 _Avoid_: validation, name format, constraint, schema
 
 **Size cap**:
