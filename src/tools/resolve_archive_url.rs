@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Failure;
 use crate::registry::{ArchiveSource, Registry};
-use crate::tools::{Ctx, Tool};
+use crate::tools::{Call, Tool};
 
 /// The tool.
 pub struct ResolveArchiveUrl;
@@ -99,7 +99,7 @@ impl Tool for ResolveArchiveUrl {
     type Args = Args;
     type Output = Output;
 
-    async fn call(args: Args, _ctx: &Ctx) -> Result<Output, Failure> {
+    async fn call(args: Args, _call: &Call) -> Result<Output, Failure> {
         // `crate::registry` owns where an archive is; this tool owns which
         // of the two answers it can serve. A registry whose archive is
         // listed rather than built needs a fetch, and fetching is #10's.

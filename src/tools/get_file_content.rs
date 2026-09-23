@@ -62,7 +62,7 @@ use crate::archive::At;
 use crate::error::Failure;
 use crate::page::{self, Excerpt};
 use crate::registry::Registry;
-use crate::tools::{Ctx, Tool};
+use crate::tools::{Call, Tool};
 
 /// The tool.
 pub struct GetFileContent;
@@ -144,8 +144,8 @@ impl Tool for GetFileContent {
     type Args = Args;
     type Output = Content;
 
-    async fn call(args: Args, ctx: &Ctx) -> Result<Content, Failure> {
-        let files = ctx
+    async fn call(args: Args, call: &Call) -> Result<Content, Failure> {
+        let files = call
             .archive()
             .fetch(args.registry, &args.package, &args.version)
             .await?;

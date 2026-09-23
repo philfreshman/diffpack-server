@@ -24,7 +24,7 @@ use diffpack_server::error::Failure;
 use diffpack_server::page;
 use diffpack_server::registry::Registry;
 use diffpack_server::tools::search_packages::{Args, SearchPackages};
-use diffpack_server::tools::{Ctx, Tool};
+use diffpack_server::tools::{Call, Ctx, Tool};
 use serde_json::{json, Value};
 
 const TOOL: &str = "search_packages";
@@ -46,7 +46,7 @@ async fn the_handler_returns_the_failure_that_says_the_source_is_unwell() {
             cursor: None,
             limit: None,
         },
-        &Ctx::fixture(FIXTURES),
+        &Call::new(&Ctx::fixture(FIXTURES)),
     )
     .await
     .expect_err("this source is not answering");

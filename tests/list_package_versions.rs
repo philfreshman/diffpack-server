@@ -38,8 +38,8 @@ use diffpack_server::error::Failure;
 use diffpack_server::page;
 use diffpack_server::registry::Registry;
 use diffpack_server::tools::list_package_versions::{Args, ListPackageVersions, Version};
-use diffpack_server::tools::Ctx;
 use diffpack_server::tools::Tool;
+use diffpack_server::tools::{Call, Ctx};
 use serde_json::{json, Value};
 
 const TOOL: &str = "list_package_versions";
@@ -807,7 +807,7 @@ async fn the_handler_answers_with_typed_versions() {
             cursor: None,
             limit: None,
         },
-        &Ctx::fixture(FIXTURES),
+        &Call::new(&Ctx::fixture(FIXTURES)),
     )
     .await
     .expect("the fixture set has this crate");
@@ -842,7 +842,7 @@ async fn the_handler_returns_the_failure_that_names_the_absent_package() {
             cursor: None,
             limit: None,
         },
-        &Ctx::fixture(FIXTURES),
+        &Call::new(&Ctx::fixture(FIXTURES)),
     )
     .await
     .expect_err("the fixture set says this URL serves nothing");

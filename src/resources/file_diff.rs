@@ -50,7 +50,7 @@ use crate::engine::DiffFileEntry;
 use crate::error::Failure;
 use crate::handle::DiffHandle;
 use crate::tools::get_file_diff::{self, OneFile};
-use crate::tools::{diff_package_versions, get_diff_tree, Ctx};
+use crate::tools::{diff_package_versions, get_diff_tree, Call};
 
 /// What stands between the handle and the path.
 const SEPARATOR: &str = "/file/";
@@ -101,14 +101,14 @@ const TTL_MS: u64 = 24 * 60 * 60 * 1000;
 pub async fn read(
     handle: &DiffHandle,
     path: &str,
-    ctx: &Ctx,
+    call: &Call,
 ) -> Result<ReadResourceResult, Failure> {
     // Before the comparison rather than after it: a URI the client cannot
     // have meant is refused without two archives being downloaded to find
     // out.
     let wanted = decoded(path)?;
 
-    let comparison = diff_package_versions::compare(handle, ctx).await?;
+    let comparison = diff_package_versions::compare(handle, call).await?;
 
     let moved = moved_from(&comparison.tree, &wanted);
     let asked = OneFile {
@@ -124,7 +124,7 @@ pub async fn read(
     // it, because this document is that answer with a media type on it (ADR
     // 0014). Whether it was stored, and what it costs when it was not, is the
     // comparison's to decide rather than this module's.
-    let patch = comparison.file_patch(ctx, asked).await?;
+    let patch = comparison.file_patch(call, asked).await?;
 
     // The segment as it arrived rather than as it decoded, so a client that
     // encoded its path is answered at the URI it asked about. The two are

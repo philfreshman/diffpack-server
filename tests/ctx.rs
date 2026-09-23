@@ -227,10 +227,10 @@ async fn no_seam_a_context_carries_can_reach_a_registry() {
 /// answering with the last of them.
 ///
 /// One context for all of a seam's calls, cloned into each request. A `Ctx`
-/// shares its seams through an `Arc`, which is what production does too: the
-/// factory is what a request goes through, not what an adapter is rebuilt by.
-/// Building a fresh one per request would give the store a fresh set of
-/// blobs and make its second call indistinguishable from its first.
+/// shares its seams through an `Arc`, and cloning one shares nothing else: it
+/// holds nothing that belongs to one call. Production builds a fresh one per
+/// request instead (`src/router.rs`), which here would give the store a fresh
+/// set of blobs and make its second call indistinguishable from its first.
 ///
 /// Answers the whole envelope rather than the result, because half of what is
 /// asserted above is a JSON-RPC error and the other half is a result.

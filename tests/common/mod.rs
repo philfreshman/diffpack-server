@@ -104,27 +104,36 @@ impl Client {
     ///
     /// What almost every suite wants. A context is built per request, the way
     /// the factory in `src/router.rs` builds one in production, so nothing a
-    /// suite does in one call is carried into the next by accident.
+    /// suite does in one call is carried into the next by accident — the
+    /// fixture store above all, which is fresh and empty for every request.
     pub fn fixture() -> Self {
-        Self::building(|| Ctx::fixture(FIXTURES))
+        Self::serving(|| Ctx::fixture(FIXTURES))
     }
 
     /// A client over a server holding `ctx`, cloned into each request.
     ///
     /// For a suite whose subject is something the context remembers — a cache
-    /// with blobs in it, a seam that answers differently the second time. A
-    /// `Ctx` shares its seams through an `Arc`, so cloning it is what
-    /// production does and building a fresh one would not be.
+    /// with blobs in it, a seam that answers differently the second time — or
+    /// that wants a context set up once: a store of its choosing, a log it
+    /// reads back.
+    ///
+    /// Production builds a fresh context per request instead (`src/router.rs`),
+    /// and the two differ only in what the seams remember, which is the thing
+    /// such a suite is asking about. They do not differ in what a call
+    /// writes: a `Ctx` holds nothing that belongs to one call, and each call's
+    /// tally is made when that call starts, so two calls through one clone
+    /// log their own phases and their own cache outcome (#96).
     pub fn over(ctx: Ctx) -> Self {
-        Self::building(move || ctx.clone())
+        Self::serving(move || ctx.clone())
     }
 
     /// A client over a server whose context `build` makes, once per request.
     ///
-    /// The seam `tests/log.rs` needs: the phases a log line reports are one
-    /// call's, and a context shared between two calls would put the first
-    /// one's fetches in the second one's window.
-    pub fn building(build: impl Fn() -> Ctx + Send + Sync + 'static) -> Self {
+    /// The router behind both constructors above. Private, because a suite
+    /// that wants a context of its own builds it once and hands it to
+    /// [`Client::over`]. A factory per suite would be a second way to say the
+    /// same thing, and a second place to explain it.
+    fn serving(build: impl Fn() -> Ctx + Send + Sync + 'static) -> Self {
         let build = Arc::new(build);
         Self::routed(move || {
             let build = Arc::clone(&build);

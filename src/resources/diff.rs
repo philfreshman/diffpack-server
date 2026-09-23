@@ -34,7 +34,7 @@ use crate::error::Failure;
 use crate::handle::{DiffHandle, Inputs};
 use crate::page;
 use crate::tools::get_diff_tree::{self, Node};
-use crate::tools::{diff_package_versions, Ctx, Tool};
+use crate::tools::{diff_package_versions, Call, Tool};
 
 /// Everything before the handle. The template below is built from it, so
 /// there is one spelling of this prefix and the matcher and the template
@@ -103,8 +103,8 @@ const TTL_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// One comparison, whole — or, when it does not fit, everything known about
 /// it and where to read the rest.
-pub async fn read(handle: &DiffHandle, ctx: &Ctx) -> Result<ReadResourceResult, Failure> {
-    let tree = diff_package_versions::compare(handle, ctx).await?.tree;
+pub async fn read(handle: &DiffHandle, call: &Call) -> Result<ReadResourceResult, Failure> {
+    let tree = diff_package_versions::compare(handle, call).await?.tree;
     let totals = diff_package_versions::totals(&tree);
 
     let whole = write(&Document {

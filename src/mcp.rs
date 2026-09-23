@@ -48,7 +48,7 @@ use rmcp::{ErrorData, RoleServer, ServerHandler};
 
 use crate::error::Failure;
 use crate::resources;
-use crate::tools::{self, Ctx};
+use crate::tools::{self, Call, Ctx};
 
 /// The name a client shows a user for this server.
 ///
@@ -225,12 +225,21 @@ impl ServerHandler for Diffpack {
     /// is a decision about what the log exposes, which is #26's to make along
     /// with `Line`'s own shape and `CONTEXT.md`'s entry saying a Line is one
     /// per tool call.
+    ///
+    /// What it will cost is smaller since #96. The step that makes a call's
+    /// tally, runs the work and writes the line is one function,
+    /// `tools::run`, so landing it is this read handed to that with whatever
+    /// line #26 settles on — not a copy of [`crate::tools::call`] with the
+    /// dispatch swapped out.
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        resources::read(&request.uri, &self.ctx)
+        // A call of its own, so the read's tally is nobody else's. Nothing
+        // reads it: the line a read leaves is #26's, and until then the
+        // tally is filled and dropped, as it was when it lived in the `Ctx`.
+        resources::read(&request.uri, &Call::new(&self.ctx))
             .await
             .map(ReadResourceResponse::from)
             .map_err(Failure::refuse)

@@ -32,9 +32,8 @@
 #
 #      `src/tools/mod.rs` is exempt from this one, because it is the only file
 #      under either directory that is not a tool or a resource: it is the
-#      collection, the `Ctx` every handler is given, and the dispatch that
-#      runs one. Those need things a tool must
-#      not have
+#      collection, the `Ctx`, the `Call` a handler is given, and the
+#      dispatch that runs one. Those need things a tool must not have
 #      — `crate::log`, for one, because the single line per call is written by
 #      the dispatch and a tool that wrote its own would make "one line per
 #      call" false. Exempting the file is the honest version of that: the

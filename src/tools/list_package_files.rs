@@ -34,7 +34,7 @@ use crate::archive::At;
 use crate::error::Failure;
 use crate::page::{self, Page};
 use crate::registry::Registry;
-use crate::tools::{Ctx, Tool};
+use crate::tools::{Call, Tool};
 
 /// The tool.
 pub struct ListPackageFiles;
@@ -158,8 +158,8 @@ impl Tool for ListPackageFiles {
     type Args = Args;
     type Output = Page<Entry>;
 
-    async fn call(args: Args, ctx: &Ctx) -> Result<Page<Entry>, Failure> {
-        let files = ctx
+    async fn call(args: Args, call: &Call) -> Result<Page<Entry>, Failure> {
+        let files = call
             .archive()
             .fetch(args.registry, &args.package, &args.version)
             .await?;

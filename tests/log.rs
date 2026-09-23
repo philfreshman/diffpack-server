@@ -487,6 +487,143 @@ async fn a_tool_that_never_asks_the_store_says_nothing_about_it() {
     );
 }
 
+/// Two calls through one context each say what their own lookup found.
+///
+/// The context is built once and cloned into both requests, which is what a
+/// suite whose subject is something the context remembers does. The first
+/// call is served out of the store; the second is a tool that never asks it.
+/// A cache outcome that belonged to the context rather than to the call would
+/// carry the first call's hit into the second call's line — and a hit rate
+/// read off those lines would count a tool with no cache as a cache hit.
+#[tokio::test]
+async fn each_call_through_one_context_says_what_its_own_lookup_found() {
+    let store = Memory::new();
+
+    // Written through a context of its own, so the one under test has made
+    // no call before the hit it is asked for.
+    call_storing(&Capture::new(), &store, "diff_package_versions", diffable()).await;
+    settles(&store).await;
+
+    let log = Capture::new();
+    let client = Client::over(
+        Ctx::fixture(FIXTURES)
+            .logging_to(log.sink())
+            .storing_in(store.store()),
+    );
+
+    client.call("diff_package_versions", diffable()).await;
+    client
+        .call(
+            "list_package_files",
+            json!({ "registry": "npm", "package": "@types/node", "version": "20.1.0" }),
+        )
+        .await;
+
+    let lines = log.lines();
+    assert_eq!(
+        lines.len(),
+        2,
+        "two calls should leave two lines, got {lines:?}"
+    );
+
+    assert_eq!(
+        parse(&lines[0])["cache"],
+        "hit",
+        "the first call asked for exactly what was stored: {}",
+        lines[0]
+    );
+    assert_eq!(
+        parse(&lines[1]).get("cache"),
+        None,
+        "the second call never asked the store, whatever the first found: {}",
+        lines[1]
+    );
+}
+
+/// Two calls through one context each time their own fetches.
+///
+/// The other half of a call's tally. Both calls download an archive, and a
+/// pause between them is time neither spent. A window that belonged to the
+/// context rather than to the call would stretch from the first call's
+/// download to the second's, pause and all — a `fetch` longer than the
+/// `total` it sits beside, which is the one reading of the two that cannot
+/// be true of any call.
+#[tokio::test]
+async fn each_call_through_one_context_times_only_its_own_fetches() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    let files = json!({ "registry": "npm", "package": "@types/node", "version": "20.1.0" });
+
+    client.call("list_package_files", files.clone()).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    client.call("list_package_files", files).await;
+
+    let lines = log.lines();
+    assert_eq!(
+        lines.len(),
+        2,
+        "two calls should leave two lines, got {lines:?}"
+    );
+
+    let second = parse(&lines[1]);
+    let fetch = second["ms"]["fetch"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("the second call downloaded an archive: {second}"));
+    let total = second["ms"]["total"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("every line says how long its call took: {second}"));
+
+    assert!(
+        fetch <= total,
+        "the second call cannot have waited longer than it ran: {second}"
+    );
+}
+
+/// A resource read leaves no line, though it reaches the same seams a tool
+/// does.
+///
+/// Not a rule this file wants to keep. A read of a diff goes through the
+/// store and the archives the way `diff_package_versions` does, and an
+/// operator cannot see it. What its line should hold is #26's to decide, and
+/// until then this is what holds that giving each call its own tally (#96)
+/// did not decide it by the way. #26 turns this test around.
+#[tokio::test]
+async fn a_resource_read_leaves_no_line_until_26_says_what_it_holds() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+
+    let summary = client.call("diff_package_versions", diffable()).await;
+    let handle = summary["structuredContent"]["handle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the summary carries a handle, got {summary}"));
+
+    let read = client
+        .post(json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "resources/read",
+            "params": { "uri": format!("diffpack://diff/{handle}") },
+        }))
+        .await;
+    assert!(
+        read["result"]["contents"][0]["text"].is_string(),
+        "the read should have answered, got {read}"
+    );
+
+    let lines = log.lines();
+    assert_eq!(
+        lines.len(),
+        1,
+        "only the tool call should have left a line, got {lines:?}"
+    );
+    assert_eq!(
+        parse(&lines[0])["tool"],
+        "diff_package_versions",
+        "the one line is the tool call's: {}",
+        lines[0]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // What never reaches a line
 // ---------------------------------------------------------------------------
@@ -643,35 +780,33 @@ async fn call_without_a_store(log: &Capture, tool: &str, arguments: Value) -> Va
 
 /// Call `tool` through the endpoint, against `store`.
 ///
-/// A fresh context per request, the way the factory in `src/router.rs` builds
-/// one: the phases a line reports are that call's, and a context cloned
-/// across two calls would put the first one's fetches in the second one's
-/// window.
+/// A context of its own for the one call, so the store is the only thing two
+/// calls share and only when a test hands them the same one. What a line
+/// reports would be that call's either way: the tally is made when the call
+/// starts, not when its context is built, and the two tests above that make
+/// two calls through one context are what hold that.
 async fn calling(log: &Capture, store: Store, tool: &str, arguments: Value) -> Value {
-    let log = log.clone();
+    let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
+    let ctx = match store {
+        Store::Fresh => ctx,
+        Store::Held(memory) => ctx.storing_in(memory.store()),
+        // Left writing to stderr, which is the store's own default and where
+        // its notes go in production. A store pointed at this buffer would
+        // put a note in it for every lookup it could not make, and `one`
+        // counts what is in the buffer — so the suite that asserts one call
+        // leaves one line would be reading the note instead. What a store
+        // says it could not do is `tests/store.rs`'s question.
+        Store::Absent => ctx.storing_in(DiffStore::unavailable()),
+    };
 
-    Client::building(move || {
-        let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
-        match &store {
-            Store::Fresh => ctx,
-            Store::Held(memory) => ctx.storing_in(memory.store()),
-            // Left writing to stderr, which is the store's own default and
-            // where its notes go in production. A store pointed at this
-            // buffer would put a note in it for every lookup it could not
-            // make, and `one` counts what is in the buffer — so the suite
-            // that asserts one call leaves one line would be reading the note
-            // instead. What a store says it could not do is
-            // `tests/store.rs`'s question.
-            Store::Absent => ctx.storing_in(DiffStore::unavailable()),
-        }
-    })
-    .post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": { "name": tool, "arguments": arguments },
-    }))
-    .await
+    Client::over(ctx)
+        .post(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": tool, "arguments": arguments },
+        }))
+        .await
 }
 
 /// The pair the cache outcome is driven with.

@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Failure;
 use crate::page::{self, Page};
 use crate::registry::Registry;
-use crate::tools::{Ctx, Tool};
+use crate::tools::{Call, Tool};
 
 /// The tool.
 pub struct SearchPackages;
@@ -130,7 +130,7 @@ impl Tool for SearchPackages {
     type Args = Args;
     type Output = Page<Hit>;
 
-    async fn call(args: Args, ctx: &Ctx) -> Result<Page<Hit>, Failure> {
+    async fn call(args: Args, call: &Call) -> Result<Page<Hit>, Failure> {
         let query = args.query.trim();
 
         // A blank query is not a search, and the three sources disagree about
@@ -150,7 +150,7 @@ impl Tool for SearchPackages {
         // that travels.
         let wanted = page::wanted(args.limit);
 
-        let hits = ctx.search().hits(args.registry, query, wanted).await?;
+        let hits = call.search().hits(args.registry, query, wanted).await?;
 
         // Mapped into this module's own shape rather than serialised where
         // it was built, so that every sentence a model reads about a hit is

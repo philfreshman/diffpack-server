@@ -25,7 +25,7 @@ use rmcp::model::{ReadResourceResult, Resource, ResourceTemplate};
 
 use crate::error::Failure;
 use crate::handle::DiffHandle;
-use crate::tools::Ctx;
+use crate::tools::Call;
 
 /// Every resource a client can read by name, in a fixed order.
 pub fn catalogue() -> Vec<Resource> {
@@ -55,17 +55,17 @@ pub fn templates() -> Vec<ResourceTemplate> {
 /// a different route — [`DiffHandle::decode`] refuses it — which is what
 /// keeps the refusal in one module rather than in each resource that takes
 /// one.
-pub async fn read(uri: &str, ctx: &Ctx) -> Result<ReadResourceResult, Failure> {
+pub async fn read(uri: &str, call: &Call) -> Result<ReadResourceResult, Failure> {
     if uri == registries::URI {
         return registries::read();
     }
 
     if let Some((handle, path)) = file_diff::parts_in(uri) {
-        return file_diff::read(&DiffHandle::decode(handle)?, path, ctx).await;
+        return file_diff::read(&DiffHandle::decode(handle)?, path, call).await;
     }
 
     if let Some(handle) = diff::handle_in(uri) {
-        return diff::read(&DiffHandle::decode(handle)?, ctx).await;
+        return diff::read(&DiffHandle::decode(handle)?, call).await;
     }
 
     Err(Failure::NoSuchResource {
