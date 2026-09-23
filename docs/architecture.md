@@ -15,7 +15,9 @@ src/mcp.rs          the ServerHandler: identity, capabilities, dispatch
 src/tools/          one module per tool: definition and handler together,
                     and diff_package_versions::compare, the one walk from a
                     handle to a comparison that every diff path takes, with
-                    Comparison::file_patch, the one way to one file's patch
+                    Comparison::file_patch, the one way to one file's patch;
+                    Ctx, the seams that outlive a call, and Call, one call
+                    over them with its own tally
 src/resources/      one module per resource: URI and handler together
 src/registry.rs     what a registry is: npm, crates, pypi (go later)
 src/archive/        fetch(registry, package, version) -> FileMap, and what
@@ -71,7 +73,7 @@ otherwise, and its allow-list is the list above.
 
 `src/tools/mod.rs` is exempt from the import half of that rule, because it is
 the one file under either directory that is not a tool or a resource: it is
-the collection, the `Ctx`, and
+the collection, the `Ctx` and the `Call`, and
 the dispatch, and those need what a tool must not have — `crate::log`, so that
 the one line per call is written once by the dispatch rather than nineteen
 times by the tools that remembered. That exact path and no other: a tool is
@@ -178,18 +180,31 @@ list of tools, and the generic call path where arguments are validated and
 `Failure` is put on its channel — which is why a handler returns
 `Result<Output, Failure>` and never names a result type of MCP's.
 
-`Ctx` is what one request carries, built once by the service factory
-`router::router_with` takes and cloned into every call. For a handler that
-means the seams it may reach: `Archive`, `Catalogue`, `Search` and
-`DiffStore`, while `registry`, `page` and `handle` are named directly because
-a pure module has nothing to hand over. Beside them it carries what the
-dispatch needs and a handler never touches — the log's `Sink`, the `Spent`
-that the phases of one call add up in, and the `Lookup` that says what the
-call found in the store. `Ctx::archive()`, `Ctx::catalogue()` and
-`Ctx::search()` hand back their seam with that stopwatch already on it, so a
-wait on a registry cannot go uncounted and a handler's call is unchanged.
+`Ctx` is what outlives a call, built once per request by the service factory
+`router::router_with` takes: the seams a handler may reach — `Archive`,
+`Catalogue`, `Search` and `DiffStore`, while `registry`, `page` and `handle`
+are named directly because a pure module has nothing to hand over — and the
+log's `Sink`, which the dispatch writes to and a handler never touches.
+Nothing in it belongs to one call, so cloning a `Ctx` is always safe.
 
-`Ctx::store()` hands back a wrapper of its own rather than that one, and the
+`Call` is one call while it runs, and it is what a handler is handed: a
+`Ctx`'s seams, and the call's own tally — the `Spent` its phases add up in and
+the `Lookup` that says what it found in the store. Both are made with the
+call. `tools::run` makes the `Call`, runs the work and writes the line, and
+`tools::call` is that step with the dispatch as the work, so a resource read
+can use the same step once #26 says what its line holds. Until then
+`read_resource` makes a `Call` of its own and writes nothing. The tally used
+to live in the `Ctx` (#96), and in production nothing could tell: by [ADR
+0008](adr/0008-no-sessions.md) there are no sessions, so a request is one call
+and a context built per request lived exactly as long as its call. A `Ctx`
+cloned across two calls is where the two came apart, and only the suite does
+that — which is where every call after a cache hit logged `hit`.
+
+`Call::archive()`, `Call::catalogue()` and `Call::search()` hand back their
+seam with that call's stopwatch already on it, so a wait on a registry cannot
+go uncounted and a handler's call is unchanged.
+
+`Call::store()` hands back a wrapper of its own rather than that one, and the
 difference is a decision rather than an omission: the `fetch` phase answers
 how long a call waited on a *registry*, and a cache read counted towards it
 would report the call that avoided two downloads as the one that waited
@@ -208,6 +223,10 @@ production takes rather than around it. `tests/common/mod.rs` is the one
 client that does the reaching — the SEP-2243 headers, the per-request `_meta`,
 the protocol revision and the router over a supplied `Ctx`, in one spelling,
 so that a suite says which context it is in and nothing else about the wire.
+It builds a context two ways: `Client::fixture` makes a fresh one per request,
+as production does, and `Client::over` clones one the suite made. The two
+differ only in what the seams remember, since a call's tally is never in the
+context.
 
 It is built two ways and only two: `Ctx::new` is every seam live and
 `Ctx::fixture` is every seam reading from the checked-in sets under
@@ -861,18 +880,24 @@ must not reach a model are one definition. Argument values are redacted and
 *then* cut, in that order: a signed URL cut at a hundred characters loses its
 `?` and stops looking like one.
 
-Where a call's time goes is accumulated in `Spent`, which a `Ctx` holds for
-the length of one request and the seams write into. `Ctx::archive()`,
-`Ctx::catalogue()` and `Ctx::search()` each hand back their seam with the
-stopwatch already on it, so a handler is unchanged and there is no way to
+Where a call's time goes is accumulated in `Spent`, which the seams write
+into. It is the call's and not the context's: `tools::run` makes one with the
+`Call` a handler is given, when the call starts, and writes the line from it
+when the call ends. A `Ctx` lives as long as its seams and can be cloned
+across calls, and a `Spent` held there measured the second call's window from
+the first call's fetches (#96). In production the two lifetimes are the same,
+because by [ADR 0008](adr/0008-no-sessions.md) a request is one call.
+`Call::archive()`, `Call::catalogue()` and `Call::search()` each hand back
+their seam with the stopwatch already on it, so a handler is unchanged and there is no way to
 wait on a registry uncounted. One wrapper over all three, because the phase
 answers how long the call waited rather than which document it waited for —
 and a tool that only reads a catalogue reporting no wait at all is the
 reading an operator would take for "this one never left the process".
 
 What the call found in the store is recorded the same way and by the same
-kind of wrapper: `Ctx::store()` hands back the seam with the lookup already
-written down, so `ctx.store().get(..)` is the call it always was and there is
+kind of wrapper, into a `Lookup` the `Call` holds beside its `Spent`:
+`Call::store()` hands back the seam with the lookup already written down, so
+`call.store().get(..)` is the call it always was and there is
 no way left to answer out of the cache without the line saying so. It is not
 `Timed`, because a cache read is deliberately outside the fetch phase — that
 phase answers how long the call waited on a *registry*, and a lookup counted

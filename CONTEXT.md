@@ -353,13 +353,28 @@ _Avoid_: command, endpoint, action, handler (alone)
 **Ctx**:
 What a Tool's handler is allowed to reach: the seams that carry state a
 handler should not build — `archive`, `catalogue`, `search`, the DiffStore —
-built once per request and handed to every call. A pure module is not in it
-and does not need to be: a handler names `registry`, `page` and `handle`
-directly. Anything a handler needs that is neither in Ctx nor a pure module
-is a seam it has gone around. It is built whole or not at all: every seam
-live, or every seam reading from the fixture sets. There is no half of one,
-because the half that was not asked for would have to be live.
+built once per request, and reached by a handler through a Call made from
+it. A pure module is not in it and does not need to be: a handler names
+`registry`, `page` and `handle` directly. Anything a handler needs that is
+neither in Ctx nor a pure module is a seam it has gone around. It is built
+whole or not at all: every seam live, or every seam reading from the fixture
+sets. There is no half of one, because the half that was not asked for would
+have to be live. It holds nothing that belongs to one call, so cloning it
+shares no Phase and no Cache outcome.
 _Avoid_: state, globals, services, dependencies
+
+**Call**:
+One tool call while it runs, and what a handler is handed: a Ctx's seams,
+and the call's own tally — where its Phases add up and what its lookup in
+the DiffStore found. The tally is made when the call starts and read once,
+when its Line is written, so a Line describes its own call and no other. In
+production a Call and a request last exactly as long, because there are no
+sessions ([ADR 0008](docs/adr/0008-no-sessions.md)); what the distinction
+buys is that a Ctx cloned across two calls cannot carry one call's Cache
+outcome into the next. Distinct from a Ctx, which outlives it, and from a
+Line, which is what it leaves behind.
+_Avoid_: request (in production the same length, but not the same thing),
+session, context, invocation
 
 **Hints**:
 The three facts a Tool states about itself beside its schema: read-only,
