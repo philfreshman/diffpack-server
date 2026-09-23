@@ -579,6 +579,51 @@ async fn each_call_through_one_context_times_only_its_own_fetches() {
     );
 }
 
+/// A resource read leaves no line, though it reaches the same seams a tool
+/// does.
+///
+/// Not a rule this file wants to keep. A read of a diff goes through the
+/// store and the archives the way `diff_package_versions` does, and an
+/// operator cannot see it. What its line should hold is #26's to decide, and
+/// until then this is what holds that giving each call its own tally (#96)
+/// did not decide it by the way. #26 turns this test around.
+#[tokio::test]
+async fn a_resource_read_leaves_no_line_until_26_says_what_it_holds() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+
+    let summary = client.call("diff_package_versions", diffable()).await;
+    let handle = summary["structuredContent"]["handle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the summary carries a handle, got {summary}"));
+
+    let read = client
+        .post(json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "resources/read",
+            "params": { "uri": format!("diffpack://diff/{handle}") },
+        }))
+        .await;
+    assert!(
+        read["result"]["contents"][0]["text"].is_string(),
+        "the read should have answered, got {read}"
+    );
+
+    let lines = log.lines();
+    assert_eq!(
+        lines.len(),
+        1,
+        "only the tool call should have left a line, got {lines:?}"
+    );
+    assert_eq!(
+        parse(&lines[0])["tool"],
+        "diff_package_versions",
+        "the one line is the tool call's: {}",
+        lines[0]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // What never reaches a line
 // ---------------------------------------------------------------------------
