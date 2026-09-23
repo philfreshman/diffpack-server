@@ -38,11 +38,14 @@
 //! client, which is #20's, and what only the real service can settle, which
 //! is the one `#[ignore]`d test in `src/store/mod.rs`.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod common;
 
 use common::{Client, FIXTURES};
+use diffpack_server::engine::Patch;
+use diffpack_server::handle::DiffHandle;
 use diffpack_server::log::Capture;
 use diffpack_server::store::{DiffStore, Memory, Operation};
 use diffpack_server::tools::Ctx;
@@ -1238,6 +1241,61 @@ async fn an_entry_holds_no_patch_for_a_path_that_became_a_directory() {
         json!(false),
         "and leaving it out is not a patch dropped"
     );
+}
+
+/// An entry written before #103, holding that path's patch, is refused too.
+///
+/// The test above is why no new entry holds one, and so why none of the four
+/// cells can tell whether the tree is asked before the stored patch or after
+/// it. An entry already in a store can: it was written when the removal
+/// patch for `lib` was rendered like any other, and it stays until it is
+/// evicted. So this puts the patch back the way such an entry held it —
+/// `patches.json` lost, and the entry put again with it, which writes only
+/// the blob that is missing — and asks through `ONE_SIDED`, where serving
+/// that patch is the only answer a wrong order could give.
+#[tokio::test]
+async fn a_patch_an_older_entry_holds_for_a_path_that_became_a_directory_is_not_served() {
+    let store = Memory::new();
+    let diffed = call(|| store.store(), shape("1.0.0", "2.0.0")).await;
+    settles(&store, 2).await;
+    let handle = diffed["structuredContent"]["handle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
+        .to_owned();
+
+    let key = DiffHandle::decode(&handle)
+        .unwrap_or_else(|_| panic!("the handle the call minted decodes"))
+        .key();
+    let mut entry = store
+        .store()
+        .get(&key)
+        .await
+        .unwrap_or_else(|| panic!("the entry is stored, {:?} is", store.written()));
+    entry.patches.insert(
+        "lib".to_owned(),
+        Patch {
+            data: "--- from/lib\n+++ /dev/null\n@@ -1 +0,0 @@\n\
+                   -A plain file, where 2.0.0 has a directory.\n"
+                .to_owned(),
+            is_diff: true,
+        },
+    );
+    store.forget(&patches_of(&diffed));
+    Arc::new(store.store()).put(entry);
+    settles(&store, 2).await;
+    assert!(
+        blob(&store, &patches_of(&diffed)).get("lib").is_some(),
+        "the entry holds a patch for `lib` again, the way one written before #103 did"
+    );
+
+    let served = one_sided(
+        || store.store(),
+        "get_file_diff",
+        json!({ "handle": handle, "path": "lib" }),
+    )
+    .await;
+
+    is_refused_as_a_directory_in_2(&served);
 }
 
 /// `shape` compared from `from` to `to`.
