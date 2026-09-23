@@ -1715,6 +1715,42 @@ async fn a_head_that_fails_for_one_blob_of_an_entry_writes_neither_blob() {
     );
 }
 
+/// A put that fails still answers the diff, and says it could not write.
+///
+/// The write happens after the answer has gone, so there is no caller left
+/// for its failure to reach — and there should not be: the diff was worked
+/// out, and a cache that could not keep a copy of it has cost one recomputed
+/// diff next time and nothing else. What is left is a Note, because a write
+/// that failed without saying so is a cache that has quietly stopped
+/// working, which looks exactly like a cache that is working and cold.
+#[tokio::test]
+async fn a_put_that_fails_still_answers_the_diff_and_says_so() {
+    let store = Memory::new();
+
+    let log = Capture::new();
+    let refusing = Memory::failing(&store, Operation::Write);
+    let answer = call(|| refusing.store().logging_to(log.sink()), diffable()).await;
+    let notes = noted(&log).await;
+
+    let working = Memory::new();
+    let cold = call(|| working.store(), diffable()).await;
+
+    assert_eq!(
+        answer, cold,
+        "a diff whose entry could not be written is the diff computed with a \
+         store that could"
+    );
+    assert_eq!(
+        store.written(),
+        Vec::<String>::new(),
+        "a put the store refused left something behind"
+    );
+    assert!(
+        notes.iter().all(|note| note.contains("writing to")),
+        "the store says the write is what could not be done: {notes:?}"
+    );
+}
+
 /// Fail if `store` ever writes the entry `answer` is about.
 ///
 /// A refusal is an absence, and an absence is not something to wait for: it

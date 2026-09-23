@@ -948,6 +948,9 @@ pub enum Operation {
     /// has to write.
     Head,
 
+    /// Putting a blob, which is the one thing a write is for.
+    Write,
+
     /// Deleting an entry's blobs, which is how a sweep makes room.
     Delete,
 }
@@ -1199,6 +1202,7 @@ impl Memory {
 
     async fn write(&self, pathname: &str, bytes: Vec<u8>) -> Result<(), Failure> {
         self.stalled().await;
+        self.refusing(Operation::Write)?;
 
         if let Ok(mut blobs) = self.blobs.lock() {
             let uploaded_at = format!("{:020}", UPLOADS.fetch_add(1, Ordering::Relaxed));
