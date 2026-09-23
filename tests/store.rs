@@ -1208,6 +1208,38 @@ async fn a_read_of_a_path_that_is_a_file_and_a_directory_is_the_tools_refusal() 
     }
 }
 
+/// An entry is written without a patch for that path.
+///
+/// The tree calls `lib` a removed file, but 2.0.0 has a directory there and
+/// the refusal above means no caller is ever served a patch for it. So the
+/// comparison does not render one while it has both archives in hand, and
+/// the entry does not carry bytes nobody may read. `lib/index.js` is
+/// `unchanged` in this tree and `package.json` did not change, so there is
+/// nothing else to store.
+///
+/// Read off the blob rather than off the wire, for the reason
+/// `patches_omitted` is: the refusal is what an answer turns on, and the
+/// entry is where what it holds can be read. Nothing was dropped either —
+/// the patch was never rendered, so the entry says nothing is missing.
+#[tokio::test]
+async fn an_entry_holds_no_patch_for_a_path_that_became_a_directory() {
+    let store = Memory::new();
+
+    let answer = call(|| store.store(), shape("1.0.0", "2.0.0")).await;
+    settles(&store, 2).await;
+
+    assert_eq!(
+        blob(&store, &patches_of(&answer)),
+        json!({}),
+        "`lib` is a directory in 2.0.0, so its removal patch is not one to keep"
+    );
+    assert_eq!(
+        blob(&store, &meta_of(&answer))["patches_omitted"],
+        json!(false),
+        "and leaving it out is not a patch dropped"
+    );
+}
+
 /// `shape` compared from `from` to `to`.
 fn shape(from: &str, to: &str) -> Value {
     json!({

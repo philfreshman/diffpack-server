@@ -381,6 +381,13 @@ fn rendered(node: &DiffFileEntry, files: &Versions, ignore_whitespace: bool) -> 
 }
 
 /// Add every changed file under `node` to `patches`.
+///
+/// A file node whose path the file maps call a directory in either version is
+/// left out. The tree calls a path a file where the engine's one node per
+/// path has lost the directory at it (see [`directory_in_tree`]), and
+/// [`refuse_directory`] means no caller is served a patch for that path, so
+/// storing one would be bytes in the entry that nobody may read. Nothing
+/// counts it as dropped: it was never rendered.
 fn collect(
     node: &DiffFileEntry,
     files: &Versions,
@@ -394,6 +401,10 @@ fn collect(
             }
 
             let was = node.old_path.as_deref().unwrap_or(&node.path);
+            if files.directory_at(End::To, &node.path) || files.directory_at(End::From, was) {
+                return;
+            }
+
             patches.insert(
                 node.path.clone(),
                 patch_of(files, &node.path, was, ignore_whitespace),
@@ -504,9 +515,11 @@ impl Comparison {
     ///    The tree is on every comparison and already says what the path is,
     ///    so two downloads would only say it again. First, and before the
     ///    stored patch, because of the one path that is a file in one version
-    ///    and a directory in the other: the tree calls it a file, the entry
-    ///    holds a patch for it, and serving that patch is the answer a fresh
-    ///    comparison refuses (see [`directory_in_tree`]).
+    ///    and a directory in the other: the tree calls it a file, an entry
+    ///    written before #103 holds a patch for it, and serving that patch is
+    ///    the answer a fresh comparison refuses (see [`directory_in_tree`]).
+    ///    [`compare`] no longer renders one, but entries already in the store
+    ///    are refused here all the same.
     /// 2. The patch this comparison is already holding for the file, where it
     ///    was remembered with one. A warm call that gets one fetches nothing.
     /// 3. Both versions' files, downloaded now if this comparison was
@@ -592,7 +605,7 @@ impl Comparison {
         };
 
         refuse_directory(inputs, path, from_path, |end, path| {
-            files.of(end).at(path) == At::Directory
+            files.directory_at(end, path)
         })?;
 
         Ok(patch_of(files, path, from_path, inputs.ignore_whitespace))
@@ -607,12 +620,18 @@ enum End {
 }
 
 impl Versions {
-    /// The files `end` ships.
-    fn of(&self, end: End) -> &FileMap {
-        match end {
+    /// Whether the version `end` names ships a directory at `path`.
+    ///
+    /// The file maps' answer, which is the one the tree has to agree with:
+    /// asked when a caller's path is refused once both versions are in hand,
+    /// and when [`compare`] decides which files to render a patch for.
+    fn directory_at(&self, end: End, path: &str) -> bool {
+        let files = match end {
             End::From => &self.from_files,
             End::To => &self.to_files,
-        }
+        };
+
+        files.at(path) == At::Directory
     }
 }
 
