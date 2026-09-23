@@ -38,11 +38,14 @@
 //! client, which is #20's, and what only the real service can settle, which
 //! is the one `#[ignore]`d test in `src/store/mod.rs`.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod common;
 
 use common::{Client, FIXTURES};
+use diffpack_server::engine::Patch;
+use diffpack_server::handle::DiffHandle;
 use diffpack_server::log::Capture;
 use diffpack_server::store::{DiffStore, Memory, Operation};
 use diffpack_server::tools::Ctx;
@@ -1083,6 +1086,276 @@ async fn a_read_of_a_directory_is_refused_out_of_the_entry_too() {
     assert_ne!(
         missed, served,
         "and that failure is the fetch, not the directory refusal"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// One path, a file in one version and a directory in the other
+// ---------------------------------------------------------------------------
+//
+// `lib` is a file in `shape` 1.0.0 and a directory in 2.0.0. The engine keeps
+// one node per path, so the tree loses one of the two: compared from 1.0.0 it
+// calls `lib` a removed file with `lib/index.js` beneath it, and compared from
+// 2.0.0 it calls `lib` a removed directory and has no file `lib` at all.
+//
+// A path that is a directory in either version is refused (#103), and the
+// four tests below are the four cells: each direction, cold and warm. A warm
+// one is asked through `ONE_SIDED`, which has `shape` 1.0.0 and not 2.0.0, so
+// it is also held to answering without a download.
+
+/// A path that became a directory is refused when nothing is stored.
+///
+/// The FileMaps say `lib` is a directory in 2.0.0, which is the refusal a
+/// directory gets, and that version is the one named.
+#[tokio::test]
+async fn a_path_that_became_a_directory_is_refused_cold() {
+    let refused = lib_cold("1.0.0", "2.0.0").await;
+
+    is_refused_as_a_directory_in_2(&refused);
+}
+
+/// And it is refused the same way when the comparison is stored.
+///
+/// The case #103 is about. The entry was written with the tree calling `lib`
+/// a removed file, and a removed file has a patch, so this used to serve that
+/// patch where the cold call refuses. The tree calling it a file and also
+/// listing `lib/index.js` beneath it is what says it is a directory in 2.0.0,
+/// and that is known without the archives.
+#[tokio::test]
+async fn a_path_that_became_a_directory_is_refused_warm_without_the_archives() {
+    let served = lib_warm("1.0.0", "2.0.0").await;
+
+    assert_eq!(
+        served,
+        lib_cold("1.0.0", "2.0.0").await,
+        "a stored comparison answers `lib` as a fresh one does, and without \
+         fetching 2.0.0, which this fixture set does not have: got {served}"
+    );
+    is_refused_as_a_directory_in_2(&served);
+}
+
+/// A path that stops being a directory is refused when nothing is stored.
+///
+/// The other way round: `lib` is a directory in 2.0.0, which is now the
+/// version compared from. The tree calls it a removed directory and has no
+/// file `lib` at all, so the refusal comes out of the tree.
+#[tokio::test]
+async fn a_path_that_stopped_being_a_directory_is_refused_cold() {
+    let refused = lib_cold("2.0.0", "1.0.0").await;
+
+    is_refused_as_a_directory_in_2(&refused);
+}
+
+/// And it is refused the same way when the comparison is stored.
+///
+/// The entry holds no patch for `lib`, because the tree it was written from
+/// has no file there, and the stored tree still says it is a directory.
+#[tokio::test]
+async fn a_path_that_stopped_being_a_directory_is_refused_warm_without_the_archives() {
+    let served = lib_warm("2.0.0", "1.0.0").await;
+
+    assert_eq!(
+        served,
+        lib_cold("2.0.0", "1.0.0").await,
+        "a stored comparison answers `lib` as a fresh one does, and without \
+         fetching 2.0.0, which this fixture set does not have: got {served}"
+    );
+    is_refused_as_a_directory_in_2(&served);
+}
+
+/// The resource answers that path as the tool does, in all four cells.
+///
+/// A read of `diffpack://diff/{handle}/file/lib` is the tool's answer with a
+/// media type on it (ADR 0014), and a refusal has no media type: it arrives
+/// as the JSON-RPC error rather than as `isError`, carrying the sentence the
+/// tool's error carries. So what is held is that sentence, the same on both
+/// channels, and that it is the refusal for a directory in 2.0.0.
+///
+/// A warm read and a warm call share one entry and go through `ONE_SIDED`
+/// together, so neither can have downloaded.
+#[tokio::test]
+async fn a_read_of_a_path_that_is_a_file_and_a_directory_is_the_tools_refusal() {
+    for (from, to) in [("1.0.0", "2.0.0"), ("2.0.0", "1.0.0")] {
+        let store = Memory::new();
+        let diffed = call(|| store.store(), shape(from, to)).await;
+        settles(&store, 2).await;
+        let handle = diffed["structuredContent"]["handle"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
+            .to_owned();
+        let asked = json!({ "handle": handle, "path": "lib" });
+        let uri = format!("diffpack://diff/{handle}/file/lib");
+
+        let cold = || Memory::new().store();
+        let cells = [
+            (
+                "warm",
+                one_sided(|| store.store(), "get_file_diff", asked.clone()).await,
+                read(ONE_SIDED, || store.store(), &uri).await,
+            ),
+            (
+                "cold",
+                call_tool(cold, "get_file_diff", asked.clone()).await,
+                read(FIXTURES, cold, &uri).await,
+            ),
+        ];
+
+        for (when, called, read) in cells {
+            is_refused_as_a_directory_in_2(&called);
+            assert_eq!(
+                read["error"]["message"], called["content"][0]["text"],
+                "{from} → {to} {when}: the resource refuses `lib` with the \
+                 tool's sentence, got {read} against {called}"
+            );
+        }
+    }
+}
+
+/// An entry is written without a patch for that path.
+///
+/// The tree calls `lib` a removed file, but 2.0.0 has a directory there and
+/// the refusal above means no caller is ever served a patch for it. So the
+/// comparison does not render one while it has both archives in hand, and
+/// the entry does not carry bytes nobody may read. `lib/index.js` is
+/// `unchanged` in this tree and `package.json` did not change, so there is
+/// nothing else to store.
+///
+/// Read off the blob rather than off the wire, for the reason
+/// `patches_omitted` is: the refusal is what an answer turns on, and the
+/// entry is where what it holds can be read. Nothing was dropped either —
+/// the patch was never rendered, so the entry says nothing is missing.
+#[tokio::test]
+async fn an_entry_holds_no_patch_for_a_path_that_became_a_directory() {
+    let store = Memory::new();
+
+    let answer = call(|| store.store(), shape("1.0.0", "2.0.0")).await;
+    settles(&store, 2).await;
+
+    assert_eq!(
+        blob(&store, &patches_of(&answer)),
+        json!({}),
+        "`lib` is a directory in 2.0.0, so its removal patch is not one to keep"
+    );
+    assert_eq!(
+        blob(&store, &meta_of(&answer))["patches_omitted"],
+        json!(false),
+        "and leaving it out is not a patch dropped"
+    );
+}
+
+/// An entry written before #103, holding that path's patch, is refused too.
+///
+/// The test above is why no new entry holds one, and so why none of the four
+/// cells can tell whether the tree is asked before the stored patch or after
+/// it. An entry already in a store can: it was written when the removal
+/// patch for `lib` was rendered like any other, and it stays until it is
+/// evicted. So this puts the patch back the way such an entry held it —
+/// `patches.json` lost, and the entry put again with it, which writes only
+/// the blob that is missing — and asks through `ONE_SIDED`, where serving
+/// that patch is the only answer a wrong order could give.
+#[tokio::test]
+async fn a_patch_an_older_entry_holds_for_a_path_that_became_a_directory_is_not_served() {
+    let store = Memory::new();
+    let diffed = call(|| store.store(), shape("1.0.0", "2.0.0")).await;
+    settles(&store, 2).await;
+    let handle = diffed["structuredContent"]["handle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
+        .to_owned();
+
+    let key = DiffHandle::decode(&handle)
+        .unwrap_or_else(|_| panic!("the handle the call minted decodes"))
+        .key();
+    let mut entry = store
+        .store()
+        .get(&key)
+        .await
+        .unwrap_or_else(|| panic!("the entry is stored, {:?} is", store.written()));
+    entry.patches.insert(
+        "lib".to_owned(),
+        Patch {
+            data: "--- from/lib\n+++ /dev/null\n@@ -1 +0,0 @@\n\
+                   -A plain file, where 2.0.0 has a directory.\n"
+                .to_owned(),
+            is_diff: true,
+        },
+    );
+    store.forget(&patches_of(&diffed));
+    Arc::new(store.store()).put(entry);
+    settles(&store, 2).await;
+    assert!(
+        blob(&store, &patches_of(&diffed)).get("lib").is_some(),
+        "the entry holds a patch for `lib` again, the way one written before #103 did"
+    );
+
+    let served = one_sided(
+        || store.store(),
+        "get_file_diff",
+        json!({ "handle": handle, "path": "lib" }),
+    )
+    .await;
+
+    is_refused_as_a_directory_in_2(&served);
+}
+
+/// `shape` compared from `from` to `to`.
+fn shape(from: &str, to: &str) -> Value {
+    json!({
+        "registry": "npm",
+        "package": "shape",
+        "from_version": from,
+        "to_version": to,
+    })
+}
+
+/// A handle for `shape` compared from `from` to `to`, minted in a store that
+/// is dropped straight after.
+async fn shape_handle(from: &str, to: &str) -> Value {
+    let minted = Memory::new();
+    let diffed = call(|| minted.store(), shape(from, to)).await;
+
+    diffed["structuredContent"]["handle"].clone()
+}
+
+/// What `get_file_diff` answers for `lib` with nothing stored.
+async fn lib_cold(from: &str, to: &str) -> Value {
+    let asked = json!({ "handle": shape_handle(from, to).await, "path": "lib" });
+
+    let cold = Memory::new();
+    call_tool(|| cold.store(), "get_file_diff", asked).await
+}
+
+/// What `get_file_diff` answers for `lib` out of a stored comparison, through
+/// a fixture set that cannot fetch 2.0.0.
+async fn lib_warm(from: &str, to: &str) -> Value {
+    let store = Memory::new();
+    let diffed = call(|| store.store(), shape(from, to)).await;
+    settles(&store, 2).await;
+    let asked = json!({
+        "handle": diffed["structuredContent"]["handle"].clone(),
+        "path": "lib",
+    });
+
+    one_sided(|| store.store(), "get_file_diff", asked).await
+}
+
+/// Assert `answer` is the refusal for `lib` being a directory in 2.0.0.
+///
+/// The version is the part worth holding: whichever way round `shape` is
+/// compared, 2.0.0 is the one with the directory.
+fn is_refused_as_a_directory_in_2(answer: &Value) {
+    assert_eq!(
+        answer["isError"],
+        json!(true),
+        "`lib` is a directory in 2.0.0, so it has no patch: got {answer}"
+    );
+
+    let message = answer["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a tool error carries text for the model, got {answer}"));
+    assert!(
+        message.contains("`lib`") && message.contains("2.0.0") && message.contains("directory"),
+        "the refusal names the path and the version it is a directory in: got {message}"
     );
 }
 

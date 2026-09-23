@@ -1,4 +1,7 @@
 {
   "https://registry.npmjs.org/diffable/-/diffable-1.0.0.tgz": "../../archives/diffable-1.0.0.tgz",
-  "https://registry.npmjs.org/diffable/-/diffable-2.0.0.tgz": null
+  "https://registry.npmjs.org/diffable/-/diffable-2.0.0.tgz": null,
+
+  "https://registry.npmjs.org/shape/-/shape-1.0.0.tgz": "../../archives/shape-1.0.0.tgz",
+  "https://registry.npmjs.org/shape/-/shape-2.0.0.tgz": null
 }

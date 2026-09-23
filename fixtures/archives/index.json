@@ -38,6 +38,9 @@
 
   "https://registry.npmjs.org/empty-file/-/empty-file-1.0.0.tgz": "empty-file-1.0.0.tgz",
 
+  "https://registry.npmjs.org/shape/-/shape-1.0.0.tgz": "shape-1.0.0.tgz",
+  "https://registry.npmjs.org/shape/-/shape-2.0.0.tgz": "shape-2.0.0.tgz",
+
   "https://pypi.org/pypi/sneaky/1.0.0/json": "sneaky-1.0.0.json",
   "https://cdn.example.invalid/sneaky-1.0.0.tar.gz": "sneaky-1.0.0.tar.gz",
 
