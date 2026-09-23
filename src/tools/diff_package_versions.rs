@@ -382,8 +382,9 @@ fn rendered(node: &DiffFileEntry, files: &Versions, ignore_whitespace: bool) -> 
 
 /// Add every changed file under `node` to `patches`.
 ///
-/// A file node whose path the file maps call a directory in either version is
-/// left out. The tree calls a path a file where the engine's one node per
+/// A file node the file maps call a directory in either version is left out:
+/// in the second version at its path, or in the first where it was. The tree
+/// calls a path a file where the engine's one node per
 /// path has lost the directory at it (see [`directory_in_tree`]), and
 /// [`refuse_directory`] means no caller is served a patch for that path, so
 /// storing one would be bytes in the entry that nobody may read. Nothing
@@ -569,6 +570,12 @@ impl Comparison {
     /// spelling this one: a renamed file asked about without its `old_path`
     /// is every line of it added, which is what `get_file_diff` has always
     /// said and has to keep saying whether or not anything asked before.
+    ///
+    /// It does not ask what is at `path`. [`Comparison::file_patch`] has
+    /// refused a directory before it gets here, and that order is what keeps
+    /// the patch an entry written before #103 holds for a path that is a
+    /// directory in either version from being served (see
+    /// [`directory_in_tree`]).
     fn stored(&self, path: &str, old_path: Option<&str>) -> Option<&Patch> {
         let node = get_diff_tree::node_at(&self.tree, path)?;
 
@@ -649,9 +656,22 @@ impl Versions {
 /// any. So a file node with children, whose status leaves `end` out, is a
 /// directory in `end`. Compared from the directory, the tree calls the path a
 /// directory and has lost the file, and the first rule already answers.
-/// Until the engine can hold both at one path this is the reading that makes
-/// the tree agree with the file maps; see `docs/architecture.md` on
-/// `src/engine.rs`.
+///
+/// That reading rests on the layout `diffpack-engine` 0.3.0 builds, and it is
+/// the engine's defect rather than a rule: philfreshman/diffpack-engine#7.
+/// In that layout the directory's contents (`lib/index.js` in the `shape`
+/// fixture) are children of the file node, and the file node is what
+/// [`get_diff_tree::node_at`] finds for the path. An engine that put the
+/// directory's contents beside the file node instead would leave this reading
+/// a file with no children, and the warm `shape` tests in `tests/store.rs`
+/// would fail: they answer through a fixture set that cannot download 2.0.0,
+/// and without this rule a warm call has to download it to refuse. An engine
+/// that can hold both at one path retires the rule; see
+/// `docs/architecture.md` on `src/engine.rs`.
+///
+/// A file node with children whose status is `modified` or `unchanged` is
+/// not read as a directory. Two well-formed archives cannot produce one: a
+/// path that is a file in both versions has nothing beneath it in either.
 fn directory_in_tree(tree: &DiffFileEntry, end: End, path: &str) -> bool {
     let Some(node) = get_diff_tree::node_at(tree, path) else {
         return false;
