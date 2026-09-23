@@ -1043,6 +1043,22 @@ mod tests {
             .expect_err("a write the store refused is not a write");
     }
 
+    /// The read's half of the same rule, and the half the policy above leans
+    /// on. A `404` is a miss the store answered; any other refusal is a read
+    /// that failed, and it has to reach the policy as one. That is what
+    /// makes a lost read the same Note whichever adapter lost it: a `read`
+    /// that turned a `403` into `None` would be a miss that says nothing,
+    /// and the suite's staged failure would be louder than production's.
+    #[tokio::test]
+    async fn a_read_the_store_refuses_is_a_failure_and_not_a_miss() {
+        let stub = Stub::answering(vec![Reply::refusing(StatusCode::FORBIDDEN, "forbidden")]).await;
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
+
+        api.read("diffs/v1/abc/meta.json")
+            .await
+            .expect_err("a read the store refused is not a miss");
+    }
+
     /// A store that is briefly unwell is the case worth spending a retry
     /// on: the request was good, nothing about it needs changing, and the
     /// alternative is a diff recomputed from two archive downloads because
