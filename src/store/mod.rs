@@ -912,14 +912,6 @@ pub struct Memory {
     /// entry it takes.
     stall: Duration,
 
-    /// Whether every read of this store answers as a miss.
-    ///
-    /// What a lookup that failed looks like, and what two invocations
-    /// computing one comparison at once look like to each other. Both end in
-    /// a write over an entry that is already there, which is the one thing
-    /// the head before a put is there to stop.
-    lose_reads: bool,
-
     /// The operation this store fails, if a test told it to fail one.
     ///
     /// What a real store does now and then, and what an in-process map
@@ -947,6 +939,10 @@ pub enum Operation {
     /// Asking whether a blob is there, which is how a write decides what it
     /// has to write.
     Head,
+
+    /// Reading a blob back, which is the half of the cache a caller waits
+    /// on.
+    Read,
 
     /// Putting a blob, which is the one thing a write is for.
     Write,
@@ -1014,24 +1010,17 @@ impl Memory {
         }
     }
 
-    /// `store`'s blobs, answering every read of them as a miss.
-    ///
-    /// Written as a view of another store rather than as a flag on one,
-    /// because what it stands for is a second reader of the same blobs — an
-    /// invocation that cannot see what the first has written.
-    pub fn losing_reads(store: &Self) -> Self {
-        Self {
-            lose_reads: true,
-            ..store.clone()
-        }
-    }
-
     /// `store`'s blobs, failing every `operation` asked of them.
     ///
-    /// A view of another store rather than a flag on one, for the reason
-    /// [`Memory::losing_reads`] is: what fails is the store, and what it
-    /// fails over is blobs a test can still read back through the one it
-    /// started with.
+    /// Written as a view of another store rather than as a flag on one,
+    /// because what fails is a second way of reaching the same blobs, and a
+    /// test still reads them back through the store it started with.
+    ///
+    /// A lost read is the one a test asks for most. It is what a lookup
+    /// that failed looks like, and what two invocations computing one
+    /// comparison at once look like to each other: both end in a write over
+    /// an entry that is already there, which is the one thing the head
+    /// before a put is there to stop.
     pub fn failing(store: &Self, operation: Operation) -> Self {
         Self::failing_for(store, operation, 0..usize::MAX)
     }
@@ -1110,9 +1099,7 @@ impl Memory {
     }
 
     async fn read(&self, pathname: &str) -> Result<Option<Vec<u8>>, Failure> {
-        if self.lose_reads {
-            return Ok(None);
-        }
+        self.refusing(Operation::Read)?;
 
         Ok(self.blob(pathname))
     }

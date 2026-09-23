@@ -548,6 +548,48 @@ async fn a_store_that_is_not_there_costs_a_recomputed_diff_and_nothing_else() {
     );
 }
 
+/// A read the store lost is a miss, and says the read is what failed.
+///
+/// The lookup is the half of the cache a caller waits on, and a lookup that
+/// failed is answered the way one that found nothing is: the comparison is
+/// worked out again. What tells the two apart is the Note, and an operator
+/// reading the log needs it to be the same Note whether the real store lost
+/// the read or the one this suite stages it in — a suite whose lost reads
+/// were quiet would be a picture of a failed lookup quieter than
+/// production's.
+///
+/// The entry is there, so the recomputed answer is the one that was
+/// remembered, and the write that follows the miss finds it and skips.
+#[tokio::test]
+async fn a_lost_read_is_a_miss_that_says_the_read_failed() {
+    let store = Memory::new();
+
+    let answer = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+
+    let log = Capture::new();
+    let lost = Memory::failing(&store, Operation::Read);
+    let again = call(|| lost.store().logging_to(log.sink()), diffable()).await;
+    let notes = noted(&log).await;
+
+    assert_eq!(
+        again["structuredContent"]["cached"],
+        json!(false),
+        "a read the store lost is not a hit, got {again}"
+    );
+    assert_eq!(
+        but_for_cached(again),
+        but_for_cached(answer),
+        "and the miss is the same comparison, worked out again"
+    );
+    assert!(
+        notes
+            .iter()
+            .all(|note| note.contains("reading a cached result")),
+        "the store says the read is what could not be done: {notes:?}"
+    );
+}
+
 /// The answer does not wait for the entry to be written.
 ///
 /// A caller is waiting on a diff, not on a cache: the store holds a copy of
@@ -611,7 +653,7 @@ async fn an_entry_that_is_already_there_is_not_written_again() {
     let (meta, patches) = (meta_of(&answer), patches_of(&answer));
     let (before_meta, before_patches) = (uploaded(&meta), uploaded(&patches));
 
-    let missed = Memory::losing_reads(&store);
+    let missed = Memory::failing(&store, Operation::Read);
     let again = call(|| missed.store(), diffable()).await;
 
     assert_eq!(
@@ -1384,7 +1426,7 @@ async fn a_put_of_an_entry_already_there_makes_no_room_it_will_not_use() {
 
     // Room for the two that are there and nothing more, so admitting
     // anything at all has to evict.
-    let missed = Memory::losing_reads(&store);
+    let missed = Memory::failing(&store, Operation::Read);
     let budgeted = || missed.store().budgeting(2 * entry + entry / 16, 2 * entry);
 
     let again = call(budgeted, at(1)).await;
@@ -1452,7 +1494,7 @@ async fn a_put_of_the_oldest_entry_does_not_sweep_itself_away() {
 
     // Room for the two that are there and nothing more, and the entry put
     // again is the one a sweep would take first.
-    let missed = Memory::losing_reads(&store);
+    let missed = Memory::failing(&store, Operation::Read);
     let budgeted = || missed.store().budgeting(2 * entry + entry / 16, 2 * entry);
 
     let again = call(budgeted, at(0)).await;
