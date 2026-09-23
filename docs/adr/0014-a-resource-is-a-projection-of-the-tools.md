@@ -12,7 +12,8 @@ calls the tool's code and arranges the result into a document:
 - `diffpack://diff/{handle}` calls `diff_package_versions::totals` for the
   totals and `get_diff_tree::nodes` for the tree.
 - `diffpack://diff/{handle}/file/{path}` calls `get_file_diff::render` for the
-  patch and `get_diff_tree::node_at` to find where a renamed file was.
+  patch and `get_diff_tree::node_at` to find where a renamed file was. Since
+  #93 it calls `Comparison::file_patch` instead — see the end.
 
 So four things that were private to a tool module are now public, each with a
 doc comment naming its second caller. What a resource owns is the document:
@@ -63,3 +64,16 @@ The direction to watch is the next one. A fifth export, or one whose doc
 comment cannot name why a resource needs it, is the sign that a resource has
 started doing its own work through the tool's front door — and the answer then
 is not another `pub`, it is the module that should have owned the thing.
+
+## Since: #93
+
+The file-diff resource was the one that went the way the paragraph above
+warns. It took the stored patch, then `get_file_diff::presented`, then both
+versions' files, then `get_file_diff::render` — the tool's own steps, in the
+tool's order, through three of its exports, with the handle passed back in
+beside files that belonged to it. The answer was the module that owns the
+thing: `diff_package_versions::Comparison::file_patch` now takes those steps
+for both callers, and the resource calls it the way the tool does. `render`
+is gone and `presented` has one caller outside its module rather than two;
+the things tool modules make public for another module went from eleven to
+eight.

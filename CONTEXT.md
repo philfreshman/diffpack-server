@@ -209,9 +209,11 @@ Handle to a Tree rather than four ([ADR
 0016](docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md)). Which half it
 has is which way it arrived: one worked out now holds both Versions' files,
 and a remembered one holds the Patches the Entry was written with and none of
-the archives those came from. So a caller asks it for the one file it wants
-and renders that file when the Comparison has no Patch for it, rather than
-asking which half it was given. Distinct from an Entry, which is how a
+the archives those came from. So one file's Patch is asked of it per file and
+rendered when the Comparison has no Patch for that file, rather than by asking
+which half it was given — and that rule is one function,
+`Comparison::file_patch`, which `get_file_diff` and the file-diff resource
+both call. Distinct from an Entry, which is how a
 Comparison is remembered: an Entry is two Blobs in a store and a Comparison is
 what one invocation is holding, with or without an Entry behind it.
 _Avoid_: diff result, cached diff, comparison result, entry

@@ -22,8 +22,9 @@
 //! blob. Losing *that* blob is served as a hit with no patches in it. What
 //! it costs is the patches that did fit, until the entry is evicted; what it
 //! cannot cost is an answer, because what reads patches back asks for one
-//! file's and renders that file when the entry has none. See
-//! [`DiffStore::get`].
+//! file's and renders that file when the entry has none — which is one
+//! function, `Comparison::file_patch` in `src/tools/diff_package_versions.rs`.
+//! See [`DiffStore::get`].
 //!
 //! # A cache failure is never a diff failure
 //!
@@ -73,8 +74,9 @@ pub struct Entry {
     /// can answer `get_file_diff` and the file-diff resource, because a tree
     /// holds statuses, paths and line counts and never a file's contents. A
     /// reader asks for the one file it is about and renders that file when
-    /// there is nothing here for it — see `patches_omitted` below for the two
-    /// ways there can be nothing.
+    /// there is nothing here for it — `Comparison::file_patch`, in
+    /// `src/tools/diff_package_versions.rs`, is that reader, and
+    /// `patches_omitted` below says the two ways there can be nothing.
     pub patches: BTreeMap<String, Patch>,
 }
 
@@ -385,7 +387,9 @@ impl DiffStore {
         // is those patches, until the entry is evicted. What it cannot cost
         // is a wrong answer: a reader asks this entry for one file's patch
         // and renders the file when there is none, which is what it does for
-        // every patch either cap took.
+        // every patch either cap took. That reader is one function,
+        // `Comparison::file_patch` in `src/tools/diff_package_versions.rs`,
+        // so this holds for as long as that function asks per file.
         let patches = match self.read(&key.patches_path()).await {
             Some(bytes) => serde_json::from_slice(&bytes).ok()?,
             None if meta.patches_omitted => BTreeMap::new(),
