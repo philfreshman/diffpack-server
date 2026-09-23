@@ -293,9 +293,9 @@ totals are that module's walk, the tree is `get_diff_tree`'s, and one file's
 patch is `Comparison::file_patch`, the same call `get_file_diff` makes. See
 [ADR 0014](adr/0014-a-resource-is-a-projection-of-the-tools.md).
 
-That last one is since #93, and it is where the fallback lives: the stored
-patch, the directory refused out of the tree, the two downloads and the
-render are all behind that method, and the file-diff resource keeps only what
+That last one is since #93, and it is where the fallback lives: the directory
+refused out of the tree, the stored patch, the two downloads and the render
+are all behind that method, and the file-diff resource keeps only what
 is its own — the decoded path, a renamed file's old path looked up in the
 tree, and the document with its media type. Before it the resource wrote the
 tool's steps out a second time through three of `get_file_diff`'s exports,

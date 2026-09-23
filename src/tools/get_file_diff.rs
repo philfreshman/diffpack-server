@@ -36,9 +36,10 @@
 //! is in neither of them. That is false about a path the package has and an
 //! agent has nothing in the answer to doubt it with, so it takes the
 //! refusal [`super::get_file_content`] gives a directory, for the same
-//! reason. The refusal is made where the rendering is: out of the tree before
-//! anything is downloaded, and out of the file maps for the one directory the
-//! tree does not have, the one a rename emptied.
+//! reason. The refusal is made by `Comparison::file_patch`: out of the tree
+//! before a stored patch is served or anything is downloaded, and out of the
+//! file maps for the one directory the tree does not have, the one a rename
+//! emptied.
 //!
 //! A directory in *either* version is refused, and that includes a path that
 //! is a file in the other. The engine's tree loses one of the two at such a
