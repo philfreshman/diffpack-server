@@ -926,10 +926,15 @@ async fn a_directory_is_refused_out_of_the_entry_without_the_archives() {
 
     let empty = Memory::new();
     let missed = one_sided(|| empty.store(), "get_file_diff", asked).await;
+    assert_eq!(
+        missed["isError"],
+        json!(true),
+        "with nothing to be served the same call has to fetch, and fetching \
+         is what this fixture set cannot do: got {missed}"
+    );
     assert_ne!(
         missed, served,
-        "with nothing to be served the same call has to fetch, and fetching \
-         is what this fixture set cannot do"
+        "and that failure is the fetch, not the directory refusal"
     );
 }
 
@@ -1020,10 +1025,14 @@ async fn a_read_of_a_directory_is_refused_out_of_the_entry_too() {
 
     let empty = Memory::new();
     let missed = read(ONE_SIDED, || empty.store(), &uri).await;
+    assert_eq!(
+        missed["error"]["code"], NOT_PUBLISHED,
+        "with nothing to be served the same read has to fetch, and the version \
+         it goes for is not published in this set: got {missed}"
+    );
     assert_ne!(
         missed, served,
-        "with nothing to be served the same read has to fetch, and the version \
-         it goes for is not published in this set"
+        "and that failure is the fetch, not the directory refusal"
     );
 }
 
