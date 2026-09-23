@@ -111,6 +111,32 @@ async fn the_definition_carries_everything_an_agent_needs() {
     );
 }
 
+/// Which version is which, and that swapping them is another comparison.
+///
+/// `from_version` and `to_version` show the same description, because
+/// `src/registry.rs` writes it and a doc comment on either field would
+/// replace the version rule. So the tool's own description is the only place
+/// an agent reads which way round they go. Naming both fields is what makes
+/// that sentence about these two arguments rather than about some order an
+/// agent has to map onto them.
+#[tokio::test]
+async fn the_description_says_which_version_is_which_and_that_order_matters() {
+    let tool = listed(TOOL).await;
+    let said = tool["description"].as_str().unwrap_or_default();
+
+    for field in ["`from_version`", "`to_version`"] {
+        assert!(
+            said.contains(field),
+            "the description should name {field}, got {said:?}"
+        );
+    }
+    assert!(
+        said.contains("swapping the two is a different comparison"),
+        "the description should say a swapped pair is another comparison, \
+         got {said:?}"
+    );
+}
+
 /// The handle in the answer is described by the module that mints it.
 ///
 /// This is the half a tool can take away without noticing: a doc comment on

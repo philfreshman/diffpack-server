@@ -774,10 +774,13 @@ impl Tool for DiffPackageVersions {
         Compare two published versions of a package and summarise what \
         changed between them. Takes a registry, a package name and two exact \
         versions, all spelled the way the registry spells them. Order \
-        matters: from `1.0.0` to `2.0.0` is not the same comparison as from \
-        `2.0.0` to `1.0.0`. Answers with a summary and a handle you pass to \
-        the tools that read the comparison in detail — not with the whole \
-        list of changed files, which can be far too large to return at once.";
+        matters: the comparison runs from `from_version` to `to_version`, \
+        normally the older to the newer, and swapping the two is a different \
+        comparison with a different handle — what one reports as added, the \
+        other reports as removed. Answers with a summary and a handle you \
+        pass to the tools that read the comparison in detail — not with the \
+        whole list of changed files, which can be far too large to return at \
+        once.";
 
     /// It downloads and compares; it changes nothing anywhere.
     const READ_ONLY: bool = true;
