@@ -381,6 +381,45 @@ async fn a_trailing_slash_on_a_path_makes_no_difference() {
     assert_eq!(bare, slashed);
 }
 
+/// `/` is the root, and the root's subtree is the whole comparison.
+///
+/// What is left of `/` once its trailing slash is gone is nothing, and
+/// nothing is the root. `list_package_files` once read the same argument as a
+/// directory called `/` and answered an empty page, so this is pinned from
+/// both tools rather than assumed of either.
+#[tokio::test]
+async fn a_path_of_a_slash_is_the_whole_comparison() {
+    let whole = walk(json!({ "handle": diffable() })).await;
+    let rooted = walk(json!({ "handle": diffable(), "path": "/" })).await;
+
+    assert!(
+        paths(&whole).contains(&"README.md") && paths(&whole).contains(&"src"),
+        "the control: the whole comparison has the top level in it, got {:?}",
+        paths(&whole)
+    );
+    assert_eq!(rooted, whole, "`/` is the root, not a directory named `/`");
+}
+
+/// An empty `path` is the root too.
+///
+/// Nothing is what a trailing slash leaves of `/`, so `""` and `/` are one
+/// argument. An agent that builds a path by joining nothing to a slash should
+/// not find the two disagree.
+#[tokio::test]
+async fn an_empty_path_is_the_whole_comparison() {
+    let whole = walk(json!({ "handle": diffable() })).await;
+    let empty = walk(json!({ "handle": diffable(), "path": "" })).await;
+
+    assert!(
+        !whole.is_empty(),
+        "the control: a comparison with nodes in it"
+    );
+    assert_eq!(
+        empty, whole,
+        "`\"\"` is the root, not a directory named nothing"
+    );
+}
+
 /// A path is matched at the separator, so one directory's name cannot be the
 /// beginning of another's and swallow it.
 ///
