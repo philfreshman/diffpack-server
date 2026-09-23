@@ -621,12 +621,34 @@ recomputes and serves rather than refusing. Eviction costs latency and is
 invisible to an agent, which is the footing on which the LRU question is worth
 revisiting once there is real traffic to argue from.
 
-Three adapters: the blob store, this process's memory, and no store at all.
-The third is not a mode invented for the suite — it is what a deployment
-missing its credentials gets, and it is what makes "degraded to uncached" a
-thing the suite exercises rather than hopes for. The second is what
-`Ctx::fixture` carries, and it is blob-shaped rather than entry-shaped, so a
-test of the cache pins where an entry lives and not only that one was kept.
+**One seam under the policy, and two adapters fill it.** Everything above is
+written once, over five operations on blobs — list, head, read, write,
+delete — each of which answers or fails and does nothing else. A failure
+becomes a Note in one place, `DiffStore::answered`, rather than once in each
+arm that could fail. The adapters are the blob store and this process's
+memory, and the seam is private to `src/store/`, so the rest of the crate
+still sees `get` and `put` and nothing else (ADR 0003).
+
+It is a private enum, `Blobs`, rather than a trait. Holding either adapter
+through a trait is a `dyn` over `async` methods, which is a boxed future on
+every call or a dependency to write one, and neither adapter can arrive from
+outside the module — the half of ADR 0004's case that carries over. Its
+methods only dispatch, so a third adapter would be one arm in each and no
+policy.
+
+The memory adapter is what `Ctx::fixture` carries. It is blob-shaped rather
+than entry-shaped, so a test of the cache pins where an entry lives and not
+only that one was kept; and it can be told to fail any of the five
+operations, which is what puts the budget's failure branches — a listing
+that could not be taken, a head that could not be answered, a put that was
+refused — at the wire in `tests/store.rs` rather than only in the networked
+test.
+
+No store at all is the third thing a `DiffStore` can sit over, and it is not
+an adapter: it has no blobs to ask about and gives up before it asks. It is
+not a mode invented for the suite either — it is what a deployment missing
+its credentials gets, and it is what makes "degraded to uncached" a thing the
+suite exercises rather than hopes for.
 
 Five operations on the client — write a blob, ask whether one is there, read
 one back, list what is under a prefix, delete several at once — and no more,

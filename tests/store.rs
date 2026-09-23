@@ -26,9 +26,17 @@
 //! A test of the Vercel Blob client. That is #20's, in `src/store/blob.rs`,
 //! against a stub HTTP server, because the client is private to that module.
 //! What is asserted here is the policy above it — which blobs an entry is,
-//! when they are written, what happens when they are too big, and what
-//! happens when the store is not there — and that policy is the same code
-//! whichever adapter is underneath.
+//! when they are written, what happens when they are too big, what happens
+//! when the store fails, and what happens when it is not there.
+//!
+//! That policy sits over one seam inside `src/store/`, five operations that
+//! each answer or fail, and the store here and the real one are its two
+//! adapters. A failure from either becomes a Note in one place above it, so
+//! the store here can be told to fail any of the five
+//! ([`Memory::failing`]) and what a test then watches is the line of policy
+//! a real failure reaches. What is below the seam is not asserted here: the
+//! client, which is #20's, and what only the real service can settle, which
+//! is the one `#[ignore]`d test in `src/store/mod.rs`.
 
 use std::time::{Duration, Instant};
 
@@ -36,7 +44,7 @@ mod common;
 
 use common::{Client, FIXTURES};
 use diffpack_server::log::Capture;
-use diffpack_server::store::{DiffStore, Memory};
+use diffpack_server::store::{DiffStore, Memory, Operation};
 use diffpack_server::tools::Ctx;
 use serde_json::{json, Value};
 
@@ -548,6 +556,48 @@ async fn a_store_that_is_not_there_costs_a_recomputed_diff_and_nothing_else() {
     );
 }
 
+/// A read the store lost is a miss, and says the read is what failed.
+///
+/// The lookup is the half of the cache a caller waits on, and a lookup that
+/// failed is answered the way one that found nothing is: the comparison is
+/// worked out again. What tells the two apart is the Note, and an operator
+/// reading the log needs it to be the same Note whether the real store lost
+/// the read or the one this suite stages it in — a suite whose lost reads
+/// were quiet would be a picture of a failed lookup quieter than
+/// production's.
+///
+/// The entry is there, so the recomputed answer is the one that was
+/// remembered, and the write that follows the miss finds it and skips.
+#[tokio::test]
+async fn a_lost_read_is_a_miss_that_says_the_read_failed() {
+    let store = Memory::new();
+
+    let answer = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+
+    let log = Capture::new();
+    let lost = Memory::failing(&store, Operation::Read);
+    let again = call(|| lost.store().logging_to(log.sink()), diffable()).await;
+    let notes = noted(&log).await;
+
+    assert_eq!(
+        again["structuredContent"]["cached"],
+        json!(false),
+        "a read the store lost is not a hit, got {again}"
+    );
+    assert_eq!(
+        but_for_cached(again),
+        but_for_cached(answer),
+        "and the miss is the same comparison, worked out again"
+    );
+    assert!(
+        notes
+            .iter()
+            .all(|note| note.contains("reading a cached result")),
+        "the store says the read is what could not be done: {notes:?}"
+    );
+}
+
 /// The answer does not wait for the entry to be written.
 ///
 /// A caller is waiting on a diff, not on a cache: the store holds a copy of
@@ -611,7 +661,7 @@ async fn an_entry_that_is_already_there_is_not_written_again() {
     let (meta, patches) = (meta_of(&answer), patches_of(&answer));
     let (before_meta, before_patches) = (uploaded(&meta), uploaded(&patches));
 
-    let missed = Memory::losing_reads(&store);
+    let missed = Memory::failing(&store, Operation::Read);
     let again = call(|| missed.store(), diffable()).await;
 
     assert_eq!(
@@ -1384,7 +1434,7 @@ async fn a_put_of_an_entry_already_there_makes_no_room_it_will_not_use() {
 
     // Room for the two that are there and nothing more, so admitting
     // anything at all has to evict.
-    let missed = Memory::losing_reads(&store);
+    let missed = Memory::failing(&store, Operation::Read);
     let budgeted = || missed.store().budgeting(2 * entry + entry / 16, 2 * entry);
 
     let again = call(budgeted, at(1)).await;
@@ -1452,7 +1502,7 @@ async fn a_put_of_the_oldest_entry_does_not_sweep_itself_away() {
 
     // Room for the two that are there and nothing more, and the entry put
     // again is the one a sweep would take first.
-    let missed = Memory::losing_reads(&store);
+    let missed = Memory::failing(&store, Operation::Read);
     let budgeted = || missed.store().budgeting(2 * entry + entry / 16, 2 * entry);
 
     let again = call(budgeted, at(0)).await;
@@ -1546,7 +1596,7 @@ async fn a_sweep_whose_deletes_all_fail_admits_nothing() {
 
     // Room for one entry, over a store that will not let go of anything.
     let log = Capture::new();
-    let stubborn = Memory::losing_deletes(&store);
+    let stubborn = Memory::failing(&store, Operation::Delete);
     let budgeted = || {
         stubborn
             .store()
@@ -1605,7 +1655,7 @@ async fn a_sweep_that_freed_less_than_it_needed_admits_nothing() {
     // Room for three of the five, swept down to two, over a store that takes
     // one delete and refuses every one after it.
     let log = Capture::new();
-    let stubborn = Memory::losing_deletes_after(&store, 1);
+    let stubborn = Memory::failing_after(&store, Operation::Delete, 1);
     let budgeted = || {
         stubborn
             .store()
@@ -1631,6 +1681,123 @@ async fn a_sweep_that_freed_less_than_it_needed_admits_nothing() {
     assert!(
         notes.iter().all(|note| note.contains("evicting an entry")),
         "every delete after the first says it could not happen: {notes:?}"
+    );
+}
+
+/// A listing that could not be taken refuses the entry, and writes nothing.
+///
+/// The budget is read from the store on every write, because a total carried
+/// in one invocation is a number two of them would disagree about. So a
+/// listing that fails is a total that is not known — and admitting against a
+/// total that is not known is how a ceiling gets exceeded. The cost of
+/// refusing is one entry not cached, which is the cost of every other
+/// failure the store has.
+///
+/// Under a budget with room for everything, so the listing is the only thing
+/// that can refuse it. The diff is still the answer, and the refusal is a
+/// Note saying which question went unanswered.
+#[tokio::test]
+async fn a_listing_that_fails_refuses_admission_and_writes_nothing() {
+    let store = Memory::new();
+
+    let log = Capture::new();
+    let blind = Memory::failing(&store, Operation::List);
+    let answer = call(|| blind.store().logging_to(log.sink()), diffable()).await;
+    let notes = noted(&log).await;
+    stays_out(&store, &answer).await;
+
+    assert_eq!(
+        answer["isError"],
+        json!(false),
+        "a store that cannot list is still a comparison that was answered, got \
+         {answer}"
+    );
+    assert_eq!(
+        store.written(),
+        Vec::<String>::new(),
+        "an entry admitted against a total nobody knows is how the ceiling \
+         gets exceeded"
+    );
+    assert!(
+        notes.iter().all(|note| note.contains("listing what")),
+        "the refusal says the listing is what could not be done: {notes:?}"
+    );
+}
+
+/// A head that fails for one blob of an entry abandons the whole entry.
+///
+/// A head that could not be answered is not a blob that is missing, and
+/// writing the rest of the entry around it is how a blob ends up without its
+/// partner. A `patches.json` with no `meta.json` to name it is an orphan
+/// nothing ever reads and the budget counts forever; a `meta.json` with no
+/// `patches.json` is half an entry, read as a miss on every call until
+/// something repairs it.
+///
+/// The store fails the head for `meta.json`, once, and answers every head
+/// after it. So it says of `patches.json` that it is missing and worth
+/// writing, and says the same of `meta.json` if it is asked again — which is
+/// what a write that went ahead around the first failure would act on, and
+/// the orphan it would leave behind.
+#[tokio::test]
+async fn a_head_that_fails_for_one_blob_of_an_entry_writes_neither_blob() {
+    let store = Memory::new();
+
+    let log = Capture::new();
+    let unsure = Memory::failing_once(&store, Operation::Head);
+    let answer = call(|| unsure.store().logging_to(log.sink()), diffable()).await;
+    let notes = noted(&log).await;
+    stays_out(&store, &answer).await;
+
+    assert_eq!(
+        answer["isError"],
+        json!(false),
+        "a store that cannot say what it holds is still a comparison that was \
+         answered, got {answer}"
+    );
+    assert_eq!(
+        store.written(),
+        Vec::<String>::new(),
+        "the blob the store did answer for was written without its partner"
+    );
+    assert!(
+        notes.iter().all(|note| note.contains("writing to")),
+        "the store says the write is what could not be done: {notes:?}"
+    );
+}
+
+/// A put that fails still answers the diff, and says it could not write.
+///
+/// The write happens after the answer has gone, so there is no caller left
+/// for its failure to reach — and there should not be: the diff was worked
+/// out, and a cache that could not keep a copy of it has cost one recomputed
+/// diff next time and nothing else. What is left is a Note, because a write
+/// that failed without saying so is a cache that has quietly stopped
+/// working, which looks exactly like a cache that is working and cold.
+#[tokio::test]
+async fn a_put_that_fails_still_answers_the_diff_and_says_so() {
+    let store = Memory::new();
+
+    let log = Capture::new();
+    let refusing = Memory::failing(&store, Operation::Write);
+    let answer = call(|| refusing.store().logging_to(log.sink()), diffable()).await;
+    let notes = noted(&log).await;
+
+    let working = Memory::new();
+    let cold = call(|| working.store(), diffable()).await;
+
+    assert_eq!(
+        answer, cold,
+        "a diff whose entry could not be written is the diff computed with a \
+         store that could"
+    );
+    assert_eq!(
+        store.written(),
+        Vec::<String>::new(),
+        "a put the store refused left something behind"
+    );
+    assert!(
+        notes.iter().all(|note| note.contains("writing to")),
+        "the store says the write is what could not be done: {notes:?}"
     );
 }
 
