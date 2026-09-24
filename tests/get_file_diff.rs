@@ -16,7 +16,7 @@
 //! agree with it by construction.
 //!
 //! The other four cases cannot be asked for. `build_diff_result` is a private
-//! `fn` in `diffpack-engine` 0.3.0 and `get_diff_for_path` is
+//! `fn` in `diffpack-engine` 0.3.1 and `get_diff_for_path` is
 //! `#[wasm_bindgen]`, so neither is callable from here and `src/engine.rs`
 //! re-exports neither. Those four are held against literals worked out by
 //! hand from the table in #15, which is the contract they exist to reproduce.

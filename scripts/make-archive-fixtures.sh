@@ -313,9 +313,9 @@ targz "empty-file-1.0.0.tgz" "package" "$empty"
 # --- a path that is a file in one version and a directory in the other ------
 #
 # `lib` is a file in 1.0.0 and a directory in 2.0.0, holding `lib/index.js`.
-# One path, two things, and the engine keeps one node per path: it is what
-# shows a comparison's tree losing one of the two, and a remembered answer
-# and a fresh one having to agree about `lib` anyway (#103).
+# One path, two things: it is what shows a comparison's tree holding both at
+# one path, and a remembered answer and a fresh one having to agree about
+# `lib` (#103).
 #
 # The two share nothing, so the engine has no rename to find between `lib`
 # and `lib/index.js` and what the tree says about them is the collision's
