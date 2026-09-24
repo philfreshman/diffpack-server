@@ -297,37 +297,57 @@ fn flatten(parent: &DiffFileEntry, left: u32, wanted: &[Status], nodes: &mut Vec
     }
 }
 
-/// The node `path` names, or nothing if the comparison has no node there.
+/// The node of `kind` at `path`, or nothing if the comparison has no such
+/// node.
 ///
 /// Public because there are three callers, and all three want the same
-/// descent: this tool, which roots a listing at it; the
+/// descent: this tool, which roots a listing at a directory; the
 /// `diffpack://diff/{handle}/file/{path}` resource (#16), which reads a
-/// renamed file's `old_path` off it; and
+/// renamed file's `old_path` off one; and
 /// [`super::diff_package_versions::Comparison::file_patch`] (#84, #93), which
 /// asks the same question of the same field — whether the file a caller named
-/// is the one a remembered patch was rendered from — and asks the node's type
-/// to refuse a directory without a download. Each of them with a walk of its
-/// own would be three ways of finding a node in a tree.
+/// is the one a remembered patch was rendered from — and asks for a directory
+/// at the path to refuse one without a download. Each of them with a walk of
+/// its own would be three ways of finding a node in a tree.
 ///
-/// A descent rather than a scan: at each level only the child whose path is
-/// `path` or a directory `path` lies inside is followed, so a subtree of a
+/// The kind is asked for because a path can name two nodes. Where it is a
+/// file in one version and a directory in the other, the engine lists both,
+/// siblings with one `path` told apart by their type (`diffpack-engine`
+/// 0.3.1, philfreshman/diffpack-engine#7). Every caller knows which of the
+/// two it means, and none of them means whichever happens to come first.
+///
+/// A descent rather than a scan: at each level only the child that is the
+/// node, or the directory `path` lies inside, is followed, so a subtree of a
 /// package with ten thousand files costs one step per directory rather than
-/// a walk of everything above it.
+/// a walk of everything above it. Only a directory is descended into, which
+/// is what keeps a lookup of `lib/index.js` out of the file `lib` beside the
+/// directory: a file has nothing under it.
 ///
 /// It is a path and not a prefix. Matching against `src/` rather than `src`
 /// is what makes `sr` unable to narrow to `src/lib.rs` and `lib` unable to
 /// swallow `libs/` — the same distinction [`crate::page::Subtree::contains`]
 /// draws for `list_package_files`, where there is no tree to descend.
-pub fn node_at<'t>(root: &'t DiffFileEntry, path: &str) -> Option<&'t DiffFileEntry> {
+pub fn node_at<'t>(root: &'t DiffFileEntry, path: &str, kind: NodeType) -> Option<&'t DiffFileEntry> {
     if root.path == path {
-        return Some(root);
+        return (NodeType::from(&root.file_type) == kind).then_some(root);
     }
 
     root.children
         .iter()
         .flatten()
-        .find(|child| path == child.path || path.starts_with(&format!("{}/", child.path)))
-        .and_then(|child| node_at(child, path))
+        .find(|child| leads_to(child, path, kind))
+        .and_then(|child| node_at(child, path, kind))
+}
+
+/// Whether the node of `kind` at `path` is `child` or lies inside it.
+fn leads_to(child: &DiffFileEntry, path: &str, kind: NodeType) -> bool {
+    let child_kind = NodeType::from(&child.file_type);
+
+    if child.path == path {
+        return child_kind == kind;
+    }
+
+    child_kind == NodeType::Directory && path.starts_with(&format!("{}/", child.path))
 }
 
 impl Tool for GetDiffTree {
@@ -340,7 +360,9 @@ impl Tool for GetDiffTree {
         directory's contents, `depth` for how far down to go, and `status` \
         for which kinds of change you want. A directory a rename left empty \
         is not in the comparison at all, even though the first version had \
-        it, so a `path` naming it is an empty page. Ask for `added`, `removed`, \
+        it, so a `path` naming it is an empty page. A path that is a file in \
+        one version and a directory in the other is listed twice, once as \
+        each. Ask for `added`, `removed`, \
         `modified` and `renamed` to read what changed — most of a package is \
         `unchanged` between two versions, and paging through that is a call \
         spent on what did not happen. Each file and directory in the answer \
@@ -371,7 +393,7 @@ impl Tool for GetDiffTree {
         // comparison. The Subtree has already normalised what was asked for,
         // so what is left is a directory to descend to, or the root.
         let rooted_at = match args.path.unwrap_or_default().directory() {
-            Some(directory) => node_at(&tree, directory),
+            Some(directory) => node_at(&tree, directory, NodeType::Directory),
             None => Some(&tree),
         };
 

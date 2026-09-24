@@ -33,6 +33,7 @@
 mod common;
 
 use common::Client;
+use diffpack_server::engine;
 use diffpack_server::handle::{DiffHandle, Inputs};
 use diffpack_server::registry::Registry;
 use serde_json::{json, Value};
@@ -602,15 +603,16 @@ async fn lowering_the_similarity_threshold_finds_more_renames() {
 
 /// The `diff_id` this tool hands back is the one `docs/cache-key.md` fixes.
 ///
-/// The arguments below are the worked example in that document, and the
-/// expected hash is read out of the golden vectors beside it — which were
-/// generated from the document by a throwaway script rather than by either
-/// implementation they check. So this is the tool held against the contract,
-/// not against itself: #27 looks a result up by this string from TypeScript
-/// that will never share a line of code with this crate.
+/// The arguments below are the worked example in that document, at the
+/// engine this build pins, and the expected hash is read out of the golden
+/// vectors beside it — which were generated from the document by a throwaway
+/// script rather than by either implementation they check. So this is the
+/// tool held against the contract, not against itself: #27 looks a result up
+/// by this string from TypeScript that will never share a line of code with
+/// this crate.
 #[tokio::test]
 async fn the_diff_id_is_the_one_the_cache_key_document_fixes() {
-    let vector = golden_vector("npm/zod");
+    let vector = worked_example_at_the_pinned_engine();
     let input = &vector["input"];
 
     let result = call(json!({
@@ -762,20 +764,49 @@ async fn the_handle_carries_the_inputs_it_was_minted_from() {
 /// this crate, which is what makes a value read out of it an independent
 /// expectation rather than a restatement of the code.
 fn golden_vector(name: &str) -> Value {
+    golden_vectors()
+        .into_iter()
+        .find(|vector| vector["name"] == name)
+        .unwrap_or_else(|| panic!("`{name}` should be one of the golden vectors"))
+}
+
+/// The worked example's vector at the engine this build pins.
+///
+/// `npm/zod` is the document's worked example, and its `engine` is the one
+/// the document was written against. A call can only key a diff with
+/// [`engine::VERSION`], so the expectation is the vector holding the worked
+/// example's inputs at that engine: generated from the document like every
+/// other, and added to the fixture when the engine moves.
+fn worked_example_at_the_pinned_engine() -> Value {
+    let mut pinned = golden_vector("npm/zod")["input"].clone();
+    pinned["engine"] = json!(engine::VERSION);
+
+    golden_vectors()
+        .into_iter()
+        .find(|vector| vector["input"] == pinned)
+        .unwrap_or_else(|| {
+            panic!(
+                "no vector holds the worked example at engine {}: add one to \
+                 fixtures/cache-key-vectors.json, generated from docs/cache-key.md \
+                 rather than from this crate",
+                engine::VERSION
+            )
+        })
+}
+
+/// Every vector in `fixtures/cache-key-vectors.json`.
+fn golden_vectors() -> Vec<Value> {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/fixtures/cache-key-vectors.json"
     );
     let text = std::fs::read_to_string(path).expect("the golden vectors should read");
-    let file: Value = serde_json::from_str(&text).expect("the golden vectors should parse");
+    let mut file: Value = serde_json::from_str(&text).expect("the golden vectors should parse");
 
-    file["vectors"]
-        .as_array()
-        .expect("the file holds an array of vectors")
-        .iter()
-        .find(|vector| vector["name"] == name)
-        .unwrap_or_else(|| panic!("`{name}` should be one of the golden vectors"))
-        .clone()
+    match file["vectors"].take() {
+        Value::Array(vectors) => vectors,
+        other => panic!("the file holds an array of vectors, not {other}"),
+    }
 }
 
 /// The listed definition of `name`, or a panic naming what was listed.

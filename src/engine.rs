@@ -161,4 +161,4 @@ fn sided(header: &str, sign: char, content: &str) -> String {
 /// A field in the cache key, not a label: see
 /// [`crate::cache_key::DiffKey::engine`]. `tests/engine.rs` fails if this and
 /// the tag in `Cargo.toml` disagree.
-pub const VERSION: &str = "0.3.0";
+pub const VERSION: &str = "0.3.1";

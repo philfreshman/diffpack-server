@@ -173,21 +173,24 @@ what an answer turns on, because an entry missing one file's patch still
 answers for every other — and `DiffStore::get` serving an entry that lost its
 patches rests on `file_patch` keeping it that way.
 
-The directory comes first, before the stored patch, because of one path the
-tree gets wrong: a file in one version and a directory in the other (#103).
-The engine keeps one node per path, so compared from the file it calls the
-path a removed file and hangs the directory's contents beneath it. `compare`
-used to store that file's patch, and a warm call served it where a cold one,
-reading the file maps, refused the directory. The rule now is the one
-`get_file_diff` stated before #93: a directory in either version is
-`PathIsDirectory` ([ADR
+The directory comes first, before the stored patch, so a refusal is the
+tree's answer and never turns on what an entry holds. One path makes that
+matter: a file in one version and a directory in the other (#103). The tree
+lists it twice, a file and a directory side by side with one `path`, and a
+warm call once served the file's patch where a cold one, reading the file
+maps, refused the directory. The rule is the one `get_file_diff` stated before
+#93: a directory in either version is `PathIsDirectory` ([ADR
 0017](adr/0017-a-failure-carries-the-code-it-earned.md)), warm or cold, both
-ways round. The tree says so without a download — a file node never has
-children unless it is this collision — and `compare` asks the file maps it has
-in hand and renders no patch for such a path, so new entries do not hold one
-and old ones are refused all the same. Serving the patch on both paths was the
-alternative, and it could only ever be consistent one way round: compared from
-the directory, the tree has no file at that path at all.
+ways round. The tree says so without a download, by the directory node at the
+path, and `compare` asks the file maps it has in hand and renders no patch for
+the file beside it, so no entry holds bytes nobody may read.
+
+#103 chose refusing while the engine kept one node per path and lost one of
+the two (philfreshman/diffpack-engine#7), when serving the file's patch could
+only ever have been consistent one way round. `diffpack-engine` 0.3.1 keeps
+both, so that reason is gone; the refusal is kept because it is the answer
+this tool has given, and serving the file's patch is now a choice rather than
+an impossibility.
 
 A tool writes down types rather than JSON. The `Tool` trait's associated
 `Args` and `Output` generate the input schema, the output schema and the
@@ -997,17 +1000,15 @@ here takes two FileMaps and hands the engine the map inside each. That is the
 one place the map leaves `archive`, and it is here because this is the module
 that imports the engine the map is handed to (#95).
 
-One known limit comes through this seam unchanged. The engine's tree keeps one
-node per path, so a path that is a file in one version and a directory in the
-other loses one of the two: compared from the file, the directory's contents
-hang beneath a file node with the wrong statuses, and compared from the
-directory, the file is not in the tree at all. That is
-[philfreshman/diffpack-engine#7](https://github.com/philfreshman/diffpack-engine/issues/7).
-Until an engine release fixes it, `get_file_diff` and the file-diff resource
-refuse such a path as a directory both ways round (#103), and the other tools
-serve the tree as the engine built it. The fix is not one to wait on here:
-the engine version is a field in the cache key, so the release that carries it
-is also the one that retires every entry written under this one.
+One thing about the tree comes through this seam that a reader keyed on paths
+has to allow for. A path that is a file in one version and a directory in the
+other is two nodes, siblings with one `path` told apart by their type, the
+first version's first; a file node never has anything under it. Before
+`diffpack-engine` 0.3.1 the engine kept one node per path and lost one of the
+two ([philfreshman/diffpack-engine#7](https://github.com/philfreshman/diffpack-engine/issues/7)).
+So `get_diff_tree::node_at` is asked for a node of a kind, and descends only
+into directories. The engine version is a field in the cache key, so the bump
+that brought the fix also retired every entry written with the old tree.
 
 ### `src/health.rs` — the `/health` body
 

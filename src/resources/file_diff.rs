@@ -246,5 +246,7 @@ fn malformed(segment: &str) -> Failure {
 /// module's: one step per directory rather than a scan of everything above
 /// the file.
 fn moved_from(tree: &DiffFileEntry, path: &str) -> Option<String> {
-    get_diff_tree::node_at(tree, path)?.old_path.clone()
+    get_diff_tree::node_at(tree, path, get_diff_tree::NodeType::File)?
+        .old_path
+        .clone()
 }

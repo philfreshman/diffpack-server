@@ -12,6 +12,7 @@
 
 use base64::Engine as _;
 use diffpack_server::cache_key::DiffKey;
+use diffpack_server::engine;
 use diffpack_server::handle::{DiffHandle, Inputs};
 use diffpack_server::registry::Registry;
 use serde_json::json;
@@ -29,8 +30,44 @@ fn zod() -> Inputs {
     }
 }
 
-/// That vector's `diff_id`, copied from the fixture.
-const ZOD_DIFF_ID: &str = "282467a6bd7b210db4077e71bcf3901550b219852386085452f5739c6b6c436c";
+/// The `diff_id` of that example at the engine this build pins, read out of
+/// the fixture.
+///
+/// A minted handle can only carry [`engine::VERSION`], and the worked example
+/// carries whatever engine the document was written against. So the
+/// expectation is the vector with the worked example's inputs at the pinned
+/// engine — generated from the document like every other one, and added to
+/// the fixture when the engine moves rather than copied out of this crate.
+fn zod_diff_id() -> String {
+    let file: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/cache-key-vectors.json"))
+            .expect("fixtures/cache-key-vectors.json should parse");
+    let vectors = file["vectors"]
+        .as_array()
+        .expect("the file holds an array of vectors");
+
+    let mut pinned = vectors
+        .iter()
+        .find(|vector| vector["name"] == "npm/zod")
+        .expect("the worked example is a vector")["input"]
+        .clone();
+    pinned["engine"] = json!(engine::VERSION);
+
+    vectors
+        .iter()
+        .find(|vector| vector["input"] == pinned)
+        .unwrap_or_else(|| {
+            panic!(
+                "no vector holds the worked example at engine {}: add one to \
+                 fixtures/cache-key-vectors.json, generated from docs/cache-key.md \
+                 rather than from this crate",
+                engine::VERSION
+            )
+        })["diff_id"]
+        .as_str()
+        .expect("a diff_id is a string")
+        .to_owned()
+}
 
 /// The whole point of the handle. An entry the budget's sweep has taken is
 /// gone, so what the reading tools have left is whatever the handle carried:
@@ -59,14 +96,14 @@ fn a_handle_names_the_diff_the_cache_key_document_names() {
 
     assert_eq!(
         minted.diff_id(),
-        ZOD_DIFF_ID,
+        zod_diff_id(),
         "the diff_id docs/cache-key.md's worked example produces"
     );
     assert_eq!(
         DiffHandle::decode(&minted.encode())
             .expect("a handle this server minted")
             .diff_id(),
-        ZOD_DIFF_ID,
+        zod_diff_id(),
         "and the same one after a round trip"
     );
 }
@@ -82,9 +119,9 @@ fn a_handle_names_the_diff_the_cache_key_document_names() {
 fn a_handle_whose_diff_id_disagrees_with_its_inputs_is_refused() {
     // zod's `diff_id`, beside somebody else's package.
     let forged = handle_of(json!({
-        "diff_id": ZOD_DIFF_ID,
+        "diff_id": zod_diff_id(),
         "schema": 1,
-        "engine": "0.3.0",
+        "engine": engine::VERSION,
         "registry": "npm",
         "package": "left-pad",
         "from": "3.25.76",
@@ -117,9 +154,9 @@ fn a_handle_is_a_version_prefix_and_an_opaque_payload() {
     assert_eq!(
         encoded,
         handle_of(json!({
-            "diff_id": ZOD_DIFF_ID,
+            "diff_id": zod_diff_id(),
             "schema": 1,
-            "engine": "0.3.0",
+            "engine": engine::VERSION,
             "registry": "npm",
             "package": "zod",
             "from": "3.25.76",
@@ -141,9 +178,9 @@ fn a_handle_is_a_version_prefix_and_an_opaque_payload() {
 #[test]
 fn a_malformed_handle_is_refused() {
     let payload = json!({
-        "diff_id": ZOD_DIFF_ID,
+        "diff_id": zod_diff_id(),
         "schema": 1,
-        "engine": "0.3.0",
+        "engine": engine::VERSION,
         "registry": "npm",
         "package": "zod",
         "from": "3.25.76",
@@ -162,7 +199,7 @@ fn a_malformed_handle_is_refused() {
         ("nothing at all", String::new()),
         (
             "a bare diff_id, which is what #14 used to take",
-            ZOD_DIFF_ID.to_owned(),
+            zod_diff_id(),
         ),
         ("a version prefix this format does not have", {
             let encoded = DiffHandle::mint(zod()).encode();
@@ -181,7 +218,7 @@ fn a_malformed_handle_is_refused() {
         ),
         (
             "a payload missing a field",
-            handle_of(json!({ "diff_id": ZOD_DIFF_ID })),
+            handle_of(json!({ "diff_id": zod_diff_id() })),
         ),
         (
             "a payload with a field this build does not know",
@@ -280,7 +317,7 @@ fn a_handle_is_one_string_on_the_wire() {
 /// no handler has to remember to verify one.
 #[test]
 fn an_argument_that_is_not_a_handle_is_refused_before_a_handler_runs() {
-    let refused = serde_json::from_value::<DiffHandle>(json!(ZOD_DIFF_ID))
+    let refused = serde_json::from_value::<DiffHandle>(json!(zod_diff_id()))
         .expect_err("a bare diff_id is not a handle");
 
     assert!(
