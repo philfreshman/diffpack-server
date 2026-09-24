@@ -1175,6 +1175,43 @@ async fn a_directory_is_refused_rather_than_called_absent() {
     );
 }
 
+/// So is a directory only one version has.
+///
+/// `moved` renames `src/legacy/reporter.js` to `src/reporter.js`, so
+/// `src/legacy` is a directory in 1.0.0 and nothing in 2.0.0. There is no
+/// file at that path in either version, so there is nothing to diff, and the
+/// refusal names the version that has the directory. Both ways round: one way
+/// the tree has the directory, the other way a rename emptied it and only the
+/// file maps have it.
+#[tokio::test]
+async fn a_directory_only_one_version_has_is_refused() {
+    for (from, to) in [("1.0.0", "2.0.0"), ("2.0.0", "1.0.0")] {
+        let result = call(json!({
+            "handle": handle("moved", from, to, false),
+            "path": "src/legacy",
+        }))
+        .await;
+
+        assert_eq!(
+            result["isError"],
+            json!(true),
+            "{from} → {to}: `src/legacy` is a directory in 1.0.0 and missing \
+             from 2.0.0, so there is no file to diff: got {result}"
+        );
+
+        let message = result["content"][0]["text"]
+            .as_str()
+            .expect("a tool error carries text for the model");
+        assert!(
+            message.contains("`src/legacy`")
+                && message.contains("1.0.0")
+                && message.contains("directory"),
+            "{from} → {to}: the refusal names the path and the version it is a \
+             directory in: got {message}"
+        );
+    }
+}
+
 /// So is the root, which is the directory everything else is in.
 ///
 /// The tree names its root `/`, so asking for `/` is asking for a directory

@@ -155,15 +155,15 @@ of the archives they came from.
 So one file's patch is one question, and it is asked of the comparison:
 `Comparison::file_patch`, in the same module as `compare`, which
 `get_file_diff` and the file-diff resource each call once. Behind it, in
-order: a path the tree says is a directory in either version, refused
-without a download; the patch the comparison holds for that file; both
-versions' files — two downloads when the comparison was remembered without
-them — only for a file with neither; the file rendered through the same
-lookup the pre-render in `compare` uses; and `get_file_diff::presented` for
-the trim and the cut, which stay that tool's because `context_lines` is its
-argument. It is a method because the comparison keeps its handle private, so
-the files it fetches cannot be paired with another comparison's handle by a
-caller passing one in.
+order: a path the tree says is a directory, with no file at it in either
+version, refused without a download; the patch the comparison holds for that
+file; both versions' files — two downloads when the comparison was remembered
+without them — only for a file with neither; the file rendered through the
+same lookup the pre-render in `compare` uses; and `get_file_diff::presented`
+for the trim and the cut, which stay that tool's because `context_lines` is
+its argument. It is a method because the comparison keeps its handle
+private, so the files it fetches cannot be paired with another comparison's
+handle by a caller passing one in.
 
 Asking per file is the right question whichever way a patch went missing:
 over the per-patch cap, dropped with the rest because the entry was too big,
@@ -174,23 +174,21 @@ answers for every other — and `DiffStore::get` serving an entry that lost its
 patches rests on `file_patch` keeping it that way.
 
 The directory comes first, before the stored patch, so a refusal is the
-tree's answer and never turns on what an entry holds. One path makes that
-matter: a file in one version and a directory in the other (#103). The tree
-lists it twice, a file and a directory side by side with one `path`, and a
-warm call once served the file's patch where a cold one, reading the file
-maps, refused the directory. The rule is the one `get_file_diff` stated before
-#93: a directory in either version is `PathIsDirectory` ([ADR
-0017](adr/0017-a-failure-carries-the-code-it-earned.md)), warm or cold, both
-ways round. The tree says so without a download, by the directory node at the
-path, and `compare` asks the file maps it has in hand and renders no patch for
-the file beside it, so no entry holds bytes nobody may read.
+tree's answer and never turns on what an entry holds. The rule is narrow: a
+path is `PathIsDirectory` ([ADR
+0017](adr/0017-a-failure-carries-the-code-it-earned.md)) only when there is a
+directory at it and no file at it in either version (#111). The tree and the
+file maps are asked the same question, what is at this path in this version,
+so a warm call and a cold one give the same answer.
 
-#103 chose refusing while the engine kept one node per path and lost one of
-the two (philfreshman/diffpack-engine#7), when serving the file's patch could
-only ever have been consistent one way round. `diffpack-engine` 0.3.1 keeps
-both, so that reason is gone; the refusal is kept because it is the answer
-this tool has given, and serving the file's patch is now a choice rather than
-an impossibility.
+One path makes the rule matter: a file in one version and a directory in the
+other. The tree lists it twice, a file and a directory side by side with one
+`path`, and an agent that reads the file row asks for that file. So it is
+served the file's patch, its removal or its addition, both ways round, and
+`compare` stores that patch like any other. #103 had refused such a path, a
+directory in either version, while the engine kept one node per path and lost
+one of the two (philfreshman/diffpack-engine#7); `diffpack-engine` 0.3.1 keeps
+both, and #111 moved to serving the file.
 
 A tool writes down types rather than JSON. The `Tool` trait's associated
 `Args` and `Output` generate the input schema, the output schema and the
