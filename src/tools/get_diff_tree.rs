@@ -360,7 +360,9 @@ impl Tool for GetDiffTree {
         directory's contents, `depth` for how far down to go, and `status` \
         for which kinds of change you want. A directory a rename left empty \
         is not in the comparison at all, even though the first version had \
-        it, so a `path` naming it is an empty page. Ask for `added`, `removed`, \
+        it, so a `path` naming it is an empty page. A path that is a file in \
+        one version and a directory in the other is listed twice, once as \
+        each. Ask for `added`, `removed`, \
         `modified` and `renamed` to read what changed — most of a package is \
         `unchanged` between two versions, and paging through that is a call \
         spent on what did not happen. Each file and directory in the answer \

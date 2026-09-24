@@ -979,6 +979,24 @@ async fn a_path_that_is_a_file_and_a_directory_lists_the_directorys_contents() {
     }
 }
 
+/// The description says a path can be listed twice.
+///
+/// An agent that keys what it reads on `path` would otherwise take the second
+/// `lib` for the first one again, or for a mistake.
+#[tokio::test]
+async fn the_description_says_a_path_can_be_a_file_and_a_directory() {
+    let tool = listed(TOOL).await;
+    let said = tool["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a described tool, got {tool}"));
+
+    assert!(
+        said.contains("listed twice"),
+        "a path that is a file in one version and a directory in the other \
+         is two nodes: {said}"
+    );
+}
+
 /// The description says so, because the argument's own description cannot.
 ///
 /// `path` carries the rule every tool that takes a directory shares, and a
