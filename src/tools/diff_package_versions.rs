@@ -638,9 +638,10 @@ impl Versions {
 /// What `tree` says is at `path` in the version `end` names: a file, a
 /// directory, or nothing.
 ///
-/// A node's status says which versions have it: `added` is the second alone
-/// and `removed` the first alone, so a node is in `end` unless its status is
-/// the one that leaves `end` out.
+/// A node's status says which versions have it at its path: `added` is the
+/// second alone and `removed` the first alone. So is `renamed`, which only
+/// a file can be: it is listed at its new path, where the second version has
+/// it, and the first version had it at its `old_path` instead.
 ///
 /// Each kind is asked for by type, because a path that is a file in one
 /// version and a directory in the other is two nodes, the file and the
@@ -648,17 +649,21 @@ impl Versions {
 /// philfreshman/diffpack-engine#7). At most one of the two is in any one
 /// version.
 ///
-/// A renamed file is listed at its new path, so the tree does not see it at
-/// the path it moved from. The second version's file at the new path is seen,
-/// and one file is all [`refuse_directory`] needs.
+/// The tree does not see a renamed file at the path it moved from, which is
+/// the one place its answer is short of the file maps'. A caller asking about
+/// the file at its new path is served by the second version's file there. A
+/// caller naming a path that is only a directory, with a renamed file's old
+/// path as its `old_path`, is refused here, though the file maps would find
+/// that file in the first version. Every call asks the tree first, so the
+/// answer is the refusal warm or cold.
 fn kind_in_tree(tree: &DiffFileEntry, end: End, path: &str) -> Option<NodeType> {
-    let absent = match end {
-        End::From => DiffStatus::Added,
-        End::To => DiffStatus::Removed,
+    let absent: &[DiffStatus] = match end {
+        End::From => &[DiffStatus::Added, DiffStatus::Renamed],
+        End::To => &[DiffStatus::Removed],
     };
 
     [NodeType::File, NodeType::Directory].into_iter().find(|kind| {
-        get_diff_tree::node_at(tree, path, *kind).is_some_and(|node| node.status != absent)
+        get_diff_tree::node_at(tree, path, *kind).is_some_and(|node| !absent.contains(&node.status))
     })
 }
 

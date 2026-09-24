@@ -988,6 +988,51 @@ async fn a_directory_is_refused_out_of_the_entry_without_the_archives() {
     );
 }
 
+/// And whichever of a renamed file's two paths is named as where it was.
+///
+/// `diffable` renames `src/old-name.js` to `src/new-name.js`, and the tree
+/// lists the file once, as renamed, at its new path. Neither path is a file
+/// at `src` in either version, so asking for `src` with either one as its
+/// `old_path` is still asking for a directory.
+///
+/// The new path is a file only in 2.0.0, so it says nothing about 1.0.0: the
+/// tree has to read a renamed file as absent from the first version at the
+/// path it is listed at, or it finds a file there, lets the call through and
+/// fetches both archives to refuse it. The old path is a file in 1.0.0 that
+/// the tree does not list there, so the tree refuses `src` without seeing
+/// it — and so does a cold call, because the tree is asked first on both.
+#[tokio::test]
+async fn a_directory_is_refused_out_of_the_entry_whatever_old_path_names() {
+    let store = Memory::new();
+
+    let diffed = call(|| store.store(), diffable()).await;
+    settles(&store, 2).await;
+
+    for old_path in ["src/new-name.js", "src/old-name.js"] {
+        let asked = json!({
+            "handle": diffed["structuredContent"]["handle"].clone(),
+            "path": "src",
+            "old_path": old_path,
+        });
+
+        let served = one_sided(|| store.store(), "get_file_diff", asked.clone()).await;
+        let cold = Memory::new();
+        assert_eq!(
+            served,
+            call_tool(|| cold.store(), "get_file_diff", asked).await,
+            "`src` from `{old_path}`: the tree says `src` is a directory with \
+             no file at it, and the second version is not there to fetch: got \
+             {served}"
+        );
+        assert_eq!(
+            served["isError"],
+            json!(true),
+            "`src` from `{old_path}`: and that answer is the refusal a \
+             directory gets: got {served}"
+        );
+    }
+}
+
 /// So is the resource that answers with one file's diff.
 ///
 /// The document is the tool's answer with a media type on it (ADR 0014), so
