@@ -41,11 +41,12 @@
 //! file maps for the one directory the tree does not have, the one a rename
 //! emptied.
 //!
-//! Only a path with no file at it in either version is refused (#111). A path
-//! that is a file in one version and a directory in the other is served the
-//! file's patch, both ways round and warm or cold. The tree lists such a path
-//! twice, the file beside the directory, and the file is the one this answers
-//! for: it is the row an agent read before asking.
+//! Only a path with a directory and no file at it in either version is
+//! refused (#111). A path that is a file in one version and a directory in
+//! the other is served the file's patch, both ways round and warm or cold.
+//! The tree lists such a path twice, the file beside the directory, and the
+//! file is the one this answers for: it is the row an agent read before
+//! asking.
 //!
 //! # Why `context_lines` is this tool's and not the engine's
 //!
