@@ -221,8 +221,8 @@ has is which way it arrived: one worked out now holds both Versions' files,
 and a remembered one holds the Patches the Entry was written with and none of
 the archives those came from. So one file's Patch is asked of it per file and
 rendered when the Comparison has no Patch for that file, rather than by asking
-which half it was given, after refusing a path the Tree says is a directory in
-either Version — and that rule is one function,
+which half it was given, after refusing a path the Tree says is a directory
+with no file at it in either Version — and that rule is one function,
 `Comparison::file_patch`, which `get_file_diff` and the file-diff resource
 both call. Distinct from an Entry, which is how a
 Comparison is remembered: an Entry is two Blobs in a store and a Comparison is
@@ -275,10 +275,10 @@ things about it are the engine's and neither is guessable from an answer, so
 both are said out loud wherever one is served: a directory's counts are the
 sum of its children's, and a directory a rename left empty is not in the Tree
 at all. A third is rare: a path that is a file in one Version and a directory
-in the other is two nodes with one path, told apart by their type, and such a
-path is refused as a directory whichever way round it is asked (#103). One
-file or one directory in it is a *node* — not an Entry, which is the cache's,
-and not a FileMap's entry either.
+in the other is two nodes with one path, told apart by their type, and asking
+for one file's Patch at such a path answers for the file, whichever way round
+it is asked (#111). One file or one directory in it is a *node* — not an
+Entry, which is the cache's, and not a FileMap's entry either.
 _Avoid_: file tree, hierarchy, listing, entry (for a node)
 
 **Subtree**:
