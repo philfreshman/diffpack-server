@@ -912,6 +912,73 @@ async fn a_directory_a_rename_emptied_is_not_in_the_tree_at_all() {
     assert_eq!(gone["isError"], json!(false), "got {gone}");
 }
 
+/// A path that is a file in one version and a directory in the other is two
+/// nodes, and each is what it was.
+///
+/// `lib` is a file in `shape` 1.0.0 and a directory holding `lib/index.js` in
+/// 2.0.0. The engine lists the path twice, told apart by `type`, the first
+/// version's first: a file only one version has, and a directory only the
+/// other has, with the file inside it added or removed like any other.
+/// Before `diffpack-engine` 0.3.1 it kept one node per path and lost one of
+/// the two, calling `lib/index.js` unchanged one way round and dropping the
+/// file `lib` the other (philfreshman/diffpack-engine#7).
+#[tokio::test]
+async fn a_path_that_is_a_file_in_one_version_and_a_directory_in_the_other_is_two_nodes() {
+    for (from, to, expected) in [
+        (
+            "1.0.0",
+            "2.0.0",
+            [
+                ("lib", "file", "removed"),
+                ("lib", "directory", "added"),
+                ("lib/index.js", "file", "added"),
+                ("package.json", "file", "unchanged"),
+            ],
+        ),
+        (
+            "2.0.0",
+            "1.0.0",
+            [
+                ("lib", "directory", "removed"),
+                ("lib/index.js", "file", "removed"),
+                ("lib", "file", "added"),
+                ("package.json", "file", "unchanged"),
+            ],
+        ),
+    ] {
+        let nodes = walk(json!({ "handle": handle("shape", from, to) })).await;
+
+        let listed: Vec<(&str, &str, &str)> = nodes
+            .iter()
+            .map(|node| {
+                (
+                    node["path"].as_str().unwrap_or_default(),
+                    node["type"].as_str().unwrap_or_default(),
+                    node["status"].as_str().unwrap_or_default(),
+                )
+            })
+            .collect();
+        assert_eq!(listed, expected, "{from} → {to}: got {nodes:?}");
+    }
+}
+
+/// And `path` naming it lists what is inside the directory.
+///
+/// A file has nothing under it, so the subtree at a path that is both is the
+/// directory's, whichever of the two the comparison lists first.
+#[tokio::test]
+async fn a_path_that_is_a_file_and_a_directory_lists_the_directorys_contents() {
+    for (from, to) in [("1.0.0", "2.0.0"), ("2.0.0", "1.0.0")] {
+        let nodes = walk(json!({ "handle": handle("shape", from, to), "path": "lib" })).await;
+
+        assert_eq!(
+            paths(&nodes),
+            ["lib/index.js"],
+            "{from} → {to}: `lib` is a directory in 2.0.0, holding one file"
+        );
+    }
+}
+
 /// The description says so, because the argument's own description cannot.
 ///
 /// `path` carries the rule every tool that takes a directory shares, and a
