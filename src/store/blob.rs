@@ -541,7 +541,7 @@ fn client() -> Result<&'static Client, Failure> {
 
     CLIENT
         .get_or_init(|| {
-            // The same choice `crate::archive`'s client makes, and for the
+            // The same choice `crate::fetch`'s client makes, and for the
             // same reason: rustls has no default provider, `ring` is the one
             // that needs no C toolchain at build time, and installing it is
             // process-wide with only the first caller winning.
