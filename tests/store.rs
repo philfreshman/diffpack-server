@@ -1095,30 +1095,31 @@ async fn a_read_of_a_directory_is_refused_out_of_the_entry_too() {
 // side with one `path` (`diffpack-engine` 0.3.1; before it the engine kept one
 // node per path and lost one of the two, philfreshman/diffpack-engine#7).
 //
-// A path that is a directory in either version is refused (#103), and the
-// four tests below are the four cells: each direction, cold and warm. A warm
-// one is asked through `ONE_SIDED`, which has `shape` 1.0.0 and not 2.0.0, so
-// it is also held to answering without a download.
+// A path is refused as a directory only when there is no file at it in either
+// version (#111), so `lib` is served the file's patch. The four tests below
+// are the four cells: each direction, cold and warm. A warm one is asked
+// through `ONE_SIDED`, which has `shape` 1.0.0 and not 2.0.0, so it is also
+// held to answering without a download.
 
-/// A path that became a directory is refused when nothing is stored.
+/// A file that became a directory is served its removal when nothing is
+/// stored.
 ///
-/// The FileMaps say `lib` is a directory in 2.0.0, which is the refusal a
-/// directory gets, and that version is the one named.
+/// The tree lists `lib` as a removed file, and that is the row an agent asks
+/// about. The directory beside it in 2.0.0 does not stop the file being
+/// diffed.
 #[tokio::test]
-async fn a_path_that_became_a_directory_is_refused_cold() {
-    let refused = lib_cold("1.0.0", "2.0.0").await;
+async fn a_file_that_became_a_directory_is_served_cold() {
+    let served = lib_cold("1.0.0", "2.0.0").await;
 
-    is_refused_as_a_directory_in_2(&refused);
+    is_the_patch_of_lib(&served, "--- from/lib\n+++ /dev/null\n");
 }
 
-/// And it is refused the same way when the comparison is stored.
+/// And it is served the same patch when the comparison is stored.
 ///
-/// The case #103 is about. The tree lists a removed file `lib`, and a removed
-/// file has a patch, so this used to serve one where the cold call refuses.
-/// The directory `lib` beside it in the tree is what says it is a directory
-/// in 2.0.0, and that is known without the archives.
+/// The entry holds `lib`'s patch, so a warm call answers out of it and never
+/// fetches 2.0.0, which this fixture set does not have.
 #[tokio::test]
-async fn a_path_that_became_a_directory_is_refused_warm_without_the_archives() {
+async fn a_file_that_became_a_directory_is_served_warm_without_the_archives() {
     let served = lib_warm("1.0.0", "2.0.0").await;
 
     assert_eq!(
@@ -1127,27 +1128,25 @@ async fn a_path_that_became_a_directory_is_refused_warm_without_the_archives() {
         "a stored comparison answers `lib` as a fresh one does, and without \
          fetching 2.0.0, which this fixture set does not have: got {served}"
     );
-    is_refused_as_a_directory_in_2(&served);
+    is_the_patch_of_lib(&served, "--- from/lib\n+++ /dev/null\n");
 }
 
-/// A path that stops being a directory is refused when nothing is stored.
+/// A file where a directory was is served its addition when nothing is
+/// stored.
 ///
 /// The other way round: `lib` is a directory in 2.0.0, which is now the
 /// version compared from. The tree lists a removed directory `lib` beside an
-/// added file, and the directory is the refusal.
+/// added file, and the file is what is diffed.
 #[tokio::test]
-async fn a_path_that_stopped_being_a_directory_is_refused_cold() {
-    let refused = lib_cold("2.0.0", "1.0.0").await;
+async fn a_file_where_a_directory_was_is_served_cold() {
+    let served = lib_cold("2.0.0", "1.0.0").await;
 
-    is_refused_as_a_directory_in_2(&refused);
+    is_the_patch_of_lib(&served, "--- /dev/null\n+++ to/lib\n");
 }
 
-/// And it is refused the same way when the comparison is stored.
-///
-/// The entry holds no patch for `lib`, for the reason the test below gives,
-/// and the stored tree still says it is a directory.
+/// And it is served the same patch when the comparison is stored.
 #[tokio::test]
-async fn a_path_that_stopped_being_a_directory_is_refused_warm_without_the_archives() {
+async fn a_file_where_a_directory_was_is_served_warm_without_the_archives() {
     let served = lib_warm("2.0.0", "1.0.0").await;
 
     assert_eq!(
@@ -1156,21 +1155,19 @@ async fn a_path_that_stopped_being_a_directory_is_refused_warm_without_the_archi
         "a stored comparison answers `lib` as a fresh one does, and without \
          fetching 2.0.0, which this fixture set does not have: got {served}"
     );
-    is_refused_as_a_directory_in_2(&served);
+    is_the_patch_of_lib(&served, "--- /dev/null\n+++ to/lib\n");
 }
 
 /// The resource answers that path as the tool does, in all four cells.
 ///
 /// A read of `diffpack://diff/{handle}/file/lib` is the tool's answer with a
-/// media type on it (ADR 0014), and a refusal has no media type: it arrives
-/// as the JSON-RPC error rather than as `isError`, carrying the sentence the
-/// tool's error carries. So what is held is that sentence, the same on both
-/// channels, and that it is the refusal for a directory in 2.0.0.
+/// media type on it (ADR 0014), so what is held is the document's text
+/// against the tool's, and that the text is the file's patch.
 ///
 /// A warm read and a warm call share one entry and go through `ONE_SIDED`
 /// together, so neither can have downloaded.
 #[tokio::test]
-async fn a_read_of_a_path_that_is_a_file_and_a_directory_is_the_tools_refusal() {
+async fn a_read_of_a_path_that_is_a_file_and_a_directory_is_the_tools_answer() {
     for (from, to) in [("1.0.0", "2.0.0"), ("2.0.0", "1.0.0")] {
         let store = Memory::new();
         let diffed = call(|| store.store(), shape(from, to)).await;
@@ -1197,11 +1194,16 @@ async fn a_read_of_a_path_that_is_a_file_and_a_directory_is_the_tools_refusal() 
         ];
 
         for (when, called, read) in cells {
-            is_refused_as_a_directory_in_2(&called);
             assert_eq!(
-                read["error"]["message"], called["content"][0]["text"],
-                "{from} → {to} {when}: the resource refuses `lib` with the \
-                 tool's sentence, got {read} against {called}"
+                called["isError"],
+                json!(false),
+                "{from} → {to} {when}: `lib` is a file in 1.0.0, so it has a \
+                 patch: got {called}"
+            );
+            assert_eq!(
+                read["result"]["contents"][0]["text"], called["structuredContent"]["text"],
+                "{from} → {to} {when}: the resource answers `lib` with the \
+                 tool's patch, got {read} against {called}"
             );
         }
     }
@@ -1239,39 +1241,36 @@ async fn a_file_inside_a_path_that_became_a_directory_is_served_warm_without_the
     );
 }
 
-/// An entry is written without a patch for that path.
+/// An entry holds the patch for a file that became a directory.
 ///
-/// The tree lists a removed file `lib`, but 2.0.0 has a directory there and
-/// the refusal above means no caller is ever served a patch for it. So the
-/// comparison does not render one while it has both archives in hand, and
-/// the entry does not carry bytes nobody may read. `lib/index.js` inside the
-/// directory is added, and its patch is kept like any other.
+/// The tree lists a removed file `lib`, and callers are served its patch, so
+/// the comparison renders it while it has both archives in hand, like any
+/// other changed file. `lib/index.js` inside the directory is added, and its
+/// patch is kept too.
 ///
-/// Read off the blob rather than off the wire, for the reason
-/// `patches_omitted` is: the refusal is what an answer turns on, and the
-/// entry is where what it holds can be read. Nothing was dropped either —
-/// the patch was never rendered, so the entry says nothing is missing.
+/// Read off the blob rather than off the wire: the warm tests above say an
+/// answer came without a download, and the entry is where what it holds can
+/// be read.
 #[tokio::test]
-async fn an_entry_holds_no_patch_for_a_path_that_became_a_directory() {
+async fn an_entry_holds_the_patch_for_a_file_that_became_a_directory() {
     let store = Memory::new();
 
     let answer = call(|| store.store(), shape("1.0.0", "2.0.0")).await;
     settles(&store, 2).await;
 
     let patches = blob(&store, &patches_of(&answer));
-    assert!(
-        patches.get("lib").is_none(),
-        "`lib` is a directory in 2.0.0, so its removal patch is not one to keep: \
-         got {patches}"
+    assert_eq!(
+        patches["lib"],
+        json!({
+            "data": "--- from/lib\n+++ /dev/null\n- A plain file, where 2.0.0 has a directory.\n- ",
+            "is_diff": true,
+        }),
+        "`lib` is a file in 1.0.0 and removed in 2.0.0, so the entry holds its \
+         removal: got {patches}"
     );
     assert!(
         patches.get("lib/index.js").is_some(),
         "the file added inside the directory has its patch: got {patches}"
-    );
-    assert_eq!(
-        blob(&store, &meta_of(&answer))["patches_omitted"],
-        json!(false),
-        "and leaving it out is not a patch dropped"
     );
 }
 
@@ -1316,23 +1315,29 @@ async fn lib_warm(from: &str, to: &str) -> Value {
     one_sided(|| store.store(), "get_file_diff", asked).await
 }
 
-/// Assert `answer` is the refusal for `lib` being a directory in 2.0.0.
+/// Assert `answer` is `lib`'s patch, opening with `header`.
 ///
-/// The version is the part worth holding: whichever way round `shape` is
-/// compared, 2.0.0 is the one with the directory.
-fn is_refused_as_a_directory_in_2(answer: &Value) {
+/// The header is the part worth holding: it says which way round the file
+/// was diffed, removed from 1.0.0 or added in it.
+fn is_the_patch_of_lib(answer: &Value, header: &str) {
     assert_eq!(
         answer["isError"],
-        json!(true),
-        "`lib` is a directory in 2.0.0, so it has no patch: got {answer}"
+        json!(false),
+        "`lib` is a file in 1.0.0, so it has a patch: got {answer}"
     );
 
-    let message = answer["content"][0]["text"]
+    let patch = &answer["structuredContent"];
+    let text = patch["text"]
         .as_str()
-        .unwrap_or_else(|| panic!("a tool error carries text for the model, got {answer}"));
+        .unwrap_or_else(|| panic!("a patch carries its text, got {answer}"));
     assert!(
-        message.contains("`lib`") && message.contains("2.0.0") && message.contains("directory"),
-        "the refusal names the path and the version it is a directory in: got {message}"
+        text.starts_with(header) && text.contains("A plain file, where 2.0.0 has a directory."),
+        "the answer is the file `lib`, under the header `{header}`: got {text}"
+    );
+    assert_eq!(
+        patch["isDiff"],
+        json!(true),
+        "and it is a diff: got {answer}"
     );
 }
 
