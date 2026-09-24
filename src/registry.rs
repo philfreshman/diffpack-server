@@ -8,6 +8,11 @@
 //! this module rather than describing it a second time. See [ADR
 //! 0004](../docs/adr/0004-one-registry-module.md).
 //!
+//! The rules for spelling a package and a version are this module's too, so
+//! the `package` and `version` arguments are its types, [`PackageName`] and
+//! [`VersionName`]: they check nothing, and write the rules into the schema a
+//! tool declares.
+//!
 //! # Why a `match` and not a trait
 //!
 //! Every per-registry fact below is a `match` over three variants in this
@@ -131,8 +136,8 @@ impl Registry {
     /// A name is taken verbatim here — the same rule `docs/cache-key.md`
     /// fixes for the key — and what that costs differs per registry, which is
     /// exactly what #23 says an agent cannot work out for itself. These are
-    /// the sentences `diffpack://registries` (#16) serves and a tool's schema
-    /// can quote.
+    /// the sentences `diffpack://registries` (#16) serves, and every package
+    /// argument's schema states all of them, through [`PackageName`].
     pub fn name_rule(self) -> &'static str {
         match self {
             Self::Npm => {
@@ -151,13 +156,7 @@ impl Registry {
         }
     }
 
-    /// Where `package`'s versions are listed, and which way that source
-    /// lists them.
-    ///
-    /// The two travel together because #18 promises one order — newest
-    /// first, every registry — and only crates.io answers that way already.
-    /// A caller told where to ask and left to remember which way the answer
-    /// runs is a caller that lists npm backwards.
+    /// Where `package`'s versions are listed.
     ///
     /// The package name is escaped rather than interpolated: a scoped npm
     /// name is one package name, and `@types/node` written into a path
@@ -167,11 +166,9 @@ impl Registry {
         match self {
             Self::Npm => VersionSource {
                 url: format!("https://registry.npmjs.org/{escaped}"),
-                order: Order::OldestFirst,
             },
             Self::Crates => VersionSource {
                 url: format!("https://crates.io/api/v1/crates/{escaped}"),
-                order: Order::NewestFirst,
             },
             // PyPI's own JSON names a package's releases but without the
             // dates that order them, and its simple index is HTML. deps.dev
@@ -179,9 +176,208 @@ impl Registry {
             // two agree about what versions a package has.
             Self::PyPi => VersionSource {
                 url: format!("https://api.deps.dev/v3/systems/pypi/packages/{escaped}"),
-                order: Order::OldestFirst,
             },
         }
+    }
+
+    /// The versions a [`VersionSource`] body names, newest first and with the
+    /// one the registry points at, or nothing if this server cannot read it.
+    ///
+    /// # The two answers
+    ///
+    /// Every registry's version document carries both, and they are
+    /// different questions. The list is newest published first, which is what
+    /// *what changed in the last two releases* asks. `current` is the release
+    /// the registry itself resolves for someone who names no version, which
+    /// is what *which version is this package on* asks. Each registry names
+    /// it its own way and each arm below reads its own; on `@types/node`
+    /// they are 24.13.6 and 26.6.2 most weeks.
+    ///
+    /// `current` is not looked up in the list. A registry pointing at a
+    /// version this server did not receive in the document is reported as the
+    /// registry spelled it, because the alternative is reporting *no current
+    /// release* for a package that has one.
+    ///
+    /// # Why the order is computed here rather than declared
+    ///
+    /// This used to be a field beside the URL saying which way each source
+    /// runs. It was wrong, and wrong in a way no amount of reversing fixes:
+    /// deps.dev sorts PyPI's versions *lexically by version string*, so
+    /// `requests` ends at `2.9.2` and reversing it reports that as the
+    /// newest release rather than `2.34.2`. npm's is worse — its versions
+    /// are a JSON object, and `serde_json`'s map is a `BTreeMap` here, so
+    /// the document's own order is gone before this crate ever sees it.
+    ///
+    /// All three documents carry a publish date per version, so that is what
+    /// newest first means: most recently published first. It is not the
+    /// highest version number — npm's `@types/node` publishes a 22.x patch
+    /// after a 26.x release most weeks, and both registries' own listings
+    /// show the patch on top.
+    ///
+    /// The dates are compared as the strings the registry wrote. Each source
+    /// spells them one way, so ordering within one answer is exact, and no
+    /// calendar has to be parsed to sort releases.
+    ///
+    /// `None` rather than an error, for the same reason
+    /// [`choose_archive`](Self::choose_archive) is: a document this server
+    /// cannot read is something the caller has to explain to a model, and
+    /// the caller is the one holding the package name that belongs in that
+    /// message.
+    pub fn read_versions(self, document: &str) -> Option<Versions> {
+        let (mut versions, current) = match self {
+            Self::Npm => {
+                // Only the keys are wanted from `versions`; the dates are in
+                // `time`, which also carries `created` and `modified`. The
+                // intersection is the point: `time` alone would invent two
+                // versions, and `versions` alone has no order.
+                #[derive(Deserialize)]
+                struct Document {
+                    versions: std::collections::BTreeMap<String, de::IgnoredAny>,
+                    time: std::collections::BTreeMap<String, String>,
+                    /// npm's pointer at the current release, and the one
+                    /// `npm install` with no version resolves. Every other
+                    /// tag a package carries — `next`, `beta`, a release
+                    /// line's own — is a name somebody chose, so only this
+                    /// one is read.
+                    #[serde(default, rename = "dist-tags")]
+                    dist_tags: DistTags,
+                }
+                #[derive(Default, Deserialize)]
+                struct DistTags {
+                    #[serde(default)]
+                    latest: Option<String>,
+                }
+
+                let document: Document = serde_json::from_str(document).ok()?;
+                let listed = document
+                    .versions
+                    .into_keys()
+                    .map(|version| Version {
+                        prerelease: self.is_prerelease(&version),
+                        published_at: document.time.get(&version).cloned(),
+                        version,
+                    })
+                    .collect::<Vec<_>>();
+                (listed, document.dist_tags.latest)
+            }
+
+            // crates.io carries **four** pointers, and on a crate mid-release
+            // cycle they disagree:
+            //
+            //     leptos:  default=0.8.20  max=0.9.0-beta
+            //              newest=0.9.0-beta  max_stable=0.8.20
+            //     bevy:    default=0.19.1  max=0.20.0-rc.1
+            //              newest=0.20.0-rc.1  max_stable=0.19.1
+            //     serde:   default=1.0.229 max=1.0.229
+            //              newest=1.0.229  max_stable=1.0.229
+            //
+            // `default_version` is the one read, and the other three are
+            // named here so that the next reader knows they were considered
+            // rather than missed.
+            //
+            // `max_version` and `newest_version` include prereleases, so on
+            // any crate with a beta out they answer "the latest version" with
+            // the beta. That is the answer this field exists to stop giving.
+            //
+            // `max_stable_version` agrees with `default_version` on every
+            // crate checked, and it is still not the one: it is derived from
+            // version numbers, where `default_version` is the pointer
+            // crates.io's own page defaults to and `cargo add` resolves. That
+            // is what makes it the same *question* npm's `dist-tags.latest`
+            // and PyPI's `isDefault` answer, rather than three registries
+            // that happen to agree today. A maintainer who yanks the newest
+            // stable release moves `default_version` and leaves a derivation
+            // of the version numbers behind.
+            Self::Crates => {
+                #[derive(Deserialize)]
+                struct Document {
+                    versions: Vec<Release>,
+                    #[serde(rename = "crate")]
+                    package: Package,
+                }
+                #[derive(Deserialize)]
+                struct Package {
+                    #[serde(default)]
+                    default_version: Option<String>,
+                }
+                #[derive(Deserialize)]
+                struct Release {
+                    num: String,
+                    created_at: Option<String>,
+                }
+
+                let document: Document = serde_json::from_str(document).ok()?;
+                let listed = document
+                    .versions
+                    .into_iter()
+                    .map(|release| Version {
+                        prerelease: self.is_prerelease(&release.num),
+                        version: release.num,
+                        published_at: release.created_at,
+                    })
+                    .collect::<Vec<_>>();
+                (listed, document.package.default_version)
+            }
+
+            // deps.dev sorts these lexically by version string, which is
+            // neither end of the list: `requests` runs to 2.9.2 because
+            // "2.9.2" sorts after "2.34.2". The dates are the only thing in
+            // this document that puts releases in order.
+            Self::PyPi => {
+                #[derive(Deserialize)]
+                struct Document {
+                    versions: Vec<Release>,
+                }
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Release {
+                    version_key: VersionKey,
+                    #[serde(default)]
+                    published_at: Option<String>,
+                    /// deps.dev's pointer, and the only one of the three that
+                    /// is a flag on a version rather than a field beside
+                    /// them. At most one version carries it.
+                    #[serde(default)]
+                    is_default: bool,
+                }
+                #[derive(Deserialize)]
+                struct VersionKey {
+                    version: String,
+                }
+
+                let document: Document = serde_json::from_str(document).ok()?;
+                let mut current = None;
+                let listed = document
+                    .versions
+                    .into_iter()
+                    .map(|release| {
+                        if release.is_default {
+                            current = Some(release.version_key.version.clone());
+                        }
+                        Version {
+                            prerelease: self.is_prerelease(&release.version_key.version),
+                            version: release.version_key.version,
+                            published_at: release.published_at,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                (listed, current)
+            }
+        };
+
+        // Newest first, and by the date rather than by the name. A version
+        // the source gave no date for sorts last, which is what reversing
+        // `Option`'s own order does — `None` is less than every `Some` — and
+        // is the only honest place for it: the promise is newest first, and a
+        // release this server cannot date is not one it can call the newest.
+        //
+        // Ties keep whatever order they arrived in, which for two releases
+        // published in the same instant is not a question anyone is asking.
+        versions.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+        Some(Versions {
+            all: versions,
+            current,
+        })
     }
 
     /// Where a search for `query` is answered, and for at most `limit` hits.
@@ -191,20 +387,145 @@ impl Registry {
     /// on crates.io — and a caller that had to know which is which would be
     /// the per-registry `match` this module exists to remove.
     ///
-    /// `None` is PyPI: it has no search API this server has chosen, and #19
-    /// is where that choice gets made and written down. A registry with no
-    /// search source says so, rather than being handed a URL that answers
-    /// nothing.
-    pub fn search(self, query: &str, limit: u32) -> Option<SearchSource> {
+    /// PyPI has no search endpoint at all: its XML-RPC search was withdrawn
+    /// in 2021 and its search page is a web page its own `robots.txt` asks
+    /// automated clients not to fetch. So its source is the index itself —
+    /// every name it publishes, PEP 691's JSON form — and neither the query
+    /// nor the limit can be put to it. Both are applied on this side, in
+    /// [`read_hits`](Self::read_hits). #19 records what the alternatives
+    /// cost.
+    pub fn search(self, query: &str, limit: u32) -> SearchSource {
         let escaped = escape(query);
-        let url = match self {
+        let (url, accept, whole_index) = match self {
+            // The most each source answers, in that source's own units.
+            // Narrowed here rather than sent: npm and crates.io both refuse a
+            // larger one outright, so a caller asking for a thousand hits
+            // would get an error instead of the hundred that exist.
             Self::Npm => {
-                format!("https://registry.npmjs.org/-/v1/search?text={escaped}&size={limit}")
+                let size = limit.min(250);
+                (
+                    format!("https://registry.npmjs.org/-/v1/search?text={escaped}&size={size}"),
+                    "application/json",
+                    false,
+                )
             }
-            Self::Crates => format!("https://crates.io/api/v1/crates?q={escaped}&per_page={limit}"),
-            Self::PyPi => return None,
+            Self::Crates => {
+                let per_page = limit.min(100);
+                (
+                    format!("https://crates.io/api/v1/crates?q={escaped}&per_page={per_page}"),
+                    "application/json",
+                    false,
+                )
+            }
+            // Without this the same URL answers with the web page pip does
+            // not read either.
+            Self::PyPi => (
+                "https://pypi.org/simple/".to_owned(),
+                "application/vnd.pypi.simple.v1+json",
+                true,
+            ),
         };
-        Some(SearchSource { url })
+        SearchSource {
+            url,
+            accept,
+            whole_index,
+        }
+    }
+
+    /// The hits a search answer names, or nothing if it is not an answer
+    /// this registry's source gives.
+    ///
+    /// The other half of [`search`](Self::search), and here for the reason
+    /// that one is: the three sources agree about nothing. npm wraps each
+    /// package in an `objects` array, crates.io answers with `crates`, and
+    /// PyPI's index is every name it publishes and no versions at all. A
+    /// caller that had to tell them apart would be carrying this module's
+    /// job.
+    ///
+    /// `query` is here for the source that does not take one. npm and
+    /// crates.io are asked the query and answer it; PyPI's index is the
+    /// whole list, so the matching happens on this side and the query is
+    /// what it matches against.
+    ///
+    /// `None` rather than an error, as [`choose_archive`](Self::choose_archive)
+    /// does: a body that will not read is the source serving something
+    /// broken, and the caller is the one holding the registry and the query
+    /// that belong in that message.
+    pub fn read_hits(self, body: &str, query: &str, limit: u32) -> Option<Vec<Hit>> {
+        let hits: Vec<Hit> = match self {
+            Self::Npm => {
+                let answer: NpmSearch = serde_json::from_str(body).ok()?;
+                answer
+                    .objects
+                    .into_iter()
+                    .map(|object| Hit {
+                        name: object.package.name,
+                        version: object.package.version,
+                        description: object.package.description,
+                    })
+                    .collect()
+            }
+            Self::Crates => {
+                let answer: CratesSearch = serde_json::from_str(body).ok()?;
+                answer
+                    .crates
+                    .into_iter()
+                    .map(|found| Hit {
+                        name: found.name,
+                        // Three version fields arrive and they do not have to
+                        // agree. This is the one the registry itself would
+                        // hand a caller that named no version, which is what
+                        // npm's `version` is too — `newest_version` would
+                        // answer with a pre-release nobody is meant to
+                        // install yet.
+                        version: found.default_version,
+                        description: found.description,
+                    })
+                    .collect()
+            }
+
+            // The index is every name PyPI publishes, so matching and
+            // ordering happen here rather than at the source. `rank` is the
+            // whole of the relevance this server claims, and it is written
+            // where the reader asking "how does PyPI differ here?" is
+            // already looking.
+            Self::PyPi => {
+                let index: PyPiIndex = serde_json::from_str(body).ok()?;
+                let query = query.to_lowercase();
+
+                let mut matched: Vec<(Rank, &str)> = index
+                    .projects
+                    .iter()
+                    .filter_map(|project| {
+                        rank(&project.name, &query).map(|rank| (rank, project.name.as_str()))
+                    })
+                    .collect();
+
+                // Length before spelling: of two names that both start with
+                // the query, the shorter is the one that is mostly the
+                // query. Alphabetical is the tie-break rather than the rule,
+                // so the order does not depend on the order the index
+                // happened to list them in.
+                matched.sort_by(|(left_rank, left), (right_rank, right)| {
+                    left_rank
+                        .cmp(right_rank)
+                        .then_with(|| left.len().cmp(&right.len()))
+                        .then_with(|| left.cmp(right))
+                });
+
+                matched
+                    .into_iter()
+                    .map(|(_, name)| Hit {
+                        name: name.to_owned(),
+                        // The index carries neither, for any project in it.
+                        version: None,
+                        description: None,
+                    })
+                    .collect()
+            }
+        };
+
+        Some(hits.into_iter().take(limit as usize).collect())
     }
 
     /// Every host this registry is allowed to be reached at.
@@ -228,7 +549,7 @@ impl Registry {
         if let Ok(archive) = self.archive(PROBE, "1.0.0") {
             urls.push(archive.url().to_owned());
         }
-        urls.extend(self.search(PROBE, 1).map(|source| source.url));
+        urls.push(self.search(PROBE, 1).url);
 
         let mut hosts: BTreeSet<String> = urls
             .iter()
@@ -249,6 +570,30 @@ impl Registry {
         match self {
             Self::Npm | Self::Crates => &[],
             Self::PyPi => &["files.pythonhosted.org"],
+        }
+    }
+
+    /// Whether `version` is a preview rather than a release.
+    ///
+    /// A per-registry fact because the two spellings are genuinely different
+    /// standards rather than dialects: npm and crates.io use semver, where a
+    /// prerelease is what follows the first `-`, and PyPI uses PEP 440, where
+    /// it is an `a`, `b`, `rc` or `dev` segment glued to the release with no
+    /// separator required at all. `1.0rc1` is a release candidate on PyPI and
+    /// is not a version on either of the other two.
+    ///
+    /// Worth telling an agent because "the last two versions" is the question
+    /// this tool exists for, and the answer to it should not quietly be a
+    /// release candidate.
+    pub fn is_prerelease(self, version: &str) -> bool {
+        // Build metadata is not a prerelease under either standard — semver's
+        // `+build.5` and PEP 440's `+local` are labels on a release — and it
+        // can contain anything, so it goes before either rule looks.
+        let version = version.split('+').next().unwrap_or_default();
+
+        match self {
+            Self::Npm | Self::Crates => version.contains('-'),
+            Self::PyPi => pep440_prerelease(version),
         }
     }
 
@@ -379,37 +724,391 @@ impl JsonSchema for Registry {
 /// given [`Registry::name_rule`] and left to guess whether a range works will
 /// try one, and a range that resolved to something would be this server
 /// picking a version on a user's behalf.
+///
+/// It is also the whole description of every version argument a tool takes,
+/// through [`VersionName`], so an agent reads the same sentence in a schema
+/// and in `diffpack://registries`.
 pub const VERSION_RULE: &str = "A version is one published version, spelled the way the \
                                 registry spells it: not a range, not a tag, and nothing \
                                 normalised — `v4.0.0` and `4.0.0` are different versions.";
+
+// ---------------------------------------------------------------------------
+// The arguments an agent spells a package and a version in
+// ---------------------------------------------------------------------------
+//
+// Every tool but the two that take a handle asks for a package, and four ask
+// for a version. They were `String`s with a sentence each, and the sentences
+// were copies of the rules above — five of one, four of the other — which had
+// drifted from them: none said that a `v` is part of a version. They are
+// types for `Registry`'s reason and `page::Limit`'s: the schema is where an
+// agent reads the rule, so the module that owns the rule writes the schema,
+// and a tool names the type and cannot say anything else.
+//
+// Neither checks anything. A name rule is told, not enforced: the registry
+// decides what exists, and a value tidied or refused here would be this
+// server deciding it instead.
+
+/// A package name, exactly as a caller spelled it.
+///
+/// Taken as given and handed on as given: `@types/node` keeps its `@` and its
+/// `/`, `Typing.Extensions` its case and its dot. What makes it a type rather
+/// than a `String` is the schema, which states every registry's
+/// [`Registry::name_rule`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct PackageName(String);
+
+impl PackageName {
+    /// A package name as a caller spelled it, for the caller that builds one
+    /// rather than reading one off the wire.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    /// The name, as it arrived.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<PackageName> for String {
+    fn from(name: PackageName) -> Self {
+        name.0
+    }
+}
+
+/// Every registry's name rule, where an agent reads it.
+///
+/// All of them, because `registry` is an argument beside this one and a
+/// schema cannot know which of the two a caller will pick. Generated over
+/// [`Registry::ALL`], so a fourth registry's rule reaches every tool's schema
+/// in the commit that adds it. It also points at `diffpack://registries`,
+/// which serves the same sentences, but the rules are not left to the
+/// pointer: an agent reads `tools/list` and often nothing else.
+impl JsonSchema for PackageName {
+    fn schema_name() -> Cow<'static, str> {
+        "PackageName".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::PackageName").into()
+    }
+
+    /// Inline rather than a `$ref`, for [`Registry`]'s reason.
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        let rules: Vec<String> = Registry::ALL
+            .iter()
+            .map(|registry| format!("{}: {}", registry.name(), registry.name_rule()))
+            .collect();
+        json_schema!({
+            "type": "string",
+            "description": format!(
+                "The package name as the registry spells it, scope included: `zod`, \
+                 `@types/node`, `serde`. Nothing is normalised, and what that means \
+                 differs per registry. {} The same rules are served at \
+                 `diffpack://registries`.",
+                rules.join(" ")
+            ),
+        })
+    }
+}
+
+/// A version, exactly as a caller spelled it.
+///
+/// Taken as given and handed on as given, `v` and all. What makes it a type
+/// rather than a `String` is the schema, which is [`VERSION_RULE`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct VersionName(String);
+
+impl VersionName {
+    /// A version as a caller spelled it, for the caller that builds one
+    /// rather than reading one off the wire.
+    pub fn new(version: impl Into<String>) -> Self {
+        Self(version.into())
+    }
+
+    /// The version, as it arrived.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<VersionName> for String {
+    fn from(version: VersionName) -> Self {
+        version.0
+    }
+}
+
+/// The version rule, where an agent reads it.
+///
+/// [`VERSION_RULE`] itself rather than a sentence beside it, so the schema and
+/// `diffpack://registries` cannot say two things.
+impl JsonSchema for VersionName {
+    fn schema_name() -> Cow<'static, str> {
+        "VersionName".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::VersionName").into()
+    }
+
+    /// Inline rather than a `$ref`, for [`Registry`]'s reason.
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "description": VERSION_RULE,
+        })
+    }
+}
 
 /// Where a package's versions are listed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionSource {
     /// The document to fetch.
     pub url: String,
-    /// The order that document lists versions in.
-    pub order: Order,
 }
 
-/// Where a search for a package is answered.
+/// Every version a registry lists for one package, and the one it points at.
+///
+/// Two answers rather than one because a registry's version document carries
+/// two, and they are different questions. `all` is newest first — most
+/// recently published — which is what an agent asking *what changed in the
+/// last two releases* wants. `current` is the release the registry itself
+/// resolves to, which is what an agent asking *which version is this package
+/// on* wants. npm's `@types/node` answers them with different versions most
+/// weeks.
+///
+/// Named for neither the seam that fetches it ([`crate::catalogue`]) nor the
+/// document it was read out of: it is what the document *said*, which is the
+/// only thing a tool ever needs from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Versions {
+    /// Every version the registry lists, newest published first.
+    pub all: Vec<Version>,
+
+    /// The version the registry itself points at, spelled as the registry
+    /// spells it.
+    ///
+    /// `None` where the registry names none. It is not looked up in
+    /// [`all`](Self::all) and not checked against it: a pointer at a version
+    /// this server did not receive in the list is the registry's own answer,
+    /// and replacing it with `None` would report *no current release* for a
+    /// package that has one.
+    pub current: Option<String>,
+}
+
+/// One published version of a package, and when it was published.
+///
+/// The date is here because it is what the order is computed from — see
+/// [`Registry::read_versions`] — rather than because a caller asked for it.
+/// It is the string the registry wrote, not a parsed instant: this crate has
+/// no calendar in it and does not need one to put releases in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Version {
+    /// The version as the registry spells it.
+    pub version: String,
+    /// When the registry says it was published, where it says.
+    ///
+    /// `None` is a real answer and not a gap in this crate: deps.dev leaves
+    /// the date off some versions — one of `requests`' 161 and thirty-seven
+    /// of `numpy`'s 171 — and those are published releases. Dropping them
+    /// would answer "what versions are there" with a list missing a fifth of
+    /// them, so they are kept and sorted last.
+    pub published_at: Option<String>,
+    /// Whether it is a preview rather than a release.
+    pub prerelease: bool,
+}
+
+/// Where a search for a package is answered, and what to ask it for.
+///
+/// The two travel together because one of the three needs both: the same URL
+/// serves PyPI's index as a web page or as PEP 691's JSON depending on what
+/// the request says it accepts. A caller told only where to go would be
+/// handed HTML and read no hits out of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchSource {
-    /// The document to fetch, query and limit included.
+    /// The document to fetch, query and limit included where the source
+    /// takes them.
     pub url: String,
+    /// What the request says it accepts.
+    pub accept: &'static str,
+    /// Whether this source answers every query with the same document.
+    ///
+    /// True for a source that is an index rather than a reply, which is
+    /// PyPI's and nobody else's: its URL carries no query, so one fetch
+    /// serves every search made against it. What that buys is the difference
+    /// between holding one document and caching results — an answer that
+    /// carried the query in its URL would be a per-query cache, with a
+    /// staleness nobody asked for and no bound on what it holds.
+    pub whole_index: bool,
 }
 
-/// Which end of a version list the newest release is at.
+/// One package a search found.
 ///
-/// Not a detail of parsing: #18 answers newest-first whatever was asked, so
-/// this is what a caller reverses by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Order {
-    /// The source lists the newest release first, which is the order a caller
-    /// answers in.
-    NewestFirst,
-    /// The source lists the oldest release first, so a caller reverses it.
-    OldestFirst,
+/// Two of the three are optional because the sources differ in what they
+/// carry rather than because a registry sometimes forgets: npm and crates.io
+/// answer with a version and a summary, and PyPI's index answers with a name
+/// and nothing else. Absent therefore means the source does not say, and
+/// never that the package has published nothing.
+///
+/// Not the shape a model reads. That is `search_packages`'s own `Hit`, for
+/// the reason [`Version`] is not `list_package_versions`'s: a schema a model
+/// reads is written where the tool is, so this module stays the one that
+/// knows what a registry is rather than also being the one that talks to a
+/// model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hit {
+    /// The package name, as the source spells it.
+    pub name: String,
+
+    /// The version the registry would install for a caller that named none,
+    /// where the source carries one.
+    pub version: Option<String>,
+
+    /// What the package says it is, in the registry's own words, where the
+    /// source carries it.
+    pub description: Option<String>,
+}
+
+/// npm's search answer, cut to the fields a [`Hit`] carries.
+///
+/// A type of this module's rather than the engine's: the engine builds
+/// archive URLs and knows nothing about search, and a `serde_json::Value`
+/// walked by hand here would be the same fields with the spelling mistakes
+/// left to run time.
+#[derive(Deserialize)]
+struct NpmSearch {
+    objects: Vec<NpmObject>,
+}
+
+#[derive(Deserialize)]
+struct NpmObject {
+    package: NpmPackage,
+}
+
+#[derive(Deserialize)]
+struct NpmPackage {
+    name: String,
+    version: Option<String>,
+    description: Option<String>,
+}
+
+/// crates.io's search answer, cut to the fields a [`Hit`] carries.
+#[derive(Deserialize)]
+struct CratesSearch {
+    crates: Vec<CratesCrate>,
+}
+
+#[derive(Deserialize)]
+struct CratesCrate {
+    name: String,
+    default_version: Option<String>,
+    description: Option<String>,
+}
+
+/// PyPI's index: every project it publishes, and for each of them a name.
+///
+/// PEP 691's JSON form. The `_last-serial` each project carries is not read
+/// — it says when a project last changed, which is not a question a search
+/// asks.
+#[derive(Deserialize)]
+struct PyPiIndex {
+    projects: Vec<PyPiProject>,
+}
+
+#[derive(Deserialize)]
+struct PyPiProject {
+    name: String,
+}
+
+/// How well a name answers a query, best first.
+///
+/// Three degrees and no score: a number would invite arithmetic on it, and
+/// what this actually knows about a name is which of three things it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Rank {
+    /// The query is the name.
+    Exact,
+    /// The name starts with the query.
+    Prefix,
+    /// The name has the query somewhere inside it.
+    Contains,
+}
+
+/// How well `name` answers `query`, or nothing if it does not.
+///
+/// `query` arrives already lower-cased, because it is the same query for
+/// every one of nine hundred thousand names and lowering it here would be
+/// lowering it nine hundred thousand times. The name is lowered per call and
+/// that is the cost this leaves standing: parsing PyPI's index and scanning
+/// every name in it measured at about 100 ms on a release build, which is
+/// what a PyPI search costs on a warm instance.
+///
+/// Case is ignored because a half-remembered name is what a search is for;
+/// the name is answered with as the index spells it either way.
+fn rank(name: &str, query: &str) -> Option<Rank> {
+    let name = name.to_lowercase();
+    if name == query {
+        Some(Rank::Exact)
+    } else if name.starts_with(query) {
+        Some(Rank::Prefix)
+    } else if name.contains(query) {
+        Some(Rank::Contains)
+    } else {
+        None
+    }
+}
+
+/// Whether a PEP 440 version is a preview rather than a release.
+///
+/// Read rather than parsed: what is wanted is one bit, and a parser for the
+/// whole grammar — epochs, post-releases, local versions, the four spellings
+/// of every separator — is a dependency and a surface for a question this
+/// small. So the release segment is skipped and what follows it is looked at.
+///
+/// The markers are PEP 440's, `alpha`, `beta`, `c`, `pre` and `preview`
+/// included because the specification normalises those to `a`, `b` and `rc`
+/// rather than rejecting them. A digit has to follow, so `1.0build3` is not
+/// read as a beta.
+///
+/// A post-release is deliberately not one of them: `1.0.post1` is a
+/// re-release of `1.0`, not a preview of something later, and an agent told
+/// to avoid it would be avoiding the newest thing there is.
+fn pep440_prerelease(version: &str) -> bool {
+    /// What PEP 440 spells a prerelease with, before normalisation.
+    const MARKERS: [&str; 8] = ["a", "b", "c", "rc", "alpha", "beta", "pre", "preview"];
+
+    let version = version.to_ascii_lowercase();
+
+    // An epoch is `N!` in front of everything, and says nothing about this.
+    let version = version.rsplit('!').next().unwrap_or_default();
+
+    // The release segment — `1.0.2` — and then whichever of the four
+    // separators the publisher used, or none, which is also allowed.
+    let tail = version.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.');
+    let tail = tail.trim_start_matches(['.', '-', '_']);
+
+    // A development release sorts before every other form of the same
+    // version, including its own alphas, so it is a preview wherever it sits:
+    // `1.0.post1.dev2` is a preview of that post-release.
+    if tail.contains("dev") {
+        return true;
+    }
+
+    MARKERS.iter().any(|marker| {
+        tail.strip_prefix(marker).is_some_and(|after| {
+            after.is_empty() || after.starts_with(|c: char| c.is_ascii_digit())
+        })
+    })
 }
 
 /// A package name or a query as one path segment or one parameter value.

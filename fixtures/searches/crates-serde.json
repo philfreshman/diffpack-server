@@ -1,0 +1,25 @@
+{
+  "crates": [
+    {
+      "id": "serde",
+      "name": "serde",
+      "description": "A generic serialization/deserialization framework",
+      "default_version": "1.0.229",
+      "newest_version": "1.0.229",
+      "max_stable_version": "1.0.229",
+      "downloads": 1419193853,
+      "exact_match": true
+    },
+    {
+      "id": "serde_json",
+      "name": "serde_json",
+      "description": "A JSON serialization file format",
+      "default_version": "1.0.151",
+      "newest_version": "1.0.151",
+      "max_stable_version": "1.0.151",
+      "downloads": 1211550891,
+      "exact_match": false
+    }
+  ],
+  "meta": { "total": 2 }
+}

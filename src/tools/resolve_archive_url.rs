@@ -23,13 +23,20 @@
 //! the browser runs. This module matches on no registry name of its own: what
 //! a registry is has one home (ADR 0004, #42), and a copy here would be the
 //! fifth one that ADR rejects.
+//!
+//! Which is also why the note about that below is a `//` comment and not a
+//! `///` one: a doc comment on a field of [`Args`] reaches a model, and this
+//! is a thing to know about the code rather than about the argument. See
+//! [`crate::tools`]. `package` and `version` have no doc comment at all,
+//! because that module writes their descriptions — every registry's name
+//! rule, and the version rule — and a doc comment would replace them.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Failure;
-use crate::registry::{ArchiveSource, Registry};
-use crate::tools::{Ctx, Tool};
+use crate::registry::{ArchiveSource, PackageName, Registry, VersionName};
+use crate::tools::{Call, Tool};
 
 /// The tool.
 pub struct ResolveArchiveUrl;
@@ -45,21 +52,17 @@ pub struct ResolveArchiveUrl;
 pub struct Args {
     /// The registry that publishes the package: `npm` or `crates`.
     ///
-    /// The enum comes from [`crate::registry`], so the list an agent is shown
-    /// is the list this server has rather than a description of it.
-    ///
     /// `pypi` parses and is a registry this server knows, but this tool
     /// cannot resolve a URL for it: PyPI lists a version's files in its
     /// metadata rather than serving them from a predictable path.
+    // The enum itself comes from `crate::registry`, so the list an agent is
+    // shown is the list this server has rather than a description of one.
     pub registry: Registry,
 
-    /// The package name as the registry spells it, scope included:
-    /// `zod`, `@types/node`, `serde`.
-    pub package: String,
+    // No doc comment on either, on purpose: see the module header.
+    pub package: PackageName,
 
-    /// The version as the registry spells it: `4.0.0`. Not a range, not a
-    /// tag — one published version.
-    pub version: String,
+    pub version: VersionName,
 }
 
 /// Where that version's archive is served from.
@@ -95,11 +98,11 @@ impl Tool for ResolveArchiveUrl {
     type Args = Args;
     type Output = Output;
 
-    async fn call(args: Args, _ctx: &Ctx) -> Result<Output, Failure> {
+    async fn call(args: Args, _call: &Call) -> Result<Output, Failure> {
         // `crate::registry` owns where an archive is; this tool owns which
         // of the two answers it can serve. A registry whose archive is
         // listed rather than built needs a fetch, and fetching is #10's.
-        match args.registry.archive(&args.package, &args.version)? {
+        match args.registry.archive(args.package.as_str(), args.version.as_str())? {
             ArchiveSource::Archive { url } => Ok(Output { url }),
             // The way forward is the registries this tool could have
             // answered for, asked of the same module with the same call
@@ -111,7 +114,7 @@ impl Tool for ResolveArchiveUrl {
                     .iter()
                     .filter(|registry| {
                         matches!(
-                            registry.archive(&args.package, &args.version),
+                            registry.archive(args.package.as_str(), args.version.as_str()),
                             Ok(ArchiveSource::Archive { .. })
                         )
                     })

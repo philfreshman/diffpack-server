@@ -5,12 +5,27 @@ An MCP server in Rust, deployed to Vercel, exposing what
 tools an agent can call: resolve a package on npm, crates.io or PyPI, fetch and
 extract its archives, and diff one version against another.
 
-**Status: transport, and the first tool.** The crate builds, tests and
-deploys, and `/mcp` speaks Streamable HTTP: a client connects, negotiates a
-protocol revision, lists tools and calls one. `resolve_archive_url` is the one
-there is — it answers from its arguments and fetches nothing. The tools that
-fetch and diff archives arrive with
-[#11](https://github.com/philfreshman/diffpack-server/issues/11) onward.
+**Status: transport, the tools that read a package, the one that diffs two,
+the two that read a diff back, and the resources beside them.** The crate
+builds, tests and deploys, and `/mcp` speaks Streamable HTTP: a client
+connects, negotiates a protocol revision, lists tools and calls one. There are
+eight, and three resources beside them. `search_packages` finds
+a package from a name half
+remembered, which is where an agent with no exact name to start from starts;
+`resolve_archive_url` answers from its arguments and fetches nothing;
+`list_package_versions` says what a package has released, most recently
+published first, and which of them the registry itself installs;
+`list_package_files` downloads a published version and lists what is inside
+it, a page at a time; `get_file_content` returns one of those files, cut
+short if it is longer than a response can carry; and
+`diff_package_versions` compares two versions and answers with totals, a
+sample of the files that moved most, and a handle; `get_diff_tree` takes that
+handle and lists the comparison's files and directories a page at a time; and
+`get_file_diff` takes the same handle and returns one of those files' diffs,
+trimmed to the lines around each change unless you ask for all of them. Three
+resources sit beside the tools for a client that would rather open something
+than call it: `diffpack://registries` describes the three registries in one
+document, and a comparison and any one file of it are readable by URI.
 `/health` is the other route and is what a monitor watches.
 
 Production serves whatever was last merged to `main`, so a branch merged into
@@ -36,8 +51,17 @@ src/lib.rs       Everything with a decision in it.
 src/router.rs    Every route this function serves.
 src/mcp.rs       The MCP handler: identity, capabilities, the tool list.
 src/tools/       One module per tool: its definition and its handler.
+src/resources/   One module per resource: its URI and its handler.
 src/registry.rs  What a registry is: npm, crates.io, PyPI, described once.
+src/archive/     A version's files: fetch, size cap, extract, one interface.
+src/catalogue/   What a package has released, most recently published first.
+src/search/      A name half remembered, matched against what a registry has.
+src/fetch.rs     Every request to a registry: user agent, timeout, redirects,
+                 and how many bodies this process reads at once.
+src/store/       Diff results kept between calls, over Vercel Blob.
 src/error.rs     Which channel a failure reaches the client on.
+src/log.rs       One structured line per tool call, which is what an incident
+                 is read back from.
 src/health.rs    The /health body.
 src/page.rs      The 4.5 MB response ceiling: pages, and cut blobs.
 src/handle.rs    The handle a diff is asked for again by.
@@ -47,10 +71,12 @@ tests/           The suite, driven at the seams: real requests through the
                  real router, and the vectors read from fixtures/.
 docs/            The architecture, the decisions, and the specifications that
                  are normative rather than descriptive.
-fixtures/        Golden vectors two languages are tested against.
+fixtures/        Golden vectors two languages are tested against, and the
+                 archives the suite reads instead of a registry.
 scripts/         The checks CI runs, and the hook installer that makes a
                  commit run them too.
 deny.toml        The policy over the dependency graph.
+renovate.json5   Which dependency updates land on their own, and which wait.
 vercel.json      The deployment shape: the catch-all rewrite, the function
                  timeout, and which branches deploy.
 .githooks/       The pre-commit hook. Not active until install-hooks.sh.
@@ -73,6 +99,8 @@ two are `./scripts/checks.sh seams`; the third is `cargo test`.
 
 ```bash
 cargo test                              # the suite
+cargo test --test networked -- --ignored # the same, against the real registries
+cargo test --lib -- --ignored store::blob # the same, against the real blob store
 cargo fmt --all --check                 # formatting, no compile needed
 cargo clippy --all-targets -- -D warnings
 cargo build --release                   # produces the `mcp` binary
@@ -83,6 +111,20 @@ cargo build --release                   # produces the `mcp` binary
 The toolchain is pinned in `rust-toolchain.toml` so CI and Vercel's build
 container cannot drift apart silently. CI runs all of them on every pull
 request into `development` and into `main`.
+
+`tests/networked.rs` is the exception and is `#[ignore]`d for it: it fetches
+real archives from npm, crates.io and PyPI. So is the one test in
+`src/store/blob.rs` that writes to the blob store, which is in the module
+rather than beside the others because the client it drives is private to
+`src/store/`. The suite is otherwise offline — `Ctx::fixture` gives every
+seam an adapter that reads the checked-in sets under `fixtures/`, and there is
+no way to build a context that has one of them and not the others — so a
+registry having a bad afternoon cannot fail a pull request. What the networked
+tests are *for* is the half that cannot be
+checked any other way: that the URLs this server builds are the URLs those
+three registries actually serve, and that the requests `src/store/` writes are
+the ones Vercel Blob answers. Worth running when `src/registry.rs`,
+`src/archive/`, `src/catalogue/` or `src/store/` changes.
 
 ## The checks that block a commit
 
@@ -116,6 +158,75 @@ to lose work — so a partial commit is checked by CI, not here. And `deny` and
 `git commit --no-verify` skips the hook, which is a reasonable thing to do for
 a work-in-progress commit on a branch. CI is the gate that cannot be skipped.
 `DIFFPACK_HOOK_ALL=1 git commit` forces all six regardless of what is staged.
+
+## Dependency updates
+
+[Renovate](https://docs.renovatebot.com) opens the pull requests, configured by
+[`renovate.json5`](renovate.json5). It is a GitHub App and not a workflow: it
+runs on Mend's infrastructure, so nothing in `.github/workflows/` invokes it and
+there is no token for it in this repository. It finds three sets of dependencies
+without being told to — `Cargo.toml` and `Cargo.lock`, the `channel` in
+`rust-toolchain.toml`, and the `uses:` lines in the CI workflow.
+
+Two runs a month, on the 1st and the 15th, the same days as the sibling
+repositories so that a fortnight's churn arrives together. The `Cargo.lock`
+sweep that moves transitive dependencies nothing asked for runs on the 1st.
+Security fixes ignore the schedule and open immediately.
+
+Nothing younger than three days is proposed at all. `deny.toml` says why this
+repository is stricter than the other two: it is the one place in diffpack
+where package archives are fetched and extracted on a server rather than in a
+reader's browser, so the dependency graph is attack surface, and a malicious
+publish is usually caught and yanked within hours.
+
+What lands on its own and what waits for a person:
+
+| Update | Automerged | Why |
+| --- | --- | --- |
+| A minor or patch, any manager | Yes | The seven required checks are the gate: clippy with `-D warnings`, the suite, `cargo deny`, `cargo audit` and the seam rules all ran against it. A bump that breaks any of them is a red pull request instead. |
+| `Cargo.lock` maintenance | Yes | Same gate, and it is the only thing that proposes transitive versions. |
+| A major, any dependency | No | The checks prove a major compiles and passes, not that it is the major we want. `Cargo.toml` carries a paragraph on why each dependency is at the version it is; a major is when to check that paragraph is still true. |
+| `rust-toolchain.toml` | No | A new release brings new clippy lints and `-D warnings` makes each one a failure, so this pull request usually arrives red with a list of things to fix. It also pins what Vercel's build container installs. |
+| `diffpack-engine` | No | See below. |
+
+Two pairs move together rather than separately, because `Cargo.toml` says they
+have to: `rmcp` with `schemars`, so that `JsonSchema` here stays the trait rmcp
+asks for, and `axum` with `vercel_runtime`, whose axum integration decides which
+axum major this crate may be on.
+
+**An engine bump is red on arrival, and that is the point.** `engine::VERSION`
+in `src/engine.rs` is a field in the cache key, and `tests/engine.rs` fails
+while it and the tag in `Cargo.toml` disagree — bumping the tag alone would
+serve diffs the current engine would not produce. So the pull request Renovate
+opens is a notification that a release exists; landing it means moving the
+constant in the same branch, reading the engine's release notes for changes to
+rename detection, line counts or the unified-diff format, and knowing that every
+`diff_id` changes so the cache starts cold.
+
+To check the config before pushing it:
+
+```bash
+npx --yes --package renovate@latest renovate-config-validator --strict
+```
+
+That is the only command here that needs Node, which is why it is not in
+`scripts/checks.sh`. Renovate validates the file on every run anyway and opens
+an issue against the repository when it cannot read it.
+
+Three things live on the GitHub side, because no file in this repository can
+set them:
+
+- The Renovate App, installed on `philfreshman/diffpack-server`.
+- **Allow auto-merge**, in the repository's settings. Without it,
+  `platformAutomerge` falls back to Renovate merging through the API — which
+  still works, but waits for its next run rather than landing the moment the
+  checks go green.
+- **Dependabot alerts**, under Code security. Renovate reads GitHub's
+  vulnerability alerts rather than keeping its own feed, so this is what makes
+  an advisory open a fix pull request the day it is published instead of on the
+  15th. It matters here because `cargo audit --deny warnings` turns every
+  *other* pull request red as soon as an advisory lands, and the fix should
+  already be in flight by then.
 
 ## Deployment
 
@@ -193,10 +304,44 @@ which suits a serverless function that has no warm process to hold one in —
 and it answers clients back to `2025-11-25` as well. `POST` only: `GET` and
 `DELETE` are `405`, and no answer ever carries an `Mcp-Session-Id`.
 
-A client can connect, list tools and call `resolve_archive_url`, which returns
-the URL a package version's archive is served from without fetching anything.
-The tools that fetch and diff arrive with
-[#11](https://github.com/philfreshman/diffpack-server/issues/11) onward.
+A client can connect, list tools and call any of the eight there are:
+`search_packages`, which answers a query with the packages a registry has
+that match it — npm and crates.io hits carry a version and a description, and
+PyPI hits carry a name alone, because the index PyPI publishes has nothing
+else in it; `resolve_archive_url`, which returns the URL a package version's
+archive is served from without fetching anything; `list_package_versions`,
+which lists what a package has published with the date of each and whether it
+is a preview, most recently published first rather than by version number,
+and says separately which version the registry itself points at — on
+`@types/node` those are two different releases most weeks;
+`list_package_files`, which fetches that archive and lists the paths inside
+it with the top-level directory stripped; `get_file_content`, which returns
+one of those files, saying when it had to cut one short and when the bytes
+were not valid UTF-8; `diff_package_versions`, which compares two versions
+and answers with how much changed, the files that changed most, and a handle
+the tools that read the diff back take; `get_diff_tree`, the first of
+those, which takes that handle and lists the comparison's files and
+directories a page at a time — one directory's subtree, one depth, one set
+of statuses, since most of a package is unchanged between two versions and
+paging through that is a call spent on what did not happen; and
+`get_file_diff`, which takes the same handle and a path and returns that
+file's diff, with three lines of unchanged context around each change rather
+than the whole file, and `isDiff: false` where the answer is a file rather
+than a patch.
+
+Three resources sit beside those tools, for the client that presents a
+resource browser rather than a list of calls. `resources/list` has
+`diffpack://registries`, which describes npm, crates.io and PyPI in one
+document — the identifier each is named by, where a version's archive, a
+package's versions and a search come from, and how each spells a package
+name, so an agent reads a scoped npm name once instead of guessing at it.
+`resources/templates/list` has the two that take a handle:
+`diffpack://diff/{handle}` is the whole of a comparison in one document, and
+`diffpack://diff/{handle}/file/{path}` is one file of it. Reading a comparison
+too large for one response answers with its totals and a pointer to
+`get_diff_tree` rather than with as much of the tree as fits, and
+`diff_package_versions` carries a link to its own comparison so a client can
+follow the result without building a URI itself.
 
 Claude Code:
 

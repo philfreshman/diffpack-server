@@ -11,9 +11,7 @@
 //! registry fact cheap to assert: this module says *where* and *what shape*,
 //! and `archive` (#10) is what fetches.
 
-use diffpack_server::registry::{
-    self, ArchiveSource, Order, Registry, SearchSource, VersionSource,
-};
+use diffpack_server::registry::{self, ArchiveSource, Hit, Registry, SearchSource, VersionSource};
 
 /// The identifier is what a parameter and a cache key spell; the name is what
 /// a message to a model says. They are deliberately different strings —
@@ -209,18 +207,21 @@ fn a_listing_is_read_for_the_archive_a_diff_wants() {
 // Where the rest of a registry's answers come from
 // ---------------------------------------------------------------------------
 
-/// #18 asks every registry for versions newest-first, and only one of the
-/// three answers that way already. The source and the direction travel
-/// together because apart they are a table in an issue: a tool told where to
-/// ask and left to remember which way the answer runs is a tool that lists
-/// npm backwards.
+/// Where each registry's versions are listed.
+///
+/// This used to assert a direction beside each URL — which end of the
+/// document the newest release is at — and the direction was wrong. deps.dev
+/// sorts PyPI's versions lexically by version string rather than by date, so
+/// "oldest first, reversed" reported `requests` 2.9.2 as its newest release
+/// instead of 2.34.2; and npm's order never survived parsing, because its
+/// versions are a JSON object and this crate's map is a `BTreeMap`. Newest
+/// first is a date now, and `read_versions` is where it is asserted.
 #[test]
-fn every_registry_says_where_versions_come_from_and_which_way_they_run() {
+fn every_registry_says_where_its_versions_are_listed() {
     assert_eq!(
         Registry::Npm.versions("zod"),
         VersionSource {
             url: "https://registry.npmjs.org/zod".to_owned(),
-            order: Order::OldestFirst,
         }
     );
     assert_eq!(
@@ -232,44 +233,231 @@ fn every_registry_says_where_versions_come_from_and_which_way_they_run() {
         Registry::Crates.versions("serde"),
         VersionSource {
             url: "https://crates.io/api/v1/crates/serde".to_owned(),
-            order: Order::NewestFirst,
-        },
-        "crates.io is the one source that already answers the way #18 wants"
+        }
     );
     assert_eq!(
         Registry::PyPi.versions("requests"),
         VersionSource {
             url: "https://api.deps.dev/v3/systems/pypi/packages/requests".to_owned(),
-            order: Order::OldestFirst,
         },
         "PyPI's own index is not a version list a client can read, so deps.dev is the source"
     );
 }
 
-/// Search is the one fact a registry can be missing. npm and crates.io each
-/// answer a query from an endpoint anyone can build; PyPI has no search API
-/// this server has chosen yet, and #19 is where that choice is made and
-/// recorded. `None` says so, which is better than a URL that 404s and better
-/// than a fourth registry quietly inheriting npm's.
+/// Where a search is asked. npm and crates.io answer a query from an
+/// endpoint anyone can build; PyPI answers none, so what it is asked for is
+/// the index of everything it publishes and the query is applied on this
+/// side. #19 records why that is the source and what the alternatives cost.
+///
+/// The URL is the whole of what a caller is told, which is why PyPI's
+/// carries no query: a source that cannot be asked a question is still a
+/// source, and reading its answer is `read_hits`'s half of the job.
 #[test]
-fn search_comes_from_the_registrys_own_index_where_there_is_one() {
+fn search_comes_from_the_registrys_own_index() {
     assert_eq!(
         Registry::Npm.search("zod", 10),
-        Some(SearchSource {
+        SearchSource {
             url: "https://registry.npmjs.org/-/v1/search?text=zod&size=10".to_owned(),
-        })
+            accept: "application/json",
+            whole_index: false,
+        }
     );
     assert_eq!(
         Registry::Crates.search("json parser", 5),
-        Some(SearchSource {
+        SearchSource {
             url: "https://crates.io/api/v1/crates?q=json%20parser&per_page=5".to_owned(),
-        }),
+            accept: "application/json",
+            whole_index: false,
+        },
         "a query is a parameter value, so a space in it is escaped and not sent"
     );
     assert_eq!(
         Registry::PyPi.search("requests", 10),
-        None,
-        "PyPI's search source is #19's to choose; until it does there is none"
+        SearchSource {
+            url: "https://pypi.org/simple/".to_owned(),
+            accept: "application/vnd.pypi.simple.v1+json",
+            whole_index: true,
+        },
+        "PyPI has no search endpoint, so the source is the index itself"
+    );
+}
+
+/// Whether a source answers every query with the same document, which is the
+/// difference between holding one index and caching results. PyPI's URL
+/// carries no query — the matching happens here — so one fetch serves every
+/// search that instance makes; npm's and crates.io's carry the query, and
+/// holding those answers would be a result cache with a staleness nobody
+/// asked for.
+#[test]
+fn only_a_source_that_is_the_whole_index_says_so() {
+    assert!(
+        Registry::PyPi.search("requests", 10).whole_index,
+        "PyPI's source is every name it publishes, whatever was asked"
+    );
+    for registry in [Registry::Npm, Registry::Crates] {
+        assert!(
+            !registry.search("requests", 10).whole_index,
+            "{} is asked the query itself",
+            registry.id()
+        );
+    }
+}
+
+/// What a source is asked *for* travels with where it is: the same URL serves
+/// PyPI's index as a web page or as PEP 691 JSON depending on what the
+/// request says it accepts, so a caller that sent the wrong one would be
+/// handed HTML and read no hits out of it at all.
+#[test]
+fn a_source_says_what_to_ask_it_for() {
+    assert_eq!(
+        Registry::Npm.search("zod", 10).accept,
+        "application/json",
+        "npm's search endpoint answers JSON and nothing else"
+    );
+    assert_eq!(
+        Registry::PyPi.search("requests", 10).accept,
+        "application/vnd.pypi.simple.v1+json",
+        "and PyPI's index is HTML unless this asks otherwise"
+    );
+}
+
+/// A limit is asked of a source in that source's own units, and no source is
+/// asked for more than it answers: npm refuses a `size` over 250 and
+/// crates.io a `per_page` over 100, so a caller's larger limit is narrowed
+/// here rather than sent and rejected. The narrowing is this module's
+/// because the numbers are the registries', and a caller that had to know
+/// them would be the per-registry match this module holds.
+#[test]
+fn a_source_is_never_asked_for_more_than_it_answers() {
+    assert_eq!(
+        Registry::Npm.search("zod", 1_000),
+        SearchSource {
+            url: "https://registry.npmjs.org/-/v1/search?text=zod&size=250".to_owned(),
+            accept: "application/json",
+            whole_index: false,
+        },
+        "npm refuses a size over 250"
+    );
+    assert_eq!(
+        Registry::Crates.search("serde", 1_000),
+        SearchSource {
+            url: "https://crates.io/api/v1/crates?q=serde&per_page=100".to_owned(),
+            accept: "application/json",
+            whole_index: false,
+        },
+        "crates.io refuses a per_page over 100"
+    );
+}
+
+/// What a search answers with is this module's to read, for the same reason
+/// where to ask it is: the three sources agree about nothing — npm wraps a
+/// package in an `objects` array, crates.io returns `crates`, and PyPI's
+/// index is a list of names with no version and no summary anywhere in it. A
+/// caller left to tell them apart would be the per-registry `match` this
+/// module exists to hold.
+///
+/// The body below is npm's own shape, cut down to the three fields a hit
+/// carries. #19 is where the fields are fixed.
+#[test]
+fn npms_search_answer_reads_as_hits() {
+    let body = r#"{"objects":[
+        {"package":{"name":"zod","version":"4.0.0","description":"TypeScript-first schema validation"}},
+        {"package":{"name":"zod-to-json-schema","version":"3.23.0","description":"Converts Zod schemas to JSON schemas"}}
+    ],"total":2}"#;
+
+    assert_eq!(
+        Registry::Npm.read_hits(body, "zod", 10),
+        Some(vec![
+            Hit {
+                name: "zod".to_owned(),
+                version: Some("4.0.0".to_owned()),
+                description: Some("TypeScript-first schema validation".to_owned()),
+            },
+            Hit {
+                name: "zod-to-json-schema".to_owned(),
+                version: Some("3.23.0".to_owned()),
+                description: Some("Converts Zod schemas to JSON schemas".to_owned()),
+            },
+        ]),
+        "npm carries all three fields, in the order it ranked them"
+    );
+}
+
+/// crates.io answers with `crates`, and with three version fields that do not
+/// have to agree. The one a hit carries is `default_version` — what the
+/// registry hands a caller that did not ask for a version, which is the same
+/// thing npm's `version` is. `newest_version` would answer a search for a
+/// crate whose latest release is a pre-release with a version nobody is meant
+/// to install yet.
+#[test]
+fn crates_ios_search_answer_reads_as_hits() {
+    let body = r#"{"crates":[
+        {"id":"serde","name":"serde","default_version":"1.0.229","newest_version":"2.0.0-alpha.1",
+         "max_stable_version":"1.0.229","description":"A generic serialization/deserialization framework"}
+    ],"meta":{"total":1}}"#;
+
+    assert_eq!(
+        Registry::Crates.read_hits(body, "serde", 10),
+        Some(vec![Hit {
+            name: "serde".to_owned(),
+            version: Some("1.0.229".to_owned()),
+            description: Some("A generic serialization/deserialization framework".to_owned()),
+        }]),
+        "a hit carries the version the registry itself would hand a caller"
+    );
+}
+
+/// PyPI's index is every name it publishes and nothing else, so the matching
+/// and the ordering are this server's rather than a search engine's. The rule
+/// is one a model can be told in a sentence and a reader can predict: the
+/// name itself first, then the names that start with the query, then the ones
+/// that merely contain it; shortest first inside each group, and
+/// alphabetically where two are the same length.
+///
+/// Matching ignores case because a half-remembered name is the thing this
+/// tool is for. The name that comes back is still the index's own spelling —
+/// `PyYAML` is answered as `PyYAML`, because that is what every other tool
+/// here takes as a package.
+#[test]
+fn pypis_index_reads_as_hits_the_query_matches() {
+    let body = r#"{"meta":{"api-version":"1.4"},"projects":[
+        {"name":"requests"},
+        {"name":"ruamel.yaml"},
+        {"name":"yamllint"},
+        {"name":"PyYAML"},
+        {"name":"yaml"},
+        {"name":"yamldown"}
+    ]}"#;
+
+    let names: Vec<String> = Registry::PyPi
+        .read_hits(body, "yaml", 10)
+        .expect("the index reads")
+        .into_iter()
+        .map(|hit| hit.name)
+        .collect();
+
+    assert_eq!(
+        names,
+        vec!["yaml", "yamldown", "yamllint", "PyYAML", "ruamel.yaml"],
+        "the name itself, then what starts with it, then what contains it"
+    );
+}
+
+/// A PyPI hit has a name and nothing else, and that is the source rather than
+/// an omission: the index carries no version and no summary for anything in
+/// it. A hit that invented either would be this server guessing on a
+/// registry's behalf.
+#[test]
+fn a_pypi_hit_carries_the_name_the_index_carries_and_no_more() {
+    let body = r#"{"meta":{"api-version":"1.4"},"projects":[{"name":"requests"}]}"#;
+
+    assert_eq!(
+        Registry::PyPi.read_hits(body, "requests", 10),
+        Some(vec![Hit {
+            name: "requests".to_owned(),
+            version: None,
+            description: None,
+        }])
     );
 }
 
@@ -295,7 +483,7 @@ fn a_registrys_hosts_are_the_hosts_of_the_urls_it_builds() {
                 .to_owned(),
             registry.versions("package").url,
         ];
-        built.extend(registry.search("query", 1).map(|source| source.url));
+        built.push(registry.search("query", 1).url);
 
         for url in built {
             let host = url

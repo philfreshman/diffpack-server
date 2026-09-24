@@ -32,7 +32,7 @@ fn zod() -> Inputs {
 /// That vector's `diff_id`, copied from the fixture.
 const ZOD_DIFF_ID: &str = "282467a6bd7b210db4077e71bcf3901550b219852386085452f5739c6b6c436c";
 
-/// The whole point of the handle. An entry that has been evicted (#22) is
+/// The whole point of the handle. An entry the budget's sweep has taken is
 /// gone, so what the reading tools have left is whatever the handle carried:
 /// if every input survives the round trip, a miss costs a recomputation and
 /// nothing else.

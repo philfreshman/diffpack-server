@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 #
-# A tool module goes through the seams, not around them.
+# A tool or a resource module goes through the seams, not around them.
 #
 # Every module under `src/tools/` is one MCP tool: its definition and its
-# handler, together (ADR 0002). What it may reach for is deliberately small —
-# `archive` to get a package's files, `registry` to know what a registry is,
-# `store` to cache a result, `page` to stay inside the response ceiling,
-# `error` to fail on the right channel. Everything else is somebody else's
-# job.
+# handler, together (ADR 0002). Every module under `src/resources/` is one
+# resource, in the same shape and for the same reason — a URI, and the handler
+# that answers it. Both are held to this rule, because both are the outermost
+# code in the crate and both are written months apart by whoever is adding the
+# next one. What either may reach for is deliberately small —
+# `archive` to get a package's files, `catalogue` to ask what a package has
+# released, `search` to ask which packages a registry has, `registry` to know
+# what a registry is, `store` to cache a result, `page` to stay inside the
+# response ceiling, `error` to fail on the right channel. Everything else is
+# somebody else's job.
 #
 # The rule is worth enforcing rather than documenting because there will be
 # eight of these modules and they will be written months apart. The first one
@@ -21,17 +26,47 @@
 #   1. An allow-list over `use`. A tool may import the standard library, the
 #      MCP and serialisation crates, and the seam modules. Anything else
 #      fails, including a crate nobody has added to this repository yet —
-#      which is the point, since the client this is meant to keep out (#20's
-#      Blob client) does not exist yet and will not be called what this script
-#      guesses.
+#      which is the point: the client this is meant to keep out is hand-rolled
+#      over `reqwest` inside `src/store/`, so there is no dependency name for
+#      this script to have guessed at.
+#
+#      `src/tools/mod.rs` is exempt from this one, because it is the only file
+#      under either directory that is not a tool or a resource: it is the
+#      collection, the `Ctx`, the `Call` a handler is given, and the
+#      dispatch that runs one. Those need things a tool must not have
+#      — `crate::log`, for one, because the single line per call is written by
+#      the dispatch and a tool that wrote its own would make "one line per
+#      call" false. Exempting the file is the honest version of that: the
+#      alternative is adding `log` to the list below, which would permit in
+#      nineteen tools the thing this paragraph exists to forbid.
+#
+#      That one path and no other. A tool is free to be a directory when it
+#      grows one, and `src/tools/thing/mod.rs` is then a tool like any other —
+#      so the exemption is written as the path it is about rather than as a
+#      file name, which would hand every such tool the collection's licence.
+#      `src/resources/mod.rs` is a collection too and is deliberately *not*
+#      exempt: it needs nothing a resource may not have, and an exemption
+#      granted before it is needed is a rule weakened for free.
 #   2. A deny-list over the whole file, for the names that mean a seam was
 #      crossed even when there is no `use` to catch: `reqwest::get(..)` spelled
-#      out in full, a blob token read from the environment.
+#      out in full, a blob token read from the environment. This one covers
+#      `mod.rs` too — the collection has no more business holding an HTTP
+#      client than a tool does, so the exemption above is from the import
+#      list and not from the rules.
 #
-# The deny-list is a backstop, not the defence. The defence is privacy: #20's
-# Blob client is a private module inside `src/store/`, so a tool cannot name
-# it and the compiler says so. This script is what notices when someone makes
-# it `pub` to get at it in a hurry.
+# The deny-list is a backstop, not the defence. The defence is privacy: the
+# Blob client (#20) is a private module inside `src/store/`, so a tool cannot
+# name it and the compiler says so. This script is what notices when someone
+# makes it `pub` to get at it in a hurry. The environment variables are on the
+# list for the same reason the token is: a tool that read one would be building
+# a client of its own out of sight of the seam.
+#
+# `as_engine_map` is on it for the same reason from the other direction. It
+# hands the map inside a FileMap to the engine, and it is `pub(crate)` because
+# Rust has nothing narrower: one sibling module cannot be named as its only
+# caller. A tool that read the entries off it would be working out again what
+# the FileMap answers — a directory's content is the empty string, so
+# emptiness does not tell it from an empty file (#95).
 #
 # Mentions in a comment count, because a grep cannot tell a comment from code
 # and a name written in a comment is a name someone can move into one. Write
@@ -42,24 +77,55 @@
 set -uo pipefail
 
 readonly TOOLS="src/tools"
+readonly RESOURCES="src/resources"
 
-# What a tool module may import. Not a list of what is convenient: a list of
-# what a tool's job needs. Adding to it is a decision about the shape of the
+# What a guarded module may import. Not a list of what is convenient: a list
+# of what the job needs. Adding to it is a decision about the shape of the
 # crate, which is why it is one line in a checked-in file rather than an
 # import someone adds on a Friday.
-readonly ALLOWED_ROOTS=(crate self super std core alloc rmcp serde serde_json schemars)
+#
+# `futures` is here for one thing, in one file: `diff_package_versions`
+# compares two versions, so it waits on the network twice and the two waits do
+# not depend on each other. Joining them is that tool's own business rather
+# than a seam's, because `archive` fetches one version and cannot know it is
+# half of a pair. The walk holding that `try_join!` is what every other diff
+# path calls (ADR 0016), so one file under here names this crate and the list
+# stays a list of what the job needs. It is on the list rather than written as
+# a full path at a call site, which is the spelling this rule cannot see.
+readonly ALLOWED_ROOTS=(crate self super std core alloc futures rmcp serde serde_json schemars)
 
-# The crate's own modules a tool may reach. The seams, plus `error` because
+# The crate's own modules a tool or a resource may reach. The seams, plus `error` because
 # every handler ends in one, `handle` because minting one is how a diff-taking
 # tool answers at all, and `cache_key` because a tool may still need the key a
 # handle names.
-readonly ALLOWED_MODULES=(archive cache_key engine error handle page registry store tools)
+#
+# `search` joined the list with #19, deliberately and for the reason this list
+# exists: a search is a fetch, and the alternative to a seam for it was the
+# first tool module that knew how to make an HTTP request. `fetch`, which is
+# where the client itself lives, is not here and must not be — it is the
+# seams' and a tool that reached it would be the thing this script is for.
+#
+# `resources` joined with #16, for the same kind of reason: a tool whose answer
+# links to a resource has to name that resource's URI, and the alternative was
+# the tool spelling `diffpack://diff/` out — a second copy of a format, in the
+# file least likely to be looked at when it moves. The two directories name
+# each other, which Rust allows and which is what it looks like when a tool's
+# answer points at a resource and a resource is built out of a tool's walk.
+#
+# Nothing checks that this list and the paragraph in `docs/architecture.md`
+# agree, so changing one means changing the other by hand.
+readonly ALLOWED_MODULES=(archive cache_key catalogue engine error handle page registry resources search store tools)
 
 # Names that mean a seam was crossed, wherever they appear.
-readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN'
+readonly FORBIDDEN='reqwest|hyper|ureq|isahc|std::net|tokio::net|vercel_blob|BlobStore|BLOB_READ_WRITE_TOKEN|BLOB_STORE_ID|VERCEL_OIDC_TOKEN|as_engine_map'
 
-if [[ ! -d "$TOOLS" ]]; then
-  echo "ok: no tool modules yet (${TOOLS}/ does not exist)"
+guarded=()
+for directory in "$TOOLS" "$RESOURCES"; do
+  [[ -d "$directory" ]] && guarded+=("$directory")
+done
+
+if [[ ${#guarded[@]} -eq 0 ]]; then
+  echo "ok: nothing to guard yet (neither ${TOOLS}/ nor ${RESOURCES}/ exists)"
   exit 0
 fi
 
@@ -74,7 +140,7 @@ contains() {
   return 1
 }
 
-# Rule 1: every `use` in a tool module, held to the allow-list.
+# Rule 1: every `use` in a guarded module, held to the allow-list.
 while IFS= read -r hit; do
   [[ -z "$hit" ]] && continue
 
@@ -82,6 +148,12 @@ while IFS= read -r hit; do
   rest=${hit#*:}
   line=${rest#*:}
   where="${where}:${rest%%:*}"
+
+  # The tool collection is not a tool. See the header: this is the one path,
+  # and a tool that becomes a directory does not inherit it. The resource
+  # collection is not exempt — it needs nothing a resource may not have, and
+  # an exemption granted before it is needed is a rule weakened for free.
+  [[ "${where%%:*}" == "${TOOLS}/mod.rs" ]] && continue
 
   path=${line#*use }
   path=${path%%;*}
@@ -93,7 +165,7 @@ while IFS= read -r hit; do
   root=${root%% *}
 
   if ! contains "$root" "${ALLOWED_ROOTS[@]}"; then
-    offenders+=("${where}: imports \`${root}\`, which is not a tool's to reach")
+    offenders+=("${where}: imports \`${root}\`, which is not a tool's or a resource's to reach")
     continue
   fi
 
@@ -122,7 +194,7 @@ while IFS= read -r hit; do
       offenders+=("${where}: imports \`crate::${module}\`, which is not a seam a tool goes through")
     fi
   done
-done < <(grep -rnE '^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]' --include='*.rs' "$TOOLS")
+done < <(grep -rnE '^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]' --include='*.rs' "${guarded[@]}")
 
 # Rule 2: the names, wherever they are written.
 while IFS= read -r hit; do
@@ -132,18 +204,20 @@ while IFS= read -r hit; do
   where="${where}:${rest%%:*}"
   name=$(grep -oE "$FORBIDDEN" <<<"${rest#*:}" | head -n 1)
   offenders+=("${where}: names \`${name}\`, which lives behind a seam")
-done < <(grep -rnE "$FORBIDDEN" --include='*.rs' "$TOOLS")
+done < <(grep -rnE "$FORBIDDEN" --include='*.rs' "${guarded[@]}")
 
 if [[ ${#offenders[@]} -gt 0 ]]; then
-  echo "error: a tool module reaches past its seams:" >&2
+  echo "error: a module reaches past its seams:" >&2
   printf '  %s\n' "${offenders[@]}" >&2
   cat >&2 <<EOF
 
-A module under ${TOOLS}/ is one tool and nothing else. It gets a package's
-files from \`crate::archive\`, asks \`crate::registry\` what a registry is,
-caches through \`crate::store\`, names a diff with \`crate::handle\`, stays
-inside the response ceiling with \`crate::page\`, and fails through
-\`crate::error\`. The HTTP client and the
+A module under ${TOOLS}/ is one tool and a module under ${RESOURCES}/ is one
+resource, and neither is anything else. Each gets a package's
+files from \`crate::archive\`, asks \`crate::catalogue\` what a package has
+released and \`crate::search\` which packages a registry has, asks
+\`crate::registry\` what a registry is, caches through \`crate::store\`, names
+a diff with \`crate::handle\`, stays inside the response ceiling with
+\`crate::page\`, and fails through \`crate::error\`. The HTTP client and the
 blob store are those modules' business, not a tool's: eight tools that each
 know how to fetch is eight places to fix a timeout, a retry or a user agent.
 
@@ -154,4 +228,4 @@ EOF
   exit 1
 fi
 
-echo "ok: no tool module reaches past its seams"
+echo "ok: no tool or resource module reaches past its seams"

@@ -1,11 +1,11 @@
 //! The handle that passes between the tool that computes a diff and the ones
 //! that read it back.
 //!
-//! `diff_package_versions` (#13) mints one; `get_diff_tree` (#14),
-//! `get_file_diff` (#15) and the diff resources (#16) take one. It carries the
-//! `diff_id` — the cache lookup, and the string #27 needs — and beside it the
-//! inputs that `diff_id` was minted from, so that a reading tool whose entry
-//! has been evicted recomputes instead of refusing. See [ADR
+//! `diff_package_versions` (#13) mints one; `get_diff_tree` (#14) and
+//! `get_file_diff` (#15) take one, and the diff resources (#16) will. It
+//! carries the `diff_id` — the cache lookup, and the string #27 needs — and
+//! beside it the inputs that `diff_id` was minted from, so that a reading
+//! tool whose entry has been evicted recomputes instead of refusing. See [ADR
 //! 0006](../docs/adr/0006-the-handle-carries-its-inputs.md).
 
 use std::borrow::Cow;
@@ -25,7 +25,16 @@ const HANDLE_VERSION: &str = "d1";
 
 /// What a caller asked for: the half of a [`DiffKey`] that comes from a tool's
 /// arguments rather than from this build.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Serialize` for one reader: `diffpack://diff/{handle}` (#16) answers with
+/// what was compared beside the comparison, because a URI carries an opaque
+/// handle and a document read out of a client's resource browser has no call
+/// beside it saying what was asked for. It is derived rather than written out
+/// there, so the field names an agent reads are these ones and there is no
+/// second list to keep in step. Distinct from [`DiffHandle`]'s own
+/// `Serialize`, which is the opaque string: that is how a handle *travels*
+/// and this is what it says.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Inputs {
     /// The registry that publishes the package.
     pub registry: Registry,

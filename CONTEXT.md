@@ -24,12 +24,14 @@ _Avoid_: package manager, source, ecosystem, repository
 **Package**:
 One named thing on a registry, across all of its versions. The name is taken
 verbatim — `@types/node` keeps the `@` and the `/`, `Typing.Extensions` keeps
-its case.
+its case. A tool takes the name as `registry::PackageName`, which checks
+nothing and whose schema states every registry's Name rule.
 _Avoid_: library, crate, module, dependency
 
 **Version**:
 One release of a package, as the registry spells it. `v4.0.0` and `4.0.0` are
-different versions here, because nothing is normalised.
+different versions here, because nothing is normalised. A tool takes one as
+`registry::VersionName`, whose schema is the version rule word for word.
 _Avoid_: release, tag, revision
 
 **Archive**:
@@ -47,20 +49,151 @@ fact and not a caller's, so a tool asks where a version's archive is and is
 given either.
 _Avoid_: metadata, index, manifest, JSON
 
+**Registry document**:
+Whatever a registry serves at one URL, before anything has been read out of
+it. It is the whole word for the four things this server fetches — an
+Archive, a Listing, the document a Catalogue is read from, an Index — and it
+names what they have in common and nothing else: each is one URL this server
+is allowed to ask, one body it will hold up to the Size cap, and one answer
+that is either bytes or a Failure. What is *in* one is never this word's
+business; that is what the four names above are for, and a message to a model
+uses those. So it appears in this crate's own prose and never in a tool name,
+a parameter or a field.
+_Avoid_: body (that is what one weighs, not what it is), payload, response,
+Resource — that word points the other way, at something this server serves
+rather than something it fetches
+
+**Catalogue**:
+What a registry says a package's versions are: every published version, with
+the date the registry says it was published and whether it is a preview, and
+the Current version. It is about a Package where a FileMap is about one
+Version of one, it is read rather than extracted, and it is never cached —
+registry metadata goes stale when somebody publishes, and the Budget belongs
+to Diffs.
+_Avoid_: version list, releases, index, metadata
+
+**Current version**:
+The one release a registry itself points at: what it installs for somebody who
+names no version. Every registry carries one and each spells it its own way —
+npm's `dist-tags.latest`, crates.io's `default_version`, the `isDefault` flag
+deps.dev puts on a PyPI version. It is a third answer and not either of the
+other two: on `@types/node` the Newest first entry is a 24.x patch, 26.6.2 is
+the Current version, and neither is a Preview. It is read out of the Catalogue
+document and never looked up in the versions beside it, so a registry pointing
+at a version this server did not receive is reported as the registry spelled
+it rather than as no current version at all. It is the same fact a Hit's
+version is, read out of a different document: a Search answer carries it for
+npm and crates.io, and PyPI's Index carries no version at all.
+_Avoid_: latest as a name for it — the word is ambiguous between this and
+Newest first, so it appears here only in quotes, as the question an agent
+arrives with; default, stable, `dist-tag`
+
+**Newest first**:
+The order a Catalogue is answered in: most recently published first. Not the
+highest version number — npm's `@types/node` publishes a 22.x patch after a
+26.x release most weeks, and both registries' own listings show the patch on
+top. Not a direction to read a source's document in either: deps.dev sorts
+PyPI's versions lexically, and npm's own order does not survive parsing. The
+date is the only thing that produces it, and a version the source gives no
+date for is listed last rather than dropped or guessed at.
+_Avoid_: latest, sorted, descending, semver order
+
+**Preview**:
+A version that is an alpha, a beta, a release candidate or a development
+build, flagged so that an agent asked for "the last two versions" does not
+diff against one without knowing. Which spellings count is the registry's:
+npm and crates.io are semver, so it is what follows the first `-`; PyPI is PEP
+440, where `1.0rc1` is one and there is no separator at all. Build metadata
+and a post-release are neither.
+_Avoid_: prerelease (as a concept — the field is `prerelease`), unstable,
+beta, draft
+
 **FileMap**:
-An Archive after extraction: every file path in that version mapped to its
-entry, with the archive's top-level directory already stripped. It is what a
-diff is computed from, and it is the boundary the rest of the crate sees — a
-tool asks for a FileMap, never for an Archive.
+An Archive after extraction: every path in that version, file or directory,
+and what is at it, with the archive's top-level directory already stripped.
+It is what a diff is computed from, and it is the boundary the rest of the
+crate sees — a tool asks for a FileMap, never for an Archive. Every file's
+content is text, because extraction decodes it that way: bytes that are not
+valid UTF-8 become replacement characters rather than an error, so a FileMap
+holds a readable rendering of a binary file and not the file. Nothing
+downstream can undo that, which is why a tool returning content says whether
+it happened — and whether it happened is asked of the FileMap. What is at a
+path is one of three answers: a file with its text, a directory, or nothing.
+A directory is not an empty file, even though the extractor gives it empty
+content.
 _Avoid_: tree, file list, contents, extracted archive
+
+**Index**:
+The document a registry publishes naming every package it has — PyPI's,
+today, and nobody else's. It is fetched and *searched*: a query is matched
+against it here rather than sent, because PyPI has no search endpoint to send
+one to. Distinct from a Listing, which is about one version of one package;
+from a Catalogue, which is one package's versions and is what "index" is a
+banned synonym for there; and from the DiffStore's Entries, which are this
+server's own.
+_Avoid_: simple index, package list, catalogue
+
+**Hit**:
+One package a Search found: the name to pass to any other tool, and beside
+it the Version the Registry would install for a caller that named none, and
+the package's own description — *where that registry carries them*. npm and
+crates.io carry all three; PyPI's Index carries a name and nothing else, so
+a PyPI hit has a name and nothing else. An absent version is a registry that
+does not say here, never a package that has published nothing.
+_Avoid_: result, match, search result, package (unqualified)
+
+**Search**:
+Which packages a Registry has that answer to a query, and the interface the
+rest of the crate has to that question: a query and a Limit in, Hits out. It
+is the Catalogue's sibling and not the Catalogue — that one is asked about a
+package a caller can already name, and this is what a caller uses when it
+cannot — and neither downloads anything. A tool asks it a question rather
+than learning that one registry answers with a ranked reply and another with
+its whole Index.
+_Avoid_: lookup, find, query (that is the argument), catalogue, index
 
 **Name rule**:
 What one registry's spelling of a package name costs a caller, in a sentence
 that can be shown to it: npm's scopes, crates.io's `-` against `_`, PyPI's
 absent normalisation. A rule is told, not enforced — nothing here refuses a
 name for breaking one, because the registry decides what exists. The version
-rule is the same kind of sentence, and is one sentence for all three.
+rule is the same kind of sentence, and is one sentence for all three. Every
+package argument's schema states all three name rules, not the one that
+applies: the registry is a separate argument, so the schema cannot know which
+one a caller will pick, and an agent reads a tool's schema without reading
+`diffpack://registries`.
 _Avoid_: validation, name format, constraint, schema
+
+**Size cap**:
+The most one downloaded body may weigh before this server refuses it
+unread. It is about what comes *in*: an 80 MB crate is an ordinary thing to
+diff and a five-gigabyte one is somebody using a package name to fill this
+function's memory. Distinct from the Response ceiling, which bounds one
+answer on the way out, and from the Budget, which is cumulative and the blob
+store's.
+_Avoid_: size limit, max size, quota, ceiling
+
+**Download slot**:
+One of the four permissions to be reading a body into this process at all.
+The Size cap's other half, and neither bounds this function's memory without
+it: one says how large a body may be, this says how many may be arriving, and
+what a package name in a tool argument can cost is the product. It belongs to
+the process rather than to a request, because a request is not what an
+instance serves several of. A call that finds none free waits for one turn —
+the longest a holder can keep a slot — and is refused as Busy after that: up
+to there it is a caller that queued for a moment and got its answer, and past
+there it is a queue, whose length nothing else bounds.
+_Avoid_: permit, semaphore, concurrency limit, connection
+
+**Busy**:
+This instance having no Download slot to give inside the time one call waits
+for one. It is about this server's own capacity and is the only Failure that
+is — every other one is a registry's doing, a caller's, or a package's — so
+it names no registry: nothing was asked of one. Distinct from a Cause of
+`timed_out`, which is a registry that was asked and did not answer, and from
+`rate_limited`, which is a registry refusing this server rather than this
+server refusing a caller. All three are told to try again.
+_Avoid_: overloaded, throttled, rate limited, at capacity, timed out
 
 **Allowed host**:
 A host this server may send an outbound request to. The set is derived from
@@ -73,7 +206,28 @@ _Avoid_: allowlist (unqualified), whitelist, origin, domain
 
 **Diff**:
 The comparison of one version of a package against another, in one direction.
-A→B is not B→A.
+A→B is not B→A. It is the thing itself and not a copy of it something is
+holding — that is a Comparison.
+_Avoid_: comparison (for the value a call holds), delta, changeset
+
+**Comparison**:
+One Diff in hand: its Tree, whether it was remembered or worked out, and one
+of two halves beside the Tree. It is what a Handle buys —
+`diff_package_versions::compare` takes one and answers with a Comparison, and
+all four paths that read a Diff go through it, so there is one walk from a
+Handle to a Tree rather than four ([ADR
+0016](docs/adr/0016-the-walk-to-a-comparison-is-this-tools.md)). Which half it
+has is which way it arrived: one worked out now holds both Versions' files,
+and a remembered one holds the Patches the Entry was written with and none of
+the archives those came from. So one file's Patch is asked of it per file and
+rendered when the Comparison has no Patch for that file, rather than by asking
+which half it was given, after refusing a path the Tree says is a directory in
+either Version — and that rule is one function,
+`Comparison::file_patch`, which `get_file_diff` and the file-diff resource
+both call. Distinct from an Entry, which is how a
+Comparison is remembered: an Entry is two Blobs in a store and a Comparison is
+what one invocation is holding, with or without an Entry behind it.
+_Avoid_: diff result, cached diff, comparison result, entry
 
 **Engine**:
 The `diffpack-engine` release this build computes with — the same code the
@@ -112,9 +266,45 @@ a sixth or a rename of one of these would be a difference between what the web
 app shows and what an agent is told.
 _Avoid_: change type, state, kind
 
+**Tree**:
+A Diff arranged the way the two versions' files are: every directory and
+every file in either of them, each with its Status and the lines it gained
+and lost. It is one Diff's shape where a FileMap is what one Version ships,
+and it is arranged by directory where a FileMap is a flat set of paths. Two
+things about it are the engine's and neither is guessable from an answer, so
+both are said out loud wherever one is served: a directory's counts are the
+sum of its children's, and a directory a rename left empty is not in the Tree
+at all. A third is a known limit rather than a rule: the engine keeps one node
+per path, so a path that is a file in one Version and a directory in the other
+loses one of the two (philfreshman/diffpack-engine#7), and such a path is
+refused as a directory whichever way round it is asked (#103). One file or one
+directory in it is a *node* — not an Entry, which is the cache's, and not a
+FileMap's entry either.
+_Avoid_: file tree, hierarchy, listing, entry (for a node)
+
+**Subtree**:
+The part of a Tree, or of a FileMap, under one directory: what
+`get_diff_tree`'s `path` and `list_package_files`'s `prefix` name, and what
+`get_diff_tree`'s `depth` bounds. Both arguments are one type,
+`page::Subtree`, and the rule is its: a trailing slash makes no difference, a
+directory is matched by name and not by characters, and a directory is not
+inside its own subtree, so the one that was asked for is not in what comes
+back. `/` and `""` name the root, whose subtree is everything — the whole
+comparison, or the whole archive — and never a refusal. Distinct from a Page,
+which is how much of a subtree one answer carries: a subtree is what was
+asked for and a Page is as much of it as fits.
+_Avoid_: branch, folder, section, sub-directory, prefix (one argument is
+called that, and it is not matched as one)
+
 **Patch**:
-One file's rendered unified diff — the text with `@@` hunks in it. A Diff
-covers a whole version pair; a Patch covers one file inside it.
+One file's rendered diff, and whether it is a diff at all. A Diff covers a
+whole version pair; a Patch covers one file inside it. Two of the four shapes
+a file can be in are not diffs and say so: a file whose content did not change
+is its own content, and a file in neither version is a sentence — so a reader
+renders a file as a file rather than as a diff of all-context lines. The
+rendering is the engine's, reproduced in `src/engine.rs` because the engine
+keeps it private to its browser binding ([ADR
+0013](docs/adr/0013-the-patch-renderer-lives-in-the-engine-seam.md)).
 _Avoid_: hunk, delta, file diff
 
 **Similarity threshold**:
@@ -127,8 +317,24 @@ _Avoid_: rename threshold, match score
 **Entry**:
 One cached Diff result: `meta.json` and `patches.json` under one diff_id,
 written together and evicted together. Half an Entry is not a cache hit, and
-a FileMap's entry is a file rather than one of these.
-_Avoid_: record, object, blob, cached diff
+a FileMap's entry is a file rather than one of these. An Entry missing a Patch
+it should have — one over the per-patch cap, or all of them because the Entry
+was too big — is a whole Entry and says so, which is what distinguishes it
+from a Diff with nothing to patch. It is what a
+Comparison is *remembered* as and not what one is: an Entry is two Blobs in a
+store, and it holds a Tree and its Patches and never the archives either was
+worked out from — which is why a Comparison served out of one arrives without
+both Versions' files.
+_Avoid_: record, object, blob, cached diff, comparison
+
+**Blob**:
+One file in the blob store: a pathname, a size in bytes, and the moment it
+was uploaded. Two Blobs make an Entry, and nothing outside `src/store/` names
+one — a tool asks for a cached result, not for a file under a path. The three
+fields are all the cache is built on: the size is what the Budget is counted
+in, and the upload moment is the order eviction runs in, so there is no
+separate index to keep in step with the store.
+_Avoid_: object, file (unqualified — a FileMap's entries are files too), key
 
 **DiffStore**:
 The interface the rest of the crate has to cached results: get an Entry for a
@@ -137,8 +343,14 @@ it stays inside the budget are its own business.
 _Avoid_: cache, blob client, storage
 
 **Budget**:
-The hard 256 MB this project's blob store may hold. Staying inside it is the
-DiffStore's job, by evicting the oldest Entries first.
+The hard 256 MB this project's blob store may hold, and the 240 MB a sweep
+leaves it at. Staying inside it is the DiffStore's job, by evicting the oldest
+Entries first — oldest by the moment a Blob was uploaded, which is insertion
+age and not how recently anything was read. It is two numbers because the
+first is never exceeded and the second is what makes that true: the gap is
+what absorbs two invocations admitting at once, and a delete the store has not
+finished propagating. Distinct from the Size cap, which is about one body
+coming in, and from the Response ceiling, which bounds one answer going out.
 _Avoid_: quota, limit (unqualified — the response ceiling is also a limit)
 
 ### The protocol surface
@@ -151,11 +363,29 @@ _Avoid_: command, endpoint, action, handler (alone)
 
 **Ctx**:
 What a Tool's handler is allowed to reach: the seams that carry state a
-handler should not build — `archive`, the DiffStore — built once per request
-and handed to every call. A pure module is not in it and does not need to be:
-a handler names `registry`, `page` and `handle` directly. Anything a handler
-needs that is neither in Ctx nor a pure module is a seam it has gone around.
+handler should not build — `archive`, `catalogue`, `search`, the DiffStore —
+built once per request, and reached by a handler through a Call made from
+it. A pure module is not in it and does not need to be: a handler names
+`registry`, `page` and `handle` directly. Anything a handler needs that is
+neither in Ctx nor a pure module is a seam it has gone around. It is built
+whole or not at all: every seam live, or every seam reading from the fixture
+sets. There is no half of one, because the half that was not asked for would
+have to be live. It holds nothing that belongs to one call, so cloning it
+shares no Phase and no Cache outcome.
 _Avoid_: state, globals, services, dependencies
+
+**Call**:
+One tool call while it runs, and what a handler is handed: a Ctx's seams,
+and the call's own tally — where its Phases add up and what its lookup in
+the DiffStore found. The tally is made when the call starts and read once,
+when its Line is written, so a Line describes its own call and no other. In
+production a Call and a request last exactly as long, because there are no
+sessions ([ADR 0008](docs/adr/0008-no-sessions.md)); what the distinction
+buys is that a Ctx cloned across two calls cannot carry one call's Cache
+outcome into the next. Distinct from a Ctx, which outlives it, and from a
+Line, which is what it leaves behind.
+_Avoid_: request (in production the same length, but not the same thing),
+session, context, invocation
 
 **Hints**:
 The three facts a Tool states about itself beside its schema: read-only,
@@ -168,14 +398,27 @@ them is not the fact)
 
 **Resource**:
 Something an agent reads by URI (`diffpack://…`) rather than calls. A Resource
-answers "what is there"; a Tool does something.
+answers "what is there"; a Tool does something. It computes nothing a Tool
+computes — the registry catalogue is `registry` serialised and a comparison is
+the Tools' own walks arranged into a document ([ADR
+0014](docs/adr/0014-a-resource-is-a-projection-of-the-tools.md)) — so what a
+Resource owns is the document and not the answer in it. One whose URI has a
+field to fill in is a *template*, and that is a different list: a Resource is
+what `resources/list` carries and a template is what
+`resources/templates/list` carries, because only the first is a URI a client
+can follow as it stands.
 _Avoid_: document, asset
 
 **Failure**:
 Anything that goes wrong, together with which of MCP's two channels it reaches
-the client on: a *protocol error* the model never sees, or a *tool error* — a
-successful response carrying `isError: true` — which it does see and can act
-on.
+the client on and the JSON-RPC code it carries: a *protocol error* the model
+never sees, or a *tool error* — a successful response carrying `isError: true`
+— which it does see and can act on. Both are the Failure's own and neither is
+the call site's, because a `resources/read` has only the first: there is no
+`isError` half in a `ReadResourceResult`, so every Failure reaches a read as a
+code, and the code is the only thing telling a version that does not exist
+from a URI that is not ours ([ADR
+0017](docs/adr/0017-a-failure-carries-the-code-it-earned.md)).
 _Avoid_: error (unqualified), exception, fault
 
 **Page**:
@@ -189,8 +432,32 @@ The same ceiling over an answer that is one thing rather than a sequence: a
 file's content, a file's Patch. An Excerpt has a marker and a real byte count
 where a Page has a cursor and a total — which is the whole of the difference,
 and why both live in `src/page.rs` ([ADR
-0005](docs/adr/0005-one-module-owns-the-response-ceiling.md)).
+0005](docs/adr/0005-one-module-owns-the-response-ceiling.md)). The byte count
+is the text's own, so for a file that did not decode it is the size of the
+readable rendering rather than of what the registry served.
 _Avoid_: snippet, preview, head
+
+**Summary**:
+What `diff_package_versions` answers with: the Totals for a whole Diff, and a
+bounded sample of the files that moved most. It is neither a Page nor an
+Excerpt — there is no cursor and nothing was cut short, because it was never
+the whole tree to begin with. The tree is `get_diff_tree`'s and is paginated;
+a Summary is what an agent reads to decide whether to ask for it.
+_Avoid_: overview, stats, report, result
+
+**Churn**:
+One file's lines added plus its lines removed, and the order a Summary's
+sample is in. It is a ranking and not a measurement — two files with the same
+churn are separated by path, so that the same Diff always samples the same
+files.
+_Avoid_: size, delta, weight, score
+
+**Totals**:
+How much changed across a whole Diff: one count per Status, and lines added
+and removed. The counts are files and never directories — the engine gives a
+directory the sum of what is under it, so counting both would report every
+change once per directory above it.
+_Avoid_: stats, summary (that is the whole answer), counts (unqualified)
 
 **Cursor**:
 Where a walk of a sequence resumes. One format across every paginating tool,
@@ -199,6 +466,15 @@ not at all. A cursor a client wrote for itself is refused. A tool declares it
 as that module's type, so the rule reaches an agent in the schema rather than
 in a sentence the tool wrote.
 _Avoid_: token, offset, page number
+
+**Cap**:
+How many bytes a caller asks one Excerpt for — `max_bytes`, and the Limit's
+opposite number on the blob-shaped half. It is the same kind of politeness
+and the same kind of not-protection: it can only ask for *less* than the
+Response ceiling already allows, because the ceiling is the platform's and
+not a caller's to raise. Omitting it means the ceiling alone, which is what
+makes a long file come back cut whether or not anyone asked.
+_Avoid_: max bytes (as a concept), truncation limit, size (unqualified)
 
 **Limit**:
 How many items a caller asks one Page for. Clamped to a documented maximum
@@ -214,3 +490,64 @@ The 4.5 MB Vercel allows a function's response body. Distinct from Budget,
 which is the blob store's 256 MB: this one is per answer and the platform's,
 that one is cumulative and ours.
 _Avoid_: response limit, size cap
+
+### Running it
+
+**Line**:
+What one tool call leaves behind: a single JSON object naming the tool, a
+summary of what it was asked for, where its time went and how it ended. One
+per call and written by the dispatch rather than by a tool, so a count of
+lines is a count of calls. Distinct from a Failure's message, which is
+written for a model and reaches a client — a Line is written for an operator
+and goes no further than the platform's logs.
+_Avoid_: log, log entry, event, trace, record
+
+**Phase**:
+One part of a call that is timed by itself. Two of them today: the whole
+call, and the part of it spent waiting for a Registry. Every seam that leaves
+this process counts towards the second — an Archive, a Catalogue and a Search
+alike — because the question is the wait and not which document was waited
+for. A Phase that did not happen is absent from a Line rather than zero,
+because zero is a measurement and a percentile taken over one describes
+neither population.
+
+Where two fetches overlap — a Diff asks for both versions at once — the
+Phase is the window they span and not the sum of their durations. It answers
+how much of the call went on waiting, which is the question it is next to the
+total to answer; how much Registry work the call caused is a different
+question and nothing asks it yet.
+_Avoid_: span, step, stage, timing
+
+**Cache outcome**:
+Whether a call's answer was read back from the DiffStore or worked out, as a
+Line carries it: `hit`, `miss` or `no_store`. Absent from the Line of a tool
+that never asks the store, for the reason a Phase that did not happen is
+absent — a hit rate taken over a column where most rows are tools with no
+cache to hit describes neither the cache nor the tools. `no_store` is that
+same rule one level down and is a value rather than a second kind of
+absence: a deployment with no credentials has no DiffStore to hit, so every
+one of its calls would read `miss` and its hit rate would be the flat
+hundred percent miss a working cold cache is — while an absent field there
+would instead read as the tool having stopped asking. It is the deployment's
+own state and not a lookup's, so it is the same answer for every call an
+instance serves. The word `hit` here is the store's and not a Search's Hit,
+which is a package; the field name is what tells them apart, so neither is
+ever written bare.
+_Avoid_: cached (that is the field an agent reads), warm, cache status,
+unavailable (that is a Cause, and it is a registry)
+
+**Note**:
+What a seam leaves behind when it could not do its job and that is not a
+Failure. The DiffStore is the only one there is and is one by design: a cache
+failure must never fail a Diff, so the failure reaches neither the model nor
+the caller. Distinct from a Line, which is the dispatch's — one per call, so
+that counting Lines counts calls — and which is already written by the time a
+Note about a backgrounded write could exist.
+_Avoid_: warning, log line, error, event
+
+**Cause**:
+Which Failure a call ended in, in one word, as a Line carries it —
+`no_such_version`, `rate_limited`, `too_large`. It is the Failure's kind and
+not its message: a message is a sentence carrying the package name a caller
+sent, so counting by it would give one bucket per call.
+_Avoid_: error, reason, status, code

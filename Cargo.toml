@@ -37,11 +37,54 @@ base64 = "0.22"
 # option. `src/engine.rs` is the only module allowed to import it, and
 # `engine::VERSION` must agree with this tag — `tests/engine.rs` checks.
 diffpack-engine = { git = "https://github.com/philfreshman/diffpack-engine.git", tag = "v0.3.0" }
-# `FutureExt::catch_unwind`, and nothing else. It is what turns a panic in
-# a handler into a JSON-RPC error: rmcp runs handlers on a task of its
-# own, so a tower layer never sees that unwind and the request hangs
-# instead of failing. See `mcp::Guarded`.
+# Two things. `FutureExt::catch_unwind` turns a panic in a handler into a
+# JSON-RPC error: rmcp runs handlers on a task of its own, so a tower layer
+# never sees that unwind and the request hangs instead of failing. See
+# `mcp::Guarded`. And `try_join!`, for a tool comparing two versions: it
+# waits on the network twice and the two waits do not depend on each other.
+# That second use is why `scripts/check-tool-seams.sh` names this crate on
+# the list a tool may import.
 futures = { version = "0.3.34", default-features = false, features = ["std"] }
+# The HTTP client behind `src/fetch.rs` and `src/store/`, and named by nothing
+# else: a tool never names it, and `scripts/check-tool-seams.sh` fails the
+# build if one does. Those two build a client each rather than sharing one,
+# because `fetch`'s policy is a set of rules about a registry's servers — which
+# hosts, which redirects, what a `404` means — and none of them is a rule about
+# a blob store this project owns.
+#
+# Default features off, because what this server does is ask a few known hosts
+# for bytes — no cookies, no JSON (the store's two response shapes go through
+# `serde_json` like everything else here), no multipart, no proxy discovery.
+#
+# `gzip` is the one exception and it arrived with #19. This note used to say
+# no compression negotiation at all, on the grounds that an archive is
+# compressed already — true, and it stopped being the whole story when the
+# search source chosen for PyPI turned out to be the index it publishes:
+# 44 MB raw and 25 s against a 30 s upstream timeout, against 9.7 MB and 4.4 s
+# compressed.
+#
+# Switching the feature on would have negotiated it for every request the
+# client makes, because that is what the feature does to a request that names
+# no encoding. So `src/fetch.rs` names one — `identity` — for every caller but
+# the one that asked: an archive request is the request it was apart from that
+# header, which is a header it did not send before. The reason to spell it out
+# rather than leave it off is the size cap: the running total is counted on
+# decoded chunks either way, but the cheap half, refusing a body on its
+# declared length before reading one, does not survive a body the client
+# decodes, and an archive is the body most worth refusing unread.
+#
+# `src/store/` builds a client of its own and says nothing, so its requests to
+# the blob store negotiate `gzip` too. Nothing there reads a declared length,
+# so there is no cap to lose — but those requests changed as well, and this is
+# the note that says which ones did.
+#
+# `rustls-no-provider` rather than `rustls`: the default provider is
+# `aws-lc-rs`, which wants a C toolchain at build time and carries the OpenSSL
+# license. `src/fetch.rs` installs `ring` instead — the install is
+# process-wide and only the first caller wins, so `src/store/` makes the same
+# call and neither has to know which ran first — which is why `rustls` is
+# named below as a dependency of ours rather than only of reqwest's.
+reqwest = { version = "0.13.5", default-features = false, features = ["gzip", "rustls-no-provider"] }
 # The official MCP SDK, and the reason this crate does not hand-roll a
 # protocol. It implements revision `2026-07-28` while still answering clients
 # on `2025-11-25` and earlier, which is what makes one endpoint serve every
@@ -51,6 +94,15 @@ futures = { version = "0.3.34", default-features = false, features = ["std"] }
 # tower `Service`, so it composes with axum directly. No client features: this
 # crate is a server.
 rmcp = { version = "3.4.0", features = ["server", "transport-streamable-http-server"] }
+# Named here for one line of code, written once per client: the provider
+# install in `src/fetch.rs` and the same call in `src/store/`, of which only
+# the first to run does anything. Which cryptography rustls uses has no
+# default and is the depending crate's choice, so it has to be made somewhere,
+# and making it here keeps `ring` in the manifest where a reader looking for
+# what this server links against will find it. The version is rustls's own,
+# kept in step with the one reqwest resolves so that the `CryptoProvider`
+# installed is the type reqwest asks for.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 # Input and output schemas, derived from the types a tool handler actually
 # reads and returns rather than written out beside them — see `src/tools`. It
 # is already in the graph as rmcp's own dependency and the version is kept in
@@ -61,7 +113,9 @@ schemars = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# `sync` is the semaphore in `src/fetch.rs` that caps how many bodies this
+# process reads at once; the other two are the runtime `api/mcp.rs` starts.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 # `Layer`, so `api/mcp.rs` can wrap the router in `VercelLayer`. Nothing else
 # from it — the middleware this crate writes itself is an axum
 # `map_response`, and the middleware it does not is `tower-http` below.

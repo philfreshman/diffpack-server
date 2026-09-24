@@ -14,10 +14,28 @@
 //!   of serde" belongs here: the recovery is to ask for a version that
 //!   exists, and only the model can do that.
 //!
-//! [`Failure::respond`] is the whole rule. Its return type is exactly a tool
-//! handler's — `Result<CallToolResult, ErrorData>` — so a handler that ends
-//! in `failure.respond()` cannot put a failure on the wrong channel by
-//! accident. `Err` is the protocol; `Ok` with `isError` is the model's.
+//! [`Failure::respond`] is the whole rule, and nothing in `src/` calls it but
+//! [`crate::tools::call`], once every dispatch has finished. `Err` is
+//! the protocol; `Ok` with `isError` is the model's. A handler never reaches
+//! it — everything that can go wrong inside one is a [`Failure`] returned
+//! upwards — which is what lets the same value be named in a log line before
+//! it becomes an answer.
+//!
+//! # Where there is only one place to read it
+//!
+//! A `resources/read` has no second channel. `ReadResourceResult` carries
+//! contents and nothing else, so there is no `isError` half and every failure
+//! is a JSON-RPC error — which means every failure needs a code worth reading,
+//! not only the four that were never going to be a tool error.
+//!
+//! [`Failure::channel`] is where that is decided, and it is decided per
+//! variant. It used to be decided by the call site: a read re-coded anything
+//! that would have been a tool error as `-32602`, so "this version does not
+//! exist" and "this URI is not ours" arrived as one answer and a client had
+//! only the prose to separate them. The codes now say what the sentence says
+//! — ask for something else, try again, ask for less — for the reader that
+//! never gets the sentence. See [ADR
+//! 0017](../docs/adr/0017-a-failure-carries-the-code-it-earned.md).
 //!
 //! # What does not appear in a message
 //!
@@ -44,14 +62,55 @@ use rmcp::model::{CallToolResult, ContentBlock, ErrorCode, ErrorData};
 /// `tests/errors.rs` holds it to.
 pub const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The JSON-RPC code for a failure of ours.
+/// The JSON-RPC code for a failure that is nobody's fault but ours.
 ///
 /// JSON-RPC reserves `-32768..-32000`; within it the MCP specification has
 /// taken `-32020..-32099` for itself — rmcp already carries three codes there
-/// — leaving `-32000..-32019` to an implementation. One code is enough while
-/// there is one kind of failure that is nobody's fault but ours; a second
-/// goes beside it rather than outside the range.
+/// — leaving `-32000..-32019` to an implementation. The three below sit beside
+/// this one rather than outside the range, for the reason this comment already
+/// gave when there was one.
+///
+/// `-32002` is the hole in the run, and deliberately: it is
+/// [`ErrorCode::RESOURCE_NOT_FOUND`], and rmcp reads that code on the way out
+/// rather than passing it through. A peer that negotiated a revision below
+/// `2026-07-28` is sent it unchanged, so a code of ours in that slot arrives
+/// as *no such resource* — the one sentence these four exist to stop being
+/// said about a version that was simply never published. A peer on
+/// `2026-07-28` or newer does not even get that far: SEP-2164 moved
+/// resource-not-found to `-32602`, and rmcp rewrites the code to match before
+/// it reaches the wire. Either way the slot is not ours to mean anything in.
 const INTERNAL_FAILURE: ErrorCode = ErrorCode(-32000);
+
+/// The request was understood, and there is no answer to it.
+///
+/// The registry has no such package or version, the archive will not extract,
+/// the path names a directory, a release history has no shorter form to ask
+/// for. Nothing here is transient and nothing here is a malformed request, so
+/// neither `-32602` nor a retry is the right thing to tell a client: what is
+/// left is to ask for something else. See [`Failure::message`], which says the
+/// same thing in a sentence, for the reader that gets one.
+const ASK_FOR_SOMETHING_ELSE: ErrorCode = ErrorCode(-32001);
+
+/// Nothing was served, and another attempt might be.
+///
+/// A rate limit, a timeout, a registry that could not be reached or answered
+/// with something unusable, this server's own download queue. The request was
+/// fine and so is the thing it asked about; what failed was the attempt.
+const TRY_AGAIN: ErrorCode = ErrorCode(-32003);
+
+/// The answer exists, is larger than this server will serve, and has a
+/// narrower form.
+///
+/// Distinct from [`ASK_FOR_SOMETHING_ELSE`] because the remedy is different
+/// and a client can act on the difference: the thing asked about is there, and
+/// a narrower request for the same thing is the way to it. Distinct from
+/// [`TRY_AGAIN`] because asking again unchanged will fail identically.
+///
+/// All three clauses have to hold, which is why being over a limit is not on
+/// its own enough to earn this code. A client reads it as *narrow and ask
+/// again*, so a failure with nothing narrower behind it would send that client
+/// round the same call for as long as it kept obeying.
+const ASK_FOR_LESS: ErrorCode = ErrorCode(-32004);
 
 /// Everything this server can fail at.
 ///
@@ -91,6 +150,35 @@ pub enum Failure {
     /// The registry did not answer inside [`UPSTREAM_TIMEOUT`].
     TimedOut { registry: String, waited: Duration },
 
+    /// No download slot came free inside the time one call may wait for one.
+    ///
+    /// This instance already reading as many bodies as it will hold, with a
+    /// queue in front of this call deeper than waiting it out is worth. No
+    /// registry was asked anything, which is why this is not
+    /// [`Failure::TimedOut`]: that message names a registry, and naming one
+    /// that was never contacted sends a model to somebody else's status page
+    /// for a problem that is ours and transient.
+    ///
+    /// The only failure here that is about this server's own capacity. Its
+    /// remedy is a retry, like a rate limit's — by the time a model asks
+    /// again the queue has drained or this instance is not the one serving
+    /// it.
+    Busy { waited: Duration },
+
+    /// The registry could not be reached at all.
+    ///
+    /// A name that did not resolve, a refused connection, a TLS handshake
+    /// that failed: there is no status to report, because there was no
+    /// answer. Distinct from [`Failure::Unavailable`], which is a registry
+    /// that answered and said no — the remedies differ, since that one is
+    /// about the registry's health and this one is as likely to be about
+    /// ours.
+    ///
+    /// No cause is carried. What a client would learn from a resolver's
+    /// complaint is nothing it can act on, and it is free text from a library
+    /// arriving in a message.
+    Unreachable { registry: String },
+
     /// The registry answered, but with nothing usable.
     Unavailable { registry: String, status: u16 },
 
@@ -110,6 +198,88 @@ pub enum Failure {
         version: String,
         bytes: u64,
         limit: u64,
+    },
+
+    /// The registry's list of a package's versions arrived and could not be
+    /// read.
+    ///
+    /// [`Failure::MalformedArchive`]'s counterpart for a document rather than
+    /// an archive, and separate because the remedies are not the same: an
+    /// archive that will not extract is one version, and a version list that
+    /// will not read takes the whole package with it.
+    ///
+    /// `reason` is chosen at the call site rather than threaded out from a
+    /// parser, so there is no library's free text in it. It is redacted on
+    /// the way out regardless.
+    UnreadableVersions {
+        registry: String,
+        package: String,
+        reason: String,
+    },
+
+    /// The registry's list of a package's versions is larger than this
+    /// function will read.
+    ///
+    /// Distinct from [`Failure::TooLarge`], which is an archive a caller can
+    /// do something about by asking for one file instead of a whole tree.
+    /// There is no smaller version of a package's release history to ask
+    /// for, so the message does not pretend there is.
+    VersionsTooLarge {
+        registry: String,
+        package: String,
+        bytes: u64,
+        limit: u64,
+    },
+
+    /// The registry's answer to a search arrived and could not be read.
+    ///
+    /// [`Failure::UnreadableVersions`]'s counterpart for a search, and
+    /// separate because there is no package in it to name: nothing in the
+    /// request was about a package, so the only thing a model can act on is
+    /// which registry answered this way.
+    ///
+    /// `reason` is chosen at the call site rather than threaded out from a
+    /// parser, so there is no library's free text in it. It is redacted on
+    /// the way out regardless.
+    UnreadableSearch { registry: String, reason: String },
+
+    /// The registry's answer to a search is larger than this function will
+    /// read.
+    ///
+    /// Distinct from [`Failure::Unavailable`], which is a registry that
+    /// answered and said no: this one answered and kept answering. The
+    /// status it did that under is `200`, which is why the refusal does not
+    /// carry one — a number that said `200` beside "this server cannot use
+    /// it" would read as a contradiction rather than as a fact.
+    SearchTooLarge {
+        registry: String,
+        bytes: u64,
+        limit: u64,
+    },
+
+    /// The version has no file at that path.
+    ///
+    /// The commonest way an agent arrives here is by writing the archive's
+    /// top-level directory back into the path it was given without one, so
+    /// the message says that rather than only saying no.
+    NoSuchFile {
+        package: String,
+        version: String,
+        path: String,
+    },
+
+    /// The path names a directory, which has no content to return.
+    ///
+    /// Distinct from a path that is not there at all, and deliberately: the
+    /// extractor gives a directory the empty string, so the two would
+    /// otherwise both arrive as nothing and a model could not tell "this
+    /// module ships no code" from "I spelled the path wrong". The remedies
+    /// differ too — one is to ask for a file inside, the other is to find out
+    /// what the paths are.
+    PathIsDirectory {
+        package: String,
+        version: String,
+        path: String,
     },
 
     /// One item of an answer is larger than a whole response.
@@ -174,39 +344,187 @@ pub enum Failure {
     Internal { doing: &'static str },
 }
 
+/// Which of MCP's channels a [`Failure`] takes, and the code it carries when
+/// it travels as a JSON-RPC error.
+///
+/// Two facts, answered in one match so that they cannot come apart: whether a
+/// model can act on this failure, and which code a client reads when there is
+/// no model channel to put it on. The code is not conditional on the channel
+/// — every failure has one, because every failure can reach a `resources/read`
+/// — which is the whole of what #85 changed. It used to be the call site's,
+/// and a call site cannot know what went wrong.
+#[derive(Debug, Clone, Copy)]
+enum Channel {
+    /// The model's: a successful response carrying `isError: true`.
+    ///
+    /// A `tools/call` has that half. A `resources/read` does not, so a failure
+    /// that would take this channel and arrives at a read travels as the code
+    /// beside it instead, with its message intact.
+    Model(ErrorCode),
+
+    /// The client's: a JSON-RPC error, on every surface there is.
+    ///
+    /// The model does not see one, so the code is most of what is left. These
+    /// are the failures a model could do nothing with anyway — a URI that is
+    /// not ours, arguments that did not validate, a fault of this server's.
+    Protocol(ErrorCode),
+}
+
+impl Channel {
+    /// The JSON-RPC code, whichever channel this is.
+    const fn code(self) -> ErrorCode {
+        match self {
+            Self::Model(code) | Self::Protocol(code) => code,
+        }
+    }
+}
+
 impl Failure {
     /// Put this failure on the channel it belongs to.
     ///
     /// `Ok` is a tool error the model reads and can act on; `Err` is a
-    /// protocol error it never sees. The return type is a tool handler's, so
-    /// `failure.respond()` is the whole of a handler's error path.
+    /// protocol error it never sees. Reached from one place in `src/` —
+    /// [`crate::tools::call`], which is the only one that has both the
+    /// failure and the answer it becomes — and directly from the suite,
+    /// where the channel a failure takes is the thing under test.
     pub fn respond(self) -> Result<CallToolResult, ErrorData> {
-        match self {
+        match self.channel() {
+            // Something happened to a tool that ran, and it is something the
+            // model can do something about.
+            Channel::Model(_) => Ok(CallToolResult::error(vec![ContentBlock::text(
+                self.message(),
+            )])),
+
             // The caller's fault, or nobody's: there is nothing a model can
             // do with these, so they do not go where a model would read them.
-            Self::InvalidParams { ref message } => Err(ErrorData::invalid_params(
-                format!("Invalid parameters: {}", redact(message)),
-                None,
-            )),
-            Self::NoSuchResource { ref uri } => Err(ErrorData::invalid_params(
-                format!("No resource at `{}`.", redact(uri)),
-                None,
-            )),
-            Self::NoSuchTool { ref name } => Err(ErrorData::invalid_params(
-                format!("No tool named `{}`.", redact(name)),
-                None,
-            )),
-            Self::Internal { doing } => Err(ErrorData::new(
-                INTERNAL_FAILURE,
-                format!("diffpack failed while {doing}."),
-                None,
-            )),
+            Channel::Protocol(code) => Err(ErrorData::new(code, self.message(), None)),
+        }
+    }
 
-            // Everything else happened to a tool that ran, and is something
-            // the model can do something about.
-            other => Ok(CallToolResult::error(vec![ContentBlock::text(
-                other.message(),
-            )])),
+    /// The same failure, on the one channel a resource read has.
+    ///
+    /// A read has no `isError` half to put anything in: `ReadResourceResult`
+    /// carries contents and nothing else, so a failure either is a JSON-RPC
+    /// error or is not reported. That is why this exists beside
+    /// [`Self::respond`] rather than being folded into it — the two channels
+    /// are a real choice for a tool call and not a choice at all here, and a
+    /// read that reused `respond` would have an `Ok(CallToolResult)` arm with
+    /// nowhere to send it.
+    ///
+    /// What a model loses by that is the message, which is why the message is
+    /// carried anyway for the failures that have one. A read of a comparison
+    /// can fail the way the tool that computes it fails — a version the
+    /// registry does not have — and "no resource at this URI" would be a
+    /// worse answer to that than the sentence naming the version. That
+    /// argument outlived the function that used to make it: what changed in
+    /// #85 is the code beside the message, not the decision to keep the
+    /// message.
+    ///
+    /// The code is [`Self::channel`]'s and not this function's. A read that
+    /// re-coded a failure on arrival is exactly how "this version does not
+    /// exist" and "this URI is not ours" became one answer.
+    ///
+    /// The [`redact`] here is a second pass and not the only one — every field
+    /// that carries text from elsewhere is already redacted by
+    /// [`Self::message`], which is why [`Self::respond`] needs none. It stays
+    /// because this is the last thing a read's message passes through, and a
+    /// redactor that runs twice costs a walk over a sentence.
+    pub fn refuse(self) -> ErrorData {
+        ErrorData::new(self.channel().code(), redact(&self.message()), None)
+    }
+
+    /// Where this failure goes, and under which code.
+    ///
+    /// The match is exhaustive for the reason [`Self::kind`]'s is: a variant
+    /// added without a channel here does not compile, which is the only way a
+    /// new failure cannot arrive on somebody else's.
+    ///
+    /// The three codes are the three remedies, and they are the ones
+    /// [`Self::message`] already writes out in prose — "try again" for what is
+    /// transient, nothing of the sort for what is not, a narrower request for
+    /// what is merely too big. A read's client never sees that prose, so the
+    /// code has to carry it or the distinction is lost.
+    fn channel(&self) -> Channel {
+        match self {
+            // The registry answered, and the answer is no. Asking again
+            // changes nothing; asking for something else might.
+            //
+            // `VersionsTooLarge` is here and not with the other two limits,
+            // because the remedy and not the cause is what a code carries. A
+            // package's release history has no narrower form to ask for —
+            // [`Self::message`] says so in as many words — so telling a
+            // client to ask for less would send it back with the same call.
+            Self::NoSuchPackage { .. }
+            | Self::NoSuchVersion { .. }
+            | Self::MalformedArchive { .. }
+            | Self::UnreadableVersions { .. }
+            | Self::VersionsTooLarge { .. }
+            | Self::UnreadableSearch { .. }
+            | Self::NoSuchFile { .. }
+            | Self::PathIsDirectory { .. }
+            | Self::UnresolvableArchiveUrl { .. } => Channel::Model(ASK_FOR_SOMETHING_ELSE),
+
+            // Nothing was served. The request was fine and so is the thing it
+            // asked about — what failed was the attempt.
+            Self::RateLimited { .. }
+            | Self::TimedOut { .. }
+            | Self::Busy { .. }
+            | Self::Unreachable { .. }
+            | Self::Unavailable { .. } => Channel::Model(TRY_AGAIN),
+
+            // The thing asked about is there and is over a limit. A narrower
+            // request for the same thing is the way to it — a single file
+            // instead of a tree, a tighter query, the cursor past one entry.
+            Self::TooLarge { .. } | Self::SearchTooLarge { .. } | Self::ItemTooLarge { .. } => {
+                Channel::Model(ASK_FOR_LESS)
+            }
+
+            // Invalid method parameter(s), in the JSON-RPC specification's own
+            // words: a URI that resolves to nothing, a tool nothing answers
+            // to, arguments a schema refused. Each is the caller's to fix out
+            // of what it was already told.
+            Self::InvalidParams { .. } | Self::NoSuchTool { .. } | Self::NoSuchResource { .. } => {
+                Channel::Protocol(ErrorCode::INVALID_PARAMS)
+            }
+
+            Self::Internal { .. } => Channel::Protocol(INTERNAL_FAILURE),
+        }
+    }
+
+    /// Which failure this is, in one word, for the line [`crate::log`]
+    /// writes.
+    ///
+    /// Not [`Self::message`] and not `Debug`: a message is a sentence written
+    /// for a model and carries the package name a caller sent, so counting by
+    /// it would give one bucket per call. This is the cause alone, which is
+    /// what "error rate by cause" is a rate of.
+    ///
+    /// The match is exhaustive on purpose. A variant added without a name
+    /// here does not compile, which is the only way a new cause cannot arrive
+    /// silently as somebody else's.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NoSuchPackage { .. } => "no_such_package",
+            Self::NoSuchVersion { .. } => "no_such_version",
+            Self::RateLimited { .. } => "rate_limited",
+            Self::TimedOut { .. } => "timed_out",
+            Self::Busy { .. } => "busy",
+            Self::Unreachable { .. } => "unreachable",
+            Self::Unavailable { .. } => "unavailable",
+            Self::MalformedArchive { .. } => "malformed_archive",
+            Self::TooLarge { .. } => "too_large",
+            Self::UnreadableVersions { .. } => "unreadable_versions",
+            Self::VersionsTooLarge { .. } => "versions_too_large",
+            Self::UnreadableSearch { .. } => "unreadable_search",
+            Self::SearchTooLarge { .. } => "search_too_large",
+            Self::NoSuchFile { .. } => "no_such_file",
+            Self::PathIsDirectory { .. } => "path_is_directory",
+            Self::ItemTooLarge { .. } => "item_too_large",
+            Self::UnresolvableArchiveUrl { .. } => "unresolvable_archive_url",
+            Self::InvalidParams { .. } => "invalid_params",
+            Self::NoSuchTool { .. } => "no_such_tool",
+            Self::NoSuchResource { .. } => "no_such_resource",
+            Self::Internal { .. } => "internal",
         }
     }
 
@@ -254,9 +572,60 @@ impl Failure {
                 waited.as_secs()
             ),
 
+            Self::Busy { waited } => format!(
+                "This server is already downloading as many package archives as it will \
+                 hold at once, and no slot came free within {} seconds. Try again shortly.",
+                waited.as_secs()
+            ),
+
+            Self::Unreachable { registry } => {
+                format!("{registry} could not be reached from this server. Try again shortly.")
+            }
+
             Self::Unavailable { registry, status } => format!(
                 "{registry} answered with HTTP {status}, which this server cannot use. \
                  Try again shortly."
+            ),
+
+            Self::UnreadableVersions {
+                registry,
+                package,
+                reason,
+            } => format!(
+                "The versions of `{package}` on {registry} could not be read: {}. \
+                 There is nothing to retry — ask for a version you already know, \
+                 or try another registry.",
+                redact(reason),
+            ),
+
+            Self::VersionsTooLarge {
+                registry,
+                package,
+                bytes,
+                limit,
+            } => format!(
+                "The versions {registry} has published for `{package}` come to {} MB, over \
+                 this server's {} MB limit for them. There is no shorter answer to ask for.",
+                bytes / 1_000_000,
+                limit / 1_000_000,
+            ),
+
+            Self::UnreadableSearch { registry, reason } => format!(
+                "{registry} answered that search with something this server could not \
+                 read: {}. Try another registry, or ask for a package by the name you \
+                 already have.",
+                redact(reason),
+            ),
+
+            Self::SearchTooLarge {
+                registry,
+                bytes,
+                limit,
+            } => format!(
+                "{registry}'s answer to that search came to {} MB, over this server's \
+                 {} MB limit for one. Try a narrower query, or another registry.",
+                bytes / 1_000_000,
+                limit / 1_000_000,
             ),
 
             Self::MalformedArchive {
@@ -280,6 +649,26 @@ impl Failure {
                  Diff a smaller package, or ask for a single file instead of the whole tree.",
                 bytes / 1_000_000,
                 limit / 1_000_000,
+            ),
+
+            Self::NoSuchFile {
+                package,
+                version,
+                path,
+            } => format!(
+                "`{package}` {version} has no file at `{path}`. List the version's files \
+                 to see which paths it has: they have the archive's top-level directory \
+                 removed, so a path never begins with the package's own folder."
+            ),
+
+            Self::PathIsDirectory {
+                package,
+                version,
+                path,
+            } => format!(
+                "`{path}` in `{package}` {version} is a directory, not a file, so it has \
+                 no content to read. Ask for a file inside it, or list the version's files \
+                 to see what it holds."
             ),
 
             Self::ItemTooLarge {
@@ -308,10 +697,11 @@ impl Failure {
                 message
             }
 
-            // These four never reach a model — `respond` sends them down the
-            // protocol channel — but a `message` that lied about them would
-            // be a trap for the next person to add a variant.
-            Self::InvalidParams { message } => redact(message),
+            // These four never reach a model — they take the protocol
+            // channel, whichever surface they were raised on — but they are
+            // still the text a client is shown, and `respond` and `refuse`
+            // both take it from here so there is one spelling of each.
+            Self::InvalidParams { message } => format!("Invalid parameters: {}", redact(message)),
             Self::NoSuchResource { uri } => format!("No resource at `{}`.", redact(uri)),
             Self::Internal { doing } => format!("diffpack failed while {doing}."),
             Self::NoSuchTool { name } => format!("No tool named `{}`.", redact(name)),

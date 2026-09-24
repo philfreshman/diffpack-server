@@ -16,15 +16,13 @@
 
 use std::time::Duration;
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+mod common;
+
+use axum::http::StatusCode;
+use common::Client;
 use diffpack_server::error::{self, Failure};
 use diffpack_server::router;
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tower::ServiceExt;
-
-const CURRENT: &str = "2026-07-28";
 
 // ---------------------------------------------------------------------------
 // The protocol channel
@@ -36,16 +34,17 @@ const CURRENT: &str = "2026-07-28";
 /// "wrong method" without parsing a body.
 #[tokio::test]
 async fn an_unknown_method_is_not_found_and_minus_32601() {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "diffpack/no-such-method",
-        "params": { "_meta": meta() },
-    }))
-    .await;
+    let answer = Client::fixture()
+        .respond(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "diffpack/no-such-method",
+            "params": {},
+        }))
+        .await;
 
-    assert_eq!(answer.0, StatusCode::NOT_FOUND);
-    assert_eq!(answer.1["error"]["code"], -32601);
+    assert_eq!(answer.status, StatusCode::NOT_FOUND);
+    assert_eq!(answer.json()["error"]["code"], -32601);
 }
 
 /// Naming a tool that does not exist is the same kind of mistake: there is no
@@ -57,21 +56,21 @@ async fn an_unknown_method_is_not_found_and_minus_32601() {
 /// would pass without ever reaching the code it is about.
 #[tokio::test]
 async fn calling_a_tool_that_does_not_exist_is_a_protocol_error() {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": { "name": "no_such_tool", "arguments": {}, "_meta": meta() },
-    }))
-    .await;
+    let answer = Client::fixture()
+        .post(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "no_such_tool", "arguments": {} },
+        }))
+        .await;
 
     assert_eq!(
-        answer.1["error"]["code"], -32602,
-        "a name that does not resolve is a parameter that does not validate, got {}",
-        answer.1
+        answer["error"]["code"], -32602,
+        "a name that does not resolve is a parameter that does not validate, got {answer}"
     );
     assert!(
-        answer.1["result"]["isError"].is_null(),
+        answer["result"]["isError"].is_null(),
         "a tool that does not exist must not be reported as a tool that failed"
     );
 }
@@ -109,19 +108,59 @@ fn a_resource_that_does_not_resolve_is_invalid_params() {
 /// use. `-32020`..`-32099` is reserved for the specification — rmcp already
 /// has three codes there — so allocating into it would collide with a
 /// revision nobody has written yet.
+///
+/// All four of them since #85, not only the internal one: a failure that is a
+/// tool error on a `tools/call` still needs a code for the `resources/read`
+/// that has nowhere else to put it, and the three remedies are three codes.
+/// `-32602` is not among them and is not meant to be — it is JSON-RPC's own
+/// for invalid parameters, which is what a URI that resolves to nothing is.
+///
+/// `-32002` is excluded by name as well as by range. It is
+/// `RESOURCE_NOT_FOUND`, and rmcp reads it rather than passing it on: a peer
+/// below `2026-07-28` is sent it unchanged, so a code of ours there would
+/// arrive as "no such resource" — the sentence the other four exist to stop
+/// being said about a version that was never published — and a peer on
+/// `2026-07-28` or newer has it rewritten to `-32602` before the wire, so it
+/// would not arrive as ours at all.
+///
+/// Through `refuse`, which is the one place every failure is a code. The wire
+/// shows one code per read, so `tests/resources.rs` is where the codes a
+/// client sees are held; this is the claim about the whole allocation at once,
+/// and there is no single read that can make it.
 #[test]
 fn our_own_codes_stay_inside_the_implementation_range() {
-    let error = Failure::Internal {
-        doing: "reading the cache",
-    }
-    .respond()
-    .expect_err("an internal failure belongs in the protocol channel");
+    for failure in [
+        Failure::Internal {
+            doing: "reading the cache",
+        },
+        Failure::NoSuchPackage {
+            registry: "npm".to_owned(),
+            package: "nope".to_owned(),
+        },
+        Failure::Busy {
+            waited: error::UPSTREAM_TIMEOUT,
+        },
+        Failure::TooLarge {
+            package: "zod".to_owned(),
+            version: "4.0.0".to_owned(),
+            bytes: 90_000_000,
+            limit: 40_000_000,
+        },
+    ] {
+        let cause = failure.kind();
+        let code = failure.refuse().code.0;
 
-    assert!(
-        (-32019..=-32000).contains(&error.code.0),
-        "{} is outside the -32000..-32019 an implementation may allocate",
-        error.code.0
-    );
+        assert!(
+            (-32019..=-32000).contains(&code),
+            "`{cause}` is {code}, outside the -32000..-32019 an implementation \
+             may allocate"
+        );
+        assert_ne!(
+            code, -32002,
+            "`{cause}` took RESOURCE_NOT_FOUND, which a client below \
+             2026-07-28 reads as a URI this server does not serve"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -171,10 +210,18 @@ fn a_missing_package_is_not_a_missing_version() {
     );
 }
 
-/// Five upstream causes, five remedies: wait and retry, slow down, check the
-/// name, report a broken archive, ask for something smaller. A single
-/// "registry error" string would leave a model guessing which one it is
-/// looking at, so every one of them has to read differently.
+/// Eight upstream causes, eight remedies: wait and retry, slow down, check
+/// the name, report a broken archive, ask for something smaller, a registry
+/// this server could not reach at all — the one with no status behind it —
+/// and the two that are about a package's versions rather than about one
+/// version's files: a document that would not read, and one this server would
+/// not hold. A single "registry error" string would leave a model guessing
+/// which one it is looking at, so every one of them has to read differently.
+///
+/// The pairs are what this is really guarding. `MalformedArchive` and
+/// `UnreadableVersions` both end in a reason, and `TooLarge` and
+/// `VersionsTooLarge` both end in a size and a cap; either pair could
+/// collapse into one sentence without the compiler noticing.
 #[test]
 fn every_upstream_cause_reads_differently() {
     let messages = [
@@ -201,6 +248,29 @@ fn every_upstream_cause_reads_differently() {
             bytes: 300_000_000,
             limit: 256 * 1024 * 1024,
         }),
+        message_of(Failure::Unreachable {
+            registry: "npm".to_owned(),
+        }),
+        message_of(Failure::UnreadableVersions {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+            reason: "what the registry served is not text".to_owned(),
+        }),
+        message_of(Failure::VersionsTooLarge {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+            bytes: 40_000_000,
+            limit: 32 * 1024 * 1024,
+        }),
+        message_of(Failure::UnreadableSearch {
+            registry: "npm".to_owned(),
+            reason: "what the registry served is not text".to_owned(),
+        }),
+        message_of(Failure::SearchTooLarge {
+            registry: "PyPI".to_owned(),
+            bytes: 70_000_000,
+            limit: 64 * 1024 * 1024,
+        }),
     ];
 
     let mut seen: Vec<&str> = messages.iter().map(String::as_str).collect();
@@ -212,6 +282,143 @@ fn every_upstream_cause_reads_differently() {
         seen.len(),
         before,
         "two upstream causes share a message: {messages:#?}"
+    );
+}
+
+/// Every Failure names itself differently in a line, so that a count by cause
+/// is a count of causes.
+///
+/// `Failure::kind` is exhaustive, which stops a new variant reaching a line
+/// without a name of its own. It does not stop one reaching a line under a
+/// name that is already taken — a word copied from the arm above compiles,
+/// and the two failures it now covers are one bucket in every rate built on
+/// these lines. Nothing about them would look wrong; there would simply be a
+/// cause nobody could count.
+///
+/// Enumerated by hand for the reason the sibling test above gives: a list
+/// derived from the enum would be derived from the thing under test.
+#[test]
+fn every_cause_a_line_can_carry_names_one_failure() {
+    let causes = [
+        Failure::NoSuchPackage {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+        }
+        .kind(),
+        Failure::NoSuchVersion {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+            version: "99.9.9".to_owned(),
+            known: Vec::new(),
+        }
+        .kind(),
+        Failure::RateLimited {
+            registry: "npm".to_owned(),
+            retry_after: None,
+        }
+        .kind(),
+        Failure::TimedOut {
+            registry: "npm".to_owned(),
+            waited: error::UPSTREAM_TIMEOUT,
+        }
+        .kind(),
+        Failure::Unreachable {
+            registry: "npm".to_owned(),
+        }
+        .kind(),
+        Failure::Unavailable {
+            registry: "npm".to_owned(),
+            status: 503,
+        }
+        .kind(),
+        Failure::MalformedArchive {
+            package: "zod".to_owned(),
+            version: "4.0.0".to_owned(),
+            reason: "unexpected end of archive".to_owned(),
+        }
+        .kind(),
+        Failure::TooLarge {
+            package: "zod".to_owned(),
+            version: "4.0.0".to_owned(),
+            bytes: 300_000_000,
+            limit: 128 * 1024 * 1024,
+        }
+        .kind(),
+        Failure::UnreadableVersions {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+            reason: "what the registry served is not text".to_owned(),
+        }
+        .kind(),
+        Failure::VersionsTooLarge {
+            registry: "npm".to_owned(),
+            package: "zod".to_owned(),
+            bytes: 300_000_000,
+            limit: 8 * 1024 * 1024,
+        }
+        .kind(),
+        Failure::UnreadableSearch {
+            registry: "npm".to_owned(),
+            reason: "what the registry served is not text".to_owned(),
+        }
+        .kind(),
+        Failure::SearchTooLarge {
+            registry: "PyPI".to_owned(),
+            bytes: 300_000_000,
+            limit: 64 * 1024 * 1024,
+        }
+        .kind(),
+        Failure::NoSuchFile {
+            package: "zod".to_owned(),
+            version: "4.0.0".to_owned(),
+            path: "src/gone.ts".to_owned(),
+        }
+        .kind(),
+        Failure::PathIsDirectory {
+            package: "zod".to_owned(),
+            version: "4.0.0".to_owned(),
+            path: "src".to_owned(),
+        }
+        .kind(),
+        Failure::ItemTooLarge {
+            position: 3,
+            bytes: 9_000_000,
+            ceiling: 4_500_000,
+            resume: "the cursor".to_owned(),
+        }
+        .kind(),
+        Failure::UnresolvableArchiveUrl {
+            registry: "pypi".to_owned(),
+            resolvable: Vec::new(),
+        }
+        .kind(),
+        Failure::InvalidParams {
+            message: "`from` is required".to_owned(),
+        }
+        .kind(),
+        Failure::NoSuchTool {
+            name: "diff_everything".to_owned(),
+        }
+        .kind(),
+        Failure::NoSuchResource {
+            uri: "diffpack://nothing".to_owned(),
+        }
+        .kind(),
+        Failure::Internal {
+            doing: "answering a tool call",
+        }
+        .kind(),
+    ];
+
+    let mut seen = causes.to_vec();
+    seen.sort_unstable();
+    let before = seen.len();
+    seen.dedup();
+
+    assert_eq!(
+        seen.len(),
+        before,
+        "two failures share a cause, so neither can be counted: {causes:#?}"
     );
 }
 
@@ -228,6 +435,12 @@ fn the_transient_failures_say_so_and_the_permanent_ones_do_not() {
         Failure::RateLimited {
             registry: "PyPI".to_owned(),
             retry_after: None,
+        },
+        // A name that did not resolve, a refused connection, a TLS handshake
+        // that failed: the registry never answered, so there is no status to
+        // report and nothing for the caller to have done differently.
+        Failure::Unreachable {
+            registry: "PyPI".to_owned(),
         },
     ] {
         let message = message_of(transient);
@@ -394,31 +607,18 @@ fn free_text_fields_are_redacted_on_the_way_out() {
 /// and a caller can report.
 #[tokio::test]
 async fn a_panicking_handler_answers_with_a_json_rpc_error() {
-    let router = router::router_with(|| Ok(Panicking), vec![]);
-
-    let request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", "tools/list")
-        .body(Body::from(
-            json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/list",
-                "params": { "_meta": meta() },
-            })
-            .to_string(),
-        ))
-        .expect("the request should build");
-
-    let (status, body) = send(router, request).await;
+    let answer = Client::routed(|| router::router_with(|| Ok(Panicking), vec![]))
+        .respond(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {},
+        }))
+        .await;
+    let body = answer.json();
 
     assert_ne!(
-        status,
+        answer.status,
         StatusCode::INTERNAL_SERVER_ERROR,
         "a panic should not reach the client as a bare 500"
     );
@@ -477,30 +677,17 @@ impl rmcp::ServerHandler for Panicking {
 /// is that `Guarded` forwards, and any method it did not override would do.
 #[tokio::test]
 async fn a_method_this_crate_has_not_implemented_still_reaches_the_handler() {
-    let router = router::router_with(|| Ok(WithResources), vec![]);
+    let answer = Client::routed(|| router::router_with(|| Ok(WithResources), vec![]))
+        .respond(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "resources/list",
+            "params": {},
+        }))
+        .await;
+    let body = answer.json();
 
-    let request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", "resources/list")
-        .body(Body::from(
-            json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "resources/list",
-                "params": { "_meta": meta() },
-            })
-            .to_string(),
-        ))
-        .expect("the request should build");
-
-    let (status, body) = send(router, request).await;
-
-    assert_eq!(status, StatusCode::OK, "got {body}");
+    assert_eq!(answer.status, StatusCode::OK, "got {body}");
     assert_eq!(
         body["result"]["resources"][0]["uri"],
         json!(WITH_RESOURCES_URI),
@@ -538,65 +725,6 @@ impl rmcp::ServerHandler for WithResources {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// The per-request `_meta` a `2026-07-28` client attaches. See `tests/mcp.rs`.
-fn meta() -> Value {
-    json!({
-        "io.modelcontextprotocol/protocolVersion": CURRENT,
-        "io.modelcontextprotocol/clientCapabilities": {},
-    })
-}
-
-async fn post(body: Value) -> (StatusCode, Value) {
-    let method = body["method"].as_str().expect("a call names a method");
-
-    let request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", method);
-
-    // SEP-2243 repeats the thing a request names in a header as well as the
-    // body, and the transport refuses a `tools/call` that omits it. A helper
-    // that left it out would be testing a broken client.
-    let request = match body["params"]["name"].as_str() {
-        Some(name) => request.header("mcp-name", name),
-        None => request,
-    };
-
-    let request = request
-        .body(Body::from(body.to_string()))
-        .expect("the request should build");
-
-    send(router::router(), request).await
-}
-
-async fn send(router: axum::Router, request: Request<Body>) -> (StatusCode, Value) {
-    let response = router
-        .oneshot(request)
-        .await
-        .expect("the router answers every request");
-
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("the body should read")
-        .to_bytes();
-
-    let body = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!(
-            "expected a JSON body, got {e}: {}",
-            String::from_utf8_lossy(&bytes)
-        )
-    });
-
-    (status, body)
-}
 
 /// The text a model would read for `failure`, whichever channel it takes.
 fn message_of(failure: Failure) -> String {

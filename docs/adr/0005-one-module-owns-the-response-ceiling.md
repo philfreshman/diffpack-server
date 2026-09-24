@@ -51,7 +51,7 @@ than 100%, so an ordinary answer leaves most of a megabyte unused. Being wrong
 the other way does not produce a slightly large response; it produces a
 platform error with nothing in it this repository can explain.
 
-## The two arguments an agent sees belong here too
+## The arguments an agent sees belong here too
 
 Enforcing the ceiling is half of "no tool names the number". The other half is
 the schema, because `limit` and `cursor` are the only part of this module an
@@ -64,6 +64,16 @@ paginating tool declares. The default, the minimum and the maximum are written
 into `Limit`'s schema; the "passed back unchanged, never written by hand" rule
 is written into `Cursor`'s. A tool inherits both by naming the type, and
 changing `MAX_LIMIT` changes every tool's schema in the same commit.
+
+`page::MaxBytes` is the third, and it arrived with #12 under this same
+argument rather than as a new decision: `max_bytes` carries the rule that the
+ceiling is not the caller's to raise — a larger value is narrowed rather than
+refused — and that rule is this module's, so this module writes the sentence
+carrying it. A tool spelling out `max_bytes: Option<u32>` would be naming
+`PAYLOAD_CEILING` in the copy no test compares against it, once per
+blob-shaped tool. Unlike `Limit` it declares no default: omitting it means the
+ceiling, because that is what `truncate` falls back to, and a default in the
+schema would be a second answer to a question that already has one.
 
 `Cursor` deserialises by decoding, which is the property
 [`DiffHandle`](0006-the-handle-carries-its-inputs.md) has for the same reason:
@@ -116,3 +126,20 @@ The cost is that `page.rs` is named for the sequence half, so a reader looking
 for truncation has to be told where it is. `docs/architecture.md` and the
 module's own first line both say so, and `Excerpt` is a noun in
 [`CONTEXT.md`](../../CONTEXT.md) rather than an unnamed shape inside a tool.
+
+## Since: #97
+
+`page::Subtree` is a fourth argument type here, and the first that is not
+about the ceiling. It is the directory whose subtree `get_diff_tree`'s `path`
+and `list_package_files`' `prefix` ask for. It came in under the second half
+of this record's argument, not the first. Its rule is one an agent reads in a
+schema: a trailing slash makes no difference, a directory is matched at the
+separator, and `/` and `""` are the root. Two tools that each wrote that rule
+out answered `/` two ways. This is the module that already holds the types
+that write their own schema, and a module for one type is what ADR 0013
+turned down.
+
+So `page` now owns the arguments that shape an answer, and the ceiling is the
+reason for three of them. The sentence above saying `limit` and `cursor` are
+the only part of this module an agent reads stopped being true with
+`max_bytes`, and is not true of `path` or `prefix` either.

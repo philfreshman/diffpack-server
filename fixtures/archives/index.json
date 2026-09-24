@@ -1,0 +1,51 @@
+{
+  "https://registry.npmjs.org/@types/node/-/node-20.1.0.tgz": "node-20.1.0.tgz",
+
+  "https://pypi.org/pypi/requests/2.31.0/json": "requests-2.31.0.json",
+  "https://files.pythonhosted.org/packages/9d/be/requests-2.31.0.tar.gz": "requests-2.31.0.tar.gz",
+  "https://files.pythonhosted.org/packages/70/8e/requests-2.31.0-py3-none-any.whl": "requests-2.31.0-py3-none-any.whl",
+
+  "https://pypi.org/pypi/tensorflow/2.16.1/json": "tensorflow-2.16.1.json",
+  "https://files.pythonhosted.org/packages/2c/9d/tensorflow-2.16.1-py3-none-any.whl": "tensorflow-2.16.1-py3-none-any.whl",
+
+  "https://static.crates.io/crates/serde/serde-1.0.0.crate": "serde-1.0.0.crate",
+
+  "https://pypi.org/pypi/numpy/1.9.0/json": "numpy-1.9.0.json",
+  "https://files.pythonhosted.org/packages/9a/54/numpy-1.9.0.zip": "numpy-1.9.0.zip",
+
+  "https://registry.npmjs.org/churny/-/churny-1.0.0.tgz": "churny-1.0.0.tgz",
+  "https://registry.npmjs.org/churny/-/churny-2.0.0.tgz": "churny-2.0.0.tgz",
+
+  "https://registry.npmjs.org/diffable/-/diffable-1.0.0.tgz": "diffable-1.0.0.tgz",
+  "https://registry.npmjs.org/diffable/-/diffable-2.0.0.tgz": "diffable-2.0.0.tgz",
+  "https://registry.npmjs.org/diffable/-/diffable-9.9.9.tgz": null,
+
+  "https://registry.npmjs.org/moved/-/moved-1.0.0.tgz": "moved-1.0.0.tgz",
+  "https://registry.npmjs.org/moved/-/moved-2.0.0.tgz": "moved-2.0.0.tgz",
+
+  "https://registry.npmjs.org/reformatted/-/reformatted-1.0.0.tgz": "reformatted-1.0.0.tgz",
+  "https://registry.npmjs.org/reformatted/-/reformatted-2.0.0.tgz": "reformatted-2.0.0.tgz",
+
+  "https://registry.npmjs.org/renamey/-/renamey-1.0.0.tgz": "renamey-1.0.0.tgz",
+  "https://registry.npmjs.org/renamey/-/renamey-2.0.0.tgz": "renamey-2.0.0.tgz",
+
+  "https://registry.npmjs.org/many-files/-/many-files-1.0.0.tgz": "many-files-1.0.0.tgz",
+
+  "https://registry.npmjs.org/enormous/-/enormous-1.0.0.tgz": "enormous-1.0.0.tgz",
+  "https://registry.npmjs.org/enormous/-/enormous-2.0.0.tgz": "enormous-2.0.0.tgz",
+
+  "https://registry.npmjs.org/odd-files/-/odd-files-1.0.0.tgz": "odd-files-1.0.0.tgz",
+
+  "https://registry.npmjs.org/empty-file/-/empty-file-1.0.0.tgz": "empty-file-1.0.0.tgz",
+
+  "https://registry.npmjs.org/shape/-/shape-1.0.0.tgz": "shape-1.0.0.tgz",
+  "https://registry.npmjs.org/shape/-/shape-2.0.0.tgz": "shape-2.0.0.tgz",
+
+  "https://pypi.org/pypi/sneaky/1.0.0/json": "sneaky-1.0.0.json",
+  "https://cdn.example.invalid/sneaky-1.0.0.tar.gz": "sneaky-1.0.0.tar.gz",
+
+  "https://registry.npmjs.org/zod/-/zod-3.25.76.tgz": "zod-3.25.76.tgz",
+  "https://registry.npmjs.org/zod/-/zod-4.0.0.tgz": "zod-4.0.0.tgz",
+  "https://registry.npmjs.org/zod/-/zod-99.99.99.tgz": null,
+  "https://static.crates.io/crates/not-a-real-crate/not-a-real-crate-1.0.0.crate": null
+}

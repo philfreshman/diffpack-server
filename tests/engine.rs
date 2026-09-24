@@ -31,10 +31,11 @@ fn the_version_constant_matches_the_pinned_dependency() {
 /// the signature is the one we think it is, and a build against a new engine
 /// tag that moved either fails here.
 ///
-/// No network and no archive — `build_diff_tree` takes file maps, so the
+/// No network and no archive — `build_diff_tree` takes two FileMaps, so the
 /// smallest honest exercise of it is two maps built by hand.
 #[test]
 fn the_tree_builder_is_reachable_through_the_seam() {
+    use diffpack_server::archive::FileMap;
     use diffpack_server::engine::{build_diff_tree, DiffStatus, FileMapEntry, FileType};
     use std::collections::HashMap;
 
@@ -43,8 +44,8 @@ fn the_tree_builder_is_reachable_through_the_seam() {
         content: content.to_string(),
     };
 
-    let from = HashMap::from([("a.txt".to_string(), file("one\ntwo\n"))]);
-    let to = HashMap::from([("a.txt".to_string(), file("one\nTWO\n"))]);
+    let from = FileMap::from(HashMap::from([("a.txt".to_string(), file("one\ntwo\n"))]));
+    let to = FileMap::from(HashMap::from([("a.txt".to_string(), file("one\nTWO\n"))]));
 
     let tree = build_diff_tree(&from, &to, 0.75, false);
     let changed = find_path(&tree, "a.txt").expect("a.txt should be in the tree");

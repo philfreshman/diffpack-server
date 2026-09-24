@@ -20,6 +20,14 @@ directory was created (#40).
 | [0007](0007-one-importer-of-the-engine.md) | `src/engine.rs` is the only importer of `diffpack-engine` | done, #4 |
 | [0008](0008-no-sessions.md) | No sessions, for any client | done, #6 |
 | [0009](0009-origin-validation-on-host-validation-off.md) | `Origin` validation on, `Host` validation off | done, #6 |
+| [0010](0010-newest-first-is-a-date.md) | Newest first is a date, not a direction | done, #18 |
+| [0011](0011-what-a-registry-publishes-is-its-own-seam.md) | What a registry publishes is its own seam | done, #19 |
+| [0012](0012-a-tree-is-paged-as-a-flat-sequence.md) | A tree is paged as a flat sequence | done, #14 |
+| [0013](0013-the-patch-renderer-lives-in-the-engine-seam.md) | The patch renderer lives in the engine seam | done, #21 #15 |
+| [0014](0014-a-resource-is-a-projection-of-the-tools.md) | A resource is a projection of the tools | done, #16 |
+| [0015](0015-one-implementation-beneath-three-registry-seams.md) | One implementation beneath three registry seams | done, #81 |
+| [0016](0016-the-walk-to-a-comparison-is-this-tools.md) | The walk from a handle to a comparison is `diff_package_versions`'s | done, #83 |
+| [0017](0017-a-failure-carries-the-code-it-earned.md) | A failure carries the code it earned, not the one its caller picked | done, #85 |
 
 A new one goes in at the next number. The bar is the usual three: hard to
 reverse, surprising without the context, and the result of a real trade-off. A

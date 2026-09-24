@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "api-version": "1.4"
+  },
+  "projects": [
+    {
+      "name": "requests",
+      "_last-serial": 1000
+    },
+    {
+      "name": "ruamel.yaml",
+      "_last-serial": 1001
+    },
+    {
+      "name": "yamllint",
+      "_last-serial": 1002
+    },
+    {
+      "name": "PyYAML",
+      "_last-serial": 1003
+    },
+    {
+      "name": "yaml",
+      "_last-serial": 1004
+    },
+    {
+      "name": "yamldown",
+      "_last-serial": 1005
+    },
+    {
+      "name": "flask",
+      "_last-serial": 1006
+    }
+  ]
+}

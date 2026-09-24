@@ -1,384 +1,350 @@
-//! A tool, driven the way an agent drives one.
+//! The tools, held to the rules that are true of all of them.
 //!
 //! The seam under test is a tool module's interface, and it is deliberately
-//! not reached directly: no test here calls `definition()` or a handler. Both
-//! go over the wire — `tools/list` for what a client is told, `tools/call`
-//! for what it gets back — because that is the only part a tool module is
-//! promising anything about. A test that called the handler would keep
-//! passing while the definition beside it stopped matching, which is the
+//! not reached directly: no test here calls `definitions()` or a handler.
+//! Everything goes over the wire — `tools/list` for what a client is told —
+//! because that is the only part a tool module is promising anything about. A
+//! test that read the collection out of `src/tools/` would keep passing while
+//! the definition a client is actually served stopped matching, which is the
 //! failure #41 exists to prevent.
 //!
-//! `tests/mcp.rs` owns the transport and `tests/errors.rs` owns the two
-//! channels. What is here is the shape of a tool: that its definition carries
-//! everything an agent needs, and that its answer is structured, and that its
-//! two kinds of failure land on the two different channels.
+//! What is new since then is the *over all of them*. There are eight tools,
+//! and the rules below are collection-wide facts about them — a description
+//! an agent can act on, a declared output shape, the hints a client decides
+//! on, the registry enum and the package and version rules coming from one
+//! module — so each is asserted once, here, by walking what the server
+//! offers. A rule written per tool is a rule the ninth tool is not held to,
+//! which is the whole reason a tool implements a trait rather than being one
+//! of eight files that happen to look alike.
+//!
+//! [`TOOLS`] is the one thing in this file written by hand rather than read
+//! from the wire, and that is the point: the `tools!` list in
+//! `src/tools/mod.rs` and the list here are two sources that have to agree,
+//! so a tool that arrives without a line here — or disappears without one
+//! going — is a failure rather than a silently shorter loop.
+//!
+//! Each tool's own behaviour is its own suite: `tests/resolve_archive_url.rs`
+//! and the seven beside it. `tests/mcp.rs` owns the transport, and
+//! `tests/errors.rs` owns the two failure channels.
 
-use axum::body::Body;
-use axum::http::Request;
-use diffpack_server::router;
-use http_body_util::BodyExt;
+mod common;
+
+use common::Client;
+use diffpack_server::registry::{self, Registry};
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
-const CURRENT: &str = "2026-07-28";
-
-/// The one tool this server has. #11 onward add the rest.
-const TOOL: &str = "resolve_archive_url";
+/// The tools the `tools!` list in `src/tools/mod.rs` declares, in the order
+/// the spec asks a server to list them: by name.
+const TOOLS: [&str; 8] = [
+    "diff_package_versions",
+    "get_diff_tree",
+    "get_file_content",
+    "get_file_diff",
+    "list_package_files",
+    "list_package_versions",
+    "resolve_archive_url",
+    "search_packages",
+];
 
 // ---------------------------------------------------------------------------
-// What a client is told
+// The collection
 // ---------------------------------------------------------------------------
 
-/// Everything #23 asks a tool to carry, on the tool that exists. The test is
-/// here rather than in #23 because the point of one module per tool is that
-/// these come from the module rather than from a second list, so a tool that
-/// arrives without them is a tool that never compiled.
+/// The tools a client is offered are the tools this file holds to the rules
+/// below, and there are eight of them.
+///
+/// Every other test here loops over what `tools/list` returned, so without
+/// this one a collection that had quietly become empty would satisfy all of
+/// them.
 #[tokio::test]
-async fn a_tool_is_listed_with_everything_an_agent_needs() {
-    let tool = listed(TOOL).await;
-
-    assert!(
-        tool["description"]
-            .as_str()
-            .is_some_and(|text| !text.is_empty()),
-        "a tool an agent picks without documentation needs a description, got {tool}"
-    );
-
+async fn the_collection_is_the_tools_the_list_declares() {
     assert_eq!(
-        tool["inputSchema"]["type"], "object",
-        "the input schema should be an object schema, got {}",
-        tool["inputSchema"]
+        names(&Client::fixture().tools().await),
+        TOOLS,
+        "a tool added to `tools!` is a tool this file holds to the rules \
+         below, and these two lists are what say so"
     );
-    for field in ["registry", "package", "version"] {
+}
+
+/// Everything #23 asks a tool to carry, asked of every tool there is.
+///
+/// The point of one module per tool is that these come from the module rather
+/// than from a second list, so a tool that arrives without them is a tool
+/// that never compiled — and this is where that is checked rather than
+/// assumed, over the collection rather than over whichever member somebody
+/// remembered.
+#[tokio::test]
+async fn every_tool_is_listed_with_everything_an_agent_needs() {
+    for tool in Client::fixture().tools().await {
+        let name = named(&tool);
+
         assert!(
-            tool["inputSchema"]["properties"][field].is_object(),
-            "the input schema should describe `{field}`, got {}",
+            tool["description"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty()),
+            "`{name}` is picked by an agent that has read nothing else, so it \
+             needs a description: got {tool}"
+        );
+
+        assert_eq!(
+            tool["inputSchema"]["type"], "object",
+            "`{name}`'s input schema should be an object schema, got {}",
             tool["inputSchema"]
         );
-    }
-
-    assert_eq!(
-        tool["outputSchema"]["type"], "object",
-        "a tool that answers with structured content has to declare its shape, got {tool}"
-    );
-
-    assert_eq!(
-        tool["annotations"]["readOnlyHint"], true,
-        "resolving a URL changes nothing, and a client deciding whether to \
-         ask for confirmation reads this, got {}",
-        tool["annotations"]
-    );
-    assert_eq!(
-        tool["annotations"]["idempotentHint"], true,
-        "the same three arguments always resolve to the same URL, got {}",
-        tool["annotations"]
-    );
-}
-
-/// `registry` is the enum `src/registry.rs` defines, not a string a tool
-/// describes in prose. The schema is where an agent learns what it may pass,
-/// so a tool that spelled the list itself would be the fifth copy ADR 0004
-/// rejects — and the one an agent reads first.
-#[tokio::test]
-async fn the_registry_parameter_is_the_enum_the_registry_module_owns() {
-    let tool = listed(TOOL).await;
-    let registry = &tool["inputSchema"]["properties"]["registry"];
-
-    assert_eq!(
-        registry["enum"],
-        json!(["npm", "crates", "pypi"]),
-        "the schema should list the registries this server has, got {registry}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// What it answers
-// ---------------------------------------------------------------------------
-
-/// npm serves a version's tarball at a path anyone can build, which is why
-/// this tool can answer without asking npm anything. The expected URL is from
-/// #10, not from running the code.
-#[tokio::test]
-async fn npm_resolves_to_the_registry_tarball() {
-    let result = call(json!({
-        "registry": "npm",
-        "package": "zod",
-        "version": "4.0.0",
-    }))
-    .await;
-
-    assert_eq!(
-        result["structuredContent"]["url"],
-        "https://registry.npmjs.org/zod/-/zod-4.0.0.tgz"
-    );
-    assert_eq!(
-        result["isError"],
-        json!(false),
-        "a resolved URL is not an error, got {result}"
-    );
-}
-
-/// The one npm rule that is not obvious: the path keeps the scope and the
-/// filename drops it, so `@types/node` is served from `node-20.1.0.tgz`. A
-/// tool that got this wrong would send every scoped package's diff to a 404.
-#[tokio::test]
-async fn a_scoped_npm_package_drops_its_scope_from_the_filename() {
-    let result = call(json!({
-        "registry": "npm",
-        "package": "@types/node",
-        "version": "20.1.0",
-    }))
-    .await;
-
-    assert_eq!(
-        result["structuredContent"]["url"],
-        "https://registry.npmjs.org/@types/node/-/node-20.1.0.tgz"
-    );
-}
-
-/// crates.io serves from the static host rather than the API one.
-#[tokio::test]
-async fn crates_io_resolves_to_the_static_host() {
-    let result = call(json!({
-        "registry": "crates",
-        "package": "serde",
-        "version": "1.0.0",
-    }))
-    .await;
-
-    assert_eq!(
-        result["structuredContent"]["url"],
-        "https://static.crates.io/crates/serde/serde-1.0.0.crate"
-    );
-}
-
-/// The structured answer is the contract, and the text beside it is what a
-/// client without structured-content support renders. Both have to be there:
-/// one of them is what the model reads.
-#[tokio::test]
-async fn the_answer_is_structured_and_also_readable() {
-    let result = call(json!({
-        "registry": "crates",
-        "package": "serde",
-        "version": "1.0.0",
-    }))
-    .await;
-
-    assert!(result["structuredContent"].is_object(), "got {result}");
-
-    let text = result["content"][0]["text"]
-        .as_str()
-        .expect("a result should carry a text block too");
-    assert!(
-        text.contains("static.crates.io"),
-        "the text block should carry the answer, got {text}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// How it fails
-// ---------------------------------------------------------------------------
-
-/// A registry this tool cannot resolve is something the model can act on —
-/// by asking for a registry it can — so it goes on the channel the model
-/// reads. PyPI is the real case: its archive URL is listed only in its own
-/// metadata, so there is nothing to build from a package name and a version.
-#[tokio::test]
-async fn a_registry_this_tool_cannot_resolve_is_a_tool_error() {
-    let result = call(json!({
-        "registry": "pypi",
-        "package": "requests",
-        "version": "2.31.0",
-    }))
-    .await;
-
-    assert_eq!(
-        result["isError"],
-        json!(true),
-        "the model is the one who can pick another registry, got {result}"
-    );
-
-    let text = result["content"][0]["text"]
-        .as_str()
-        .expect("a tool error carries text for the model");
-    assert!(
-        text.contains("pypi"),
-        "the message should name what was asked for, got {text}"
-    );
-    for resolvable in ["npm", "crates"] {
         assert!(
-            text.contains(resolvable),
-            "a message the model can act on names `{resolvable}`, which would have \
-             worked: got {text}"
+            tool["inputSchema"]["properties"].is_object(),
+            "`{name}`'s input schema should describe its arguments, got {}",
+            tool["inputSchema"]
+        );
+
+        assert_eq!(
+            tool["outputSchema"]["type"], "object",
+            "`{name}` answers with structured content, so it has to declare \
+             its shape: got {tool}"
         );
     }
 }
 
-/// Arguments that do not validate are the client's mistake, not the model's,
-/// so they take the protocol channel and `-32602`. The model never sees this
-/// one; the client is expected to correct the call it sent.
+/// The three hints, on every tool, because a client reads them before it
+/// decides whether to ask a user first.
+///
+/// Two of them are the same answer for every tool here and are asserted as
+/// such: this server only ever reads, and everything it reads about lives on
+/// a registry it does not control. The third is the one that genuinely
+/// differs — a search is not the same answer twice — so what is required here
+/// is only that a tool states it, and each tool's own suite says what its
+/// answer is and why.
 #[tokio::test]
-async fn arguments_that_do_not_validate_are_a_protocol_error() {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": TOOL,
-            "arguments": { "registry": "npm", "package": "zod" },
-            "_meta": meta(),
-        },
-    }))
-    .await;
+async fn every_tool_declares_the_hints_a_client_decides_on() {
+    for tool in Client::fixture().tools().await {
+        let name = named(&tool);
+        let annotations = &tool["annotations"];
 
-    assert_eq!(
-        answer["error"]["code"], -32602,
-        "a missing argument is invalid params, got {answer}"
-    );
-    assert!(
-        answer["result"]["isError"].is_null(),
-        "a call that never ran is not a tool that failed, got {answer}"
-    );
-}
-
-/// A registry that is not one of the three does not reach a handler: the
-/// schema declares the enum, so the value fails to validate and the client —
-/// which was told the list — is who can fix the call. The refusal names the
-/// registries that exist, because a client told only that `go` is wrong has
-/// to go and find out what is right.
-#[tokio::test]
-async fn a_registry_outside_the_enum_is_refused_by_naming_the_ones_that_exist() {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": TOOL,
-            "arguments": { "registry": "go", "package": "logrus", "version": "1.9.3" },
-            "_meta": meta(),
-        },
-    }))
-    .await;
-
-    assert_eq!(
-        answer["error"]["code"], -32602,
-        "an argument outside the declared enum is invalid params, got {answer}"
-    );
-
-    let message = answer["error"]["message"]
-        .as_str()
-        .expect("a protocol error carries a message");
-    for known in ["npm", "crates", "pypi"] {
+        assert_eq!(
+            annotations["readOnlyHint"], true,
+            "`{name}` changes nothing — no tool here does — and a client \
+             deciding whether to ask for confirmation reads this: got \
+             {annotations}"
+        );
+        assert_eq!(
+            annotations["openWorldHint"], true,
+            "`{name}` answers about a package on a registry, which is a world \
+             this server does not control, got {annotations}"
+        );
         assert!(
-            message.contains(known),
-            "the refusal should name `{known}`, got {message}"
+            annotations["idempotentHint"].is_boolean(),
+            "`{name}` has to say whether asking twice gives the same answer; \
+             a default would be a guess: got {annotations}"
         );
     }
 }
 
-// ---------------------------------------------------------------------------
-// Driving the endpoint
-// ---------------------------------------------------------------------------
+/// `registry` is the enum `src/registry.rs` defines, wherever it appears.
+///
+/// The schema is where an agent learns what it may pass, so a tool that
+/// spelled the list itself would be the fifth copy ADR 0004 rejects — and the
+/// one an agent reads first. Over every tool that takes one rather than over
+/// a named tool, because the copy that gets made is in whichever tool is
+/// written next.
+#[tokio::test]
+async fn every_registry_argument_is_the_enum_the_registry_module_owns() {
+    let mut asked = 0;
 
-/// The listed definition of `name`, or a panic naming what was listed.
-async fn listed(name: &str) -> Value {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/list",
-        "params": { "_meta": meta() },
-    }))
-    .await;
+    for tool in Client::fixture().tools().await {
+        let name = named(&tool);
+        let registry = &tool["inputSchema"]["properties"]["registry"];
+        if registry.is_null() {
+            continue;
+        }
 
-    let tools = answer["result"]["tools"]
+        asked += 1;
+        assert_eq!(
+            registry["enum"],
+            json!(["npm", "crates", "pypi"]),
+            "`{name}` should list the registries this server has, got {registry}"
+        );
+    }
+
+    assert!(
+        asked > 0,
+        "every tool but the ones that take a handle names a registry, so \
+         finding none means this walked the wrong field"
+    );
+}
+
+/// Every version argument says what a version is, in the words
+/// `src/registry.rs` owns.
+///
+/// The version rule is one sentence for every registry, and the schema is
+/// where an agent reads it before it sends a range or trims a `v`. A tool
+/// that wrote its own sentence would be one more copy of it, and the four
+/// there used to be had all dropped the part about the `v`. Over every tool
+/// and every argument that names a version, `from_version` and `to_version`
+/// included, because the copy that gets made is in the next tool written.
+#[tokio::test]
+async fn every_version_argument_states_the_version_rule() {
+    let mut asked = 0;
+
+    for tool in Client::fixture().tools().await {
+        let name = named(&tool);
+        for (field, schema) in arguments(&tool) {
+            if field != "version" && !field.ends_with("_version") {
+                continue;
+            }
+
+            asked += 1;
+            let said = schema["description"].as_str().unwrap_or_default();
+            assert!(
+                said.contains(registry::VERSION_RULE),
+                "`{name}`'s `{field}` should state the version rule, got {schema}"
+            );
+            assert!(
+                said.contains("`v4.0.0` and `4.0.0` are different versions"),
+                "`{name}`'s `{field}` should say that a `v` is part of a \
+                 version, got {schema}"
+            );
+        }
+    }
+
+    assert!(
+        asked >= 5,
+        "four tools take a version and one takes two, so finding {asked} \
+         means this walked the wrong field"
+    );
+}
+
+/// Every package argument states every registry's name rule, and says where
+/// they are served.
+///
+/// A name rule is per registry and a schema is per tool, and `registry` is
+/// an argument beside `package`, so one description cannot know which rule
+/// applies. It states all of them: an agent reads `tools/list` and often
+/// nothing else, so a schema that only pointed at a resource would leave it
+/// guessing whether `types/node` is the same package as `@types/node`. The
+/// pointer is there as well, and it has to be a resource this server lists,
+/// or it is a pointer at nothing.
+#[tokio::test]
+async fn every_package_argument_states_every_registrys_name_rule() {
+    let client = Client::fixture();
+    let listed = client
+        .post(json!({ "jsonrpc": "2.0", "id": 1, "method": "resources/list" }))
+        .await;
+    let served: Vec<&str> = listed["result"]["resources"]
         .as_array()
-        .unwrap_or_else(|| panic!("tools/list should answer with an array, got {answer}"))
-        .clone();
-
-    tools
-        .iter()
-        .find(|tool| tool["name"] == name)
-        .unwrap_or_else(|| {
-            let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-            panic!("`{name}` should be listed, got {names:?}")
+        .map(|resources| {
+            resources
+                .iter()
+                .filter_map(|resource| resource["uri"].as_str())
+                .collect()
         })
-        .clone()
-}
+        .unwrap_or_default();
+    assert!(
+        served.contains(&"diffpack://registries"),
+        "the catalogue of registries should be listed, got {listed}"
+    );
 
-/// Call the tool with `arguments`, returning the `result` — or panicking with
-/// the JSON-RPC error, so a failure says what the server objected to.
-///
-/// Every answer here is an HTTP `200`, whatever is in the body: a tool that
-/// fails has still been called, and the failure is in the result.
-async fn call(arguments: Value) -> Value {
-    let answer = post(json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": { "name": TOOL, "arguments": arguments, "_meta": meta() },
-    }))
-    .await;
+    let mut asked = 0;
+    for tool in client.tools().await {
+        let name = named(&tool);
+        let Some(schema) = tool["inputSchema"]["properties"].get("package") else {
+            continue;
+        };
 
-    if let Some(error) = answer.get("error") {
-        panic!("expected a result, got JSON-RPC error {error}");
-    }
-    answer["result"].clone()
-}
-
-/// The per-request `_meta` a `2026-07-28` client attaches. See `tests/mcp.rs`.
-fn meta() -> Value {
-    json!({
-        "io.modelcontextprotocol/protocolVersion": CURRENT,
-        "io.modelcontextprotocol/clientCapabilities": {},
-    })
-}
-
-/// A request as a conforming `2026-07-28` client sends it.
-///
-/// SEP-2243 repeats what the request is about in headers so an intermediary
-/// can route and cache without parsing the body: `Mcp-Method` on every
-/// request, and `Mcp-Name` on the ones that name something — the tool for
-/// `tools/call`, the URI for `resources/read`. The transport rejects a
-/// request that omits one with `-32020`, so a helper that left it out would
-/// be testing how this server treats a broken client rather than whether it
-/// serves a working one.
-async fn post(body: Value) -> Value {
-    let method = body["method"].as_str().expect("a call names a method");
-
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("host", "mcp.diffpack.io")
-        .header("accept", "application/json, text/event-stream")
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", CURRENT)
-        .header("mcp-method", method);
-
-    if let Some(name) = body["params"]["name"].as_str() {
-        request = request.header("mcp-name", name);
+        asked += 1;
+        let said = schema["description"].as_str().unwrap_or_default();
+        for registry in Registry::ALL {
+            assert!(
+                said.contains(registry.name_rule()),
+                "`{name}`'s `package` should state {}'s name rule, got {schema}",
+                registry.name()
+            );
+        }
+        assert!(
+            said.contains("diffpack://registries"),
+            "`{name}`'s `package` should say where the rules are served, got {schema}"
+        );
     }
 
-    let request = request
-        .body(Body::from(body.to_string()))
-        .expect("the request should build");
+    assert!(
+        asked >= 5,
+        "five tools take a package, so finding {asked} means this walked the \
+         wrong field"
+    );
+}
 
-    let response = router::router()
-        .oneshot(request)
-        .await
-        .expect("the router answers every request");
+/// Nothing an agent reads names a Rust path.
+///
+/// Every `description` in a tool's definition reaches a model, and one saying
+/// a field's "enum comes from [`crate::registry`]" hands it this repository's
+/// reasoning rather than anything it can act on. The reasoning belongs beside
+/// the code it is about; the schema belongs to the caller. #23 owns that.
+///
+/// Over the whole of each definition rather than the fields this file names
+/// elsewhere: the description that leaks next is in a tool nobody has written
+/// yet, in whatever shape its schema turns out to have.
+#[tokio::test]
+async fn no_description_an_agent_reads_names_a_rust_path() {
+    let mut leaked = Vec::new();
 
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("the body should read")
-        .to_bytes();
+    for tool in Client::fixture().tools().await {
+        let name = named(&tool).to_owned();
+        descriptions(&tool, &mut |said| {
+            if said.contains("crate::") || said.contains("[`") {
+                leaked.push(format!("{name}: {said}"));
+            }
+        });
+    }
 
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!(
-            "expected a JSON body ({status}), got {e}: {}",
-            String::from_utf8_lossy(&bytes)
-        )
-    })
+    assert!(
+        leaked.is_empty(),
+        "these reach a model and are written for us: {leaked:#?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Reading a definition
+// ---------------------------------------------------------------------------
+
+/// The names in a listing, in the order it gave them.
+fn names(tools: &[Value]) -> Vec<&str> {
+    tools.iter().map(named).collect()
+}
+
+/// What a listed tool calls itself, or a placeholder — so a failure can still
+/// name the entry it was about.
+fn named(tool: &Value) -> &str {
+    tool["name"].as_str().unwrap_or("<unnamed>")
+}
+
+/// A listed tool's arguments, each by name beside its schema.
+fn arguments(tool: &Value) -> Vec<(&str, &Value)> {
+    tool["inputSchema"]["properties"]
+        .as_object()
+        .map(|properties| {
+            properties
+                .iter()
+                .map(|(field, schema)| (field.as_str(), schema))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Every `description` anywhere in `value`, however deeply nested.
+///
+/// A walk rather than a list of places to look: a `description` on a field of
+/// a type in `$defs` reaches a model exactly as one on a top-level property
+/// does, and so will whatever nesting the next tool's schema has.
+fn descriptions(value: &Value, found: &mut impl FnMut(&str)) {
+    match value {
+        Value::Object(fields) => {
+            for (key, child) in fields {
+                match (key.as_str(), child.as_str()) {
+                    ("description", Some(said)) => found(said),
+                    _ => descriptions(child, found),
+                }
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| descriptions(item, found)),
+        _ => {}
+    }
 }

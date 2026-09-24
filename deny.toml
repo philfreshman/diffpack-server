@@ -45,6 +45,15 @@ allow = [
   # crate is "MIT AND BSD-3-Clause" — both licenses at once rather than a
   # choice, which is why the MIT allowance below does not cover it.
   "BSD-3-Clause",
+  # `webpki-root-certs`, which is Mozilla's root certificate store as data
+  # rather than code — it is what `rustls-platform-verifier` falls back to
+  # where a platform has no trust store of its own to ask. A data license on a
+  # list of certificates, and the only thing in the graph carrying it.
+  "CDLA-Permissive-2.0",
+  # `ring` and `rustls-webpki`, which is the TLS this server talks to the
+  # registries over. Both are permissive and neither asks anything of a
+  # binary beyond the notice every license here does.
+  "ISC",
   "MIT",
   "Unicode-3.0",
   "Unlicense",

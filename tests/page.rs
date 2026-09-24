@@ -46,7 +46,7 @@ fn a_payload_filled_to_the_ceiling_still_fits_in_the_response_that_carries_it() 
     let answer = serde_json::json!({
         "items": [payload],
         "total": usize::MAX,
-        "next_cursor": format!("p1:{}", usize::MAX),
+        "nextCursor": format!("p1:{}", usize::MAX),
     });
     let framed = serde_json::json!({
         "jsonrpc": "2.0",
@@ -523,7 +523,7 @@ fn a_cut_blob_is_cut_on_what_it_costs_encoded_not_on_its_own_length() {
 fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
     let content = "abcdefghij".repeat(1_000);
 
-    let asked_for_less = page::truncate(&content, Some(100));
+    let asked_for_less = page::truncate(&content, Some(page::MaxBytes::new(100)));
     let shown = asked_for_less
         .text
         .find("\n[truncated")
@@ -535,7 +535,7 @@ fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
     assert!(asked_for_less.truncated);
     assert_eq!(asked_for_less.bytes, 10_000, "and still the real total");
 
-    let asked_for_everything = page::truncate(&content, Some(usize::MAX));
+    let asked_for_everything = page::truncate(&content, Some(page::MaxBytes::new(u64::MAX)));
     assert_eq!(
         asked_for_everything.text, content,
         "a cap larger than the text is not a cut"
@@ -543,7 +543,7 @@ fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
     assert!(!asked_for_everything.truncated);
 
     let huge = "x".repeat(page::PAYLOAD_CEILING * 2);
-    let refused_the_raise = page::truncate(&huge, Some(usize::MAX));
+    let refused_the_raise = page::truncate(&huge, Some(page::MaxBytes::new(u64::MAX)));
     assert!(
         refused_the_raise.truncated,
         "asking for all of it does not make it fit"
@@ -641,6 +641,16 @@ fn the_cursor_a_tool_declares_says_to_pass_it_back_unchanged() {
             .is_some_and(|said| said.contains("unchanged")),
         "the rule is that it is passed back as it arrived, got {cursor}"
     );
+
+    // And it has to name the field a client will actually find in the answer.
+    // "Pass back `next_cursor`" sends an agent looking for a key that is not
+    // there, which is a wrong instruction rather than a missing one.
+    assert!(
+        cursor["description"]
+            .as_str()
+            .is_some_and(|said| said.contains("nextCursor") && !said.contains("next_cursor")),
+        "the description names the field as a page spells it, got {cursor}"
+    );
 }
 
 /// The same refusal as `Cursor::decode`, arriving one step earlier: a tool's
@@ -654,8 +664,9 @@ fn a_cursor_that_is_not_ours_is_refused_before_a_handler_runs() {
         .expect_err("a bare offset is not a cursor this module wrote");
 
     assert!(
-        refused.to_string().contains("next_cursor"),
-        "the refusal says what to pass instead; it said: {refused}"
+        refused.to_string().contains("nextCursor"),
+        "the refusal says what to pass instead, by the name a page gives it; \
+         it said: {refused}"
     );
 
     let accepted = serde_json::from_value::<PagingArgs>(serde_json::json!({ "cursor": "p1:4" }))
