@@ -1213,7 +1213,12 @@ async fn a_file_where_a_directory_was_is_served_warm_without_the_archives() {
 /// together, so neither can have downloaded.
 #[tokio::test]
 async fn a_read_of_a_path_that_is_a_file_and_a_directory_is_the_tools_answer() {
-    for (from, to) in [("1.0.0", "2.0.0"), ("2.0.0", "1.0.0")] {
+    let directions = [
+        ("1.0.0", "2.0.0", "--- from/lib\n+++ /dev/null\n"),
+        ("2.0.0", "1.0.0", "--- /dev/null\n+++ to/lib\n"),
+    ];
+
+    for (from, to, header) in directions {
         let store = Memory::new();
         let diffed = call(|| store.store(), shape(from, to)).await;
         settles(&store, 2).await;
@@ -1239,12 +1244,7 @@ async fn a_read_of_a_path_that_is_a_file_and_a_directory_is_the_tools_answer() {
         ];
 
         for (when, called, read) in cells {
-            assert_eq!(
-                called["isError"],
-                json!(false),
-                "{from} → {to} {when}: `lib` is a file in 1.0.0, so it has a \
-                 patch: got {called}"
-            );
+            is_the_patch_of_lib(&called, header);
             assert_eq!(
                 read["result"]["contents"][0]["text"], called["structuredContent"]["text"],
                 "{from} → {to} {when}: the resource answers `lib` with the \
