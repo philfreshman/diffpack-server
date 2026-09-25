@@ -429,7 +429,7 @@ fn collect(
 /// neither version. A file beside a directory is diffed against nothing,
 /// which is its addition or its removal.
 fn patch_of(files: &Versions, path: &str, from_path: &str, ignore_whitespace: bool) -> Patch {
-    engine::patch(
+    engine::build_patch(
         path,
         files.from_files.at(from_path).text(),
         files.to_files.at(path).text(),

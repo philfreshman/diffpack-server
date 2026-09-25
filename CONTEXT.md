@@ -301,8 +301,8 @@ whole version pair; a Patch covers one file inside it. Two of the four shapes
 a file can be in are not diffs and say so: a file whose content did not change
 is its own content, and a file in neither version is a sentence — so a reader
 renders a file as a file rather than as a diff of all-context lines. The
-rendering is the engine's, reproduced in `src/engine.rs` because the engine
-keeps it private to its browser binding ([ADR
+rendering is the engine's `build_patch`, the one its browser binding renders
+through too, reached through `src/engine.rs` ([ADR
 0013](docs/adr/0013-the-patch-renderer-lives-in-the-engine-seam.md)).
 _Avoid_: hunk, delta, file diff
 

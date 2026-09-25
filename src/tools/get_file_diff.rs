@@ -7,14 +7,13 @@
 //!
 //! # The renderer is the engine seam's
 //!
-//! `diffpack-engine` decides which of five things one file's answer is, in a
-//! function that is private to it and reachable only through a
-//! `wasm_bindgen` entry point — so it is written out rather than called, and
+//! `diffpack-engine` decides which of five things one file's answer is, in
+//! `build_patch`, which the browser renders through too and which
 //! [ADR 0013](../../docs/adr/0013-the-patch-renderer-lives-in-the-engine-seam.md)
-//! puts the transcription in [`crate::engine`] rather than here. This tool
-//! and the one that fills the cache render the same file, and two
-//! transcriptions that drifted would answer it differently depending on
-//! whether anyone had asked for it before.
+//! has this crate reach through [`crate::engine`] rather than here. This tool
+//! and the one that fills the cache render the same file, and two renderings
+//! that drifted would answer it differently depending on whether anyone had
+//! asked for it before.
 //!
 //! Nor is the rendering of one file this module's. Which patch answers a
 //! file — the one a remembered comparison holds, or one rendered out of both
@@ -24,10 +23,10 @@
 //! one lookup rather than two copies of it. What stays here is what the engine
 //! has no opinion about: the trimming two sections down, and the cut.
 //!
-//! Only the fourth case — both versions have the file and it changed — goes
-//! through anything public, so it is the only one `tests/get_file_diff.rs`
-//! can hold against the engine directly. The rest are held against #15's
-//! table.
+//! `tests/get_file_diff.rs` holds the fourth case — both versions have the
+//! file and it changed — against the engine's `get_diff_content`, and the
+//! rest against #15's table. Holding them against `build_patch` would be
+//! holding this tool against the function it calls.
 //!
 //! # One departure, on purpose
 //!

@@ -979,24 +979,21 @@ in the cache key rather than a label. The server computes diffs with the same
 code the browser runs; re-implementing any of it would mean two copies of an
 output format that has to stay byte-identical.
 
-Two functions here are written out rather than re-exported. The first is the
-exception that the paragraph above is the reason for. `patch` renders one
-file's Patch — the four cases a file can be in between two versions, and which
-of them is a diff at all. The engine has it, as `build_diff_result`, but
-private to its `wasm_bindgen` layer and so not part of the surface a Cargo
-dependent links against. Two tools need it and they arrived at different
-times — #21 renders every changed file while both archives are extracted, #15
-renders one on demand, by which time it costs two downloads — so it goes in
-the module that names the engine version it is pinned to, where a drift is one
-file to fix. Both call it; the two arrived in parallel each with a copy, and
-collapsing them was the first thing the merge of the two was for. See [ADR
-0013](adr/0013-the-patch-renderer-lives-in-the-engine-seam.md).
+One function here is written out rather than re-exported. `build_diff_tree` is
+the engine's own, but it takes the map a `FileMap` keeps private, so the
+version here takes two FileMaps and hands the engine the map inside each. That
+is the one place the map leaves `archive`, and it is here because this is the
+module that imports the engine the map is handed to (#95).
 
-The second is written out for a smaller reason. `build_diff_tree` is the
-engine's own, but it takes the map a `FileMap` keeps private, so the version
-here takes two FileMaps and hands the engine the map inside each. That is the
-one place the map leaves `archive`, and it is here because this is the module
-that imports the engine the map is handed to (#95).
+There used to be a second. `build_patch` renders one file's Patch — the four
+cases a file can be in between two versions, and which of them is a diff at
+all — and until `diffpack-engine` 0.4.0 it was private to the engine's
+`wasm_bindgen` layer, so this module carried a transcription of it for the two
+tools that render one: #21 every changed file while both archives are
+extracted, #15 one on demand. It is re-exported now, with the `Patch` it
+returns, whose fields serialise as the `data` and `is_diff` a stored
+`patches.json` already has. See [ADR
+0013](adr/0013-the-patch-renderer-lives-in-the-engine-seam.md).
 
 One thing about the tree comes through this seam that a reader keyed on paths
 has to allow for. A path that is a file in one version and a directory in the
