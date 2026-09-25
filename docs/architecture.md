@@ -995,6 +995,13 @@ returns, whose fields serialise as the `data` and `is_diff` a stored
 `patches.json` already has. See [ADR
 0013](adr/0013-the-patch-renderer-lives-in-the-engine-seam.md).
 
+The archive lookup is the engine's too, and is re-exported whole:
+`archive_source` says where a version's archive is, or which listing names it;
+`choose_archive` reads a listing for it; `unpack_archive` extracts it, with
+whatever wrapper directory that registry's archives have removed. None of them
+fetches. `registry` asks the first two and `archive` asks the last, and every
+download between them is `archive`'s own, under its size cap and its failures.
+
 One thing about the tree comes through this seam that a reader keyed on paths
 has to allow for. A path that is a file in one version and a directory in the
 other is two nodes, siblings with one `path` told apart by their type, the
