@@ -69,12 +69,12 @@ fn find_path(
         .find_map(|child| find_path(child, path))
 }
 
-/// `extract_archive_bytes` reaches the seam too. Rejecting rubbish is the
-/// cheapest call that proves the signature without shipping a fixture
-/// archive; #10 is where real archives arrive.
+/// `unpack_archive` reaches the seam too. Rejecting rubbish is the cheapest
+/// call that proves the signature without shipping a fixture archive; #10 is
+/// where real archives arrive.
 #[test]
 fn the_archive_extractor_is_reachable_through_the_seam() {
-    let result = diffpack_server::engine::extract_archive_bytes(b"not an archive");
+    let result = diffpack_server::engine::unpack_archive("npm", "zod", "4.0.0", b"not an archive");
     assert!(result.is_err(), "rubbish bytes should not extract");
 }
 
@@ -151,34 +151,42 @@ fn the_whitespace_setting_is_reachable_and_changes_the_diff() {
     );
 }
 
-/// The archive URL builders, which are real logic — scoped npm names and the
-/// sdist-then-wheel preference order — and not worth writing twice.
+/// The archive lookup, which is real logic — scoped npm names, PyPI's
+/// metadata hop and the sdist-then-wheel preference order — and not worth
+/// writing twice.
 #[test]
-fn the_registry_url_builders_are_reachable_through_the_seam() {
-    use diffpack_server::engine::{build_tarball_url, select_pypi_sdist_url, PyPiUrl};
+fn the_registry_archive_lookup_is_reachable_through_the_seam() {
+    use diffpack_server::engine::{archive_source, choose_archive, ArchiveSource};
 
     assert_eq!(
-        build_tarball_url("npm", "zod", "4.0.0").unwrap(),
-        "https://registry.npmjs.org/zod/-/zod-4.0.0.tgz"
+        archive_source("npm", "zod", "4.0.0").unwrap(),
+        ArchiveSource::Archive {
+            url: "https://registry.npmjs.org/zod/-/zod-4.0.0.tgz".to_string()
+        }
     );
     assert_eq!(
-        build_tarball_url("npm", "@types/node", "22.0.0").unwrap(),
-        "https://registry.npmjs.org/@types/node/-/node-22.0.0.tgz",
+        archive_source("npm", "@types/node", "22.0.0").unwrap(),
+        ArchiveSource::Archive {
+            url: "https://registry.npmjs.org/@types/node/-/node-22.0.0.tgz".to_string()
+        },
         "a scoped name keeps the scope in the path and drops it from the filename"
     );
-    assert!(build_tarball_url("crates", "serde", "1.0.229").is_ok());
+    assert!(archive_source("crates", "serde", "1.0.229").is_ok());
+    assert_eq!(
+        archive_source("pypi", "requests", "2.31.0").unwrap(),
+        ArchiveSource::Listing {
+            url: "https://pypi.org/pypi/requests/2.31.0/json".to_string()
+        },
+        "PyPI's archive is named in its metadata, so that is what is fetched first"
+    );
 
-    let url = |packagetype: &str, url: &str| PyPiUrl {
-        packagetype: packagetype.to_string(),
-        url: url.to_string(),
-    };
-    let chosen = select_pypi_sdist_url(&[
-        url(
-            "bdist_wheel",
-            "https://files.pythonhosted.org/x-py3-none-any.whl",
-        ),
-        url("sdist", "https://files.pythonhosted.org/x-1.0.tar.gz"),
-    ])
+    let chosen = choose_archive(
+        "pypi",
+        r#"{"urls":[
+            {"packagetype":"bdist_wheel","url":"https://files.pythonhosted.org/x-py3-none-any.whl"},
+            {"packagetype":"sdist","url":"https://files.pythonhosted.org/x-1.0.tar.gz"}
+        ]}"#,
+    )
     .unwrap();
     assert!(chosen.ends_with(".tar.gz"), "sdist is preferred over wheel");
 }

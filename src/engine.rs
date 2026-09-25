@@ -29,20 +29,31 @@
 //! shape, so a release that renamed a field fails there rather than leaving
 //! every stored Entry unreadable.
 //!
+//! # One lookup per registry
+//!
+//! [`archive_source`], [`choose_archive`] and [`unpack_archive`] are the
+//! engine's per-registry answers to where a version's archive is, which of a
+//! listing's files it is, and how to unpack it. None of them fetches:
+//! [`crate::archive`] does, with this server's client, size cap and
+//! failures, between the steps. They replace the URL builder, the sdist
+//! chooser and the extractor this module used to re-export one by one, so a
+//! registry's archive is described once, upstream, for both callers.
+//!
 //! # What is deliberately not re-exported
 //!
 //! The Go helpers (`build_go_zip_url`, `escape_go_module_path`,
-//! `strip_go_module_root`). The engine made them public in `0.3.0` so that Go
-//! support would not need a second release, but nothing here calls them yet
-//! and a re-export with no caller is a surface we would have to keep working.
-//! #28 adds them.
+//! `escape_go_version`, `strip_go_module_root`). Nothing here calls them, and
+//! #28 should not need to: `archive_source` and `unpack_archive` answer for
+//! `go` like any other registry, including the case-escaping of the version
+//! and the `<module>@<version>/` prefix, which `extract_archive_bytes` alone
+//! gets wrong. A re-export with no caller is a surface we would have to keep
+//! working.
 
 use crate::archive::FileMap;
 
 pub use diffpack_engine::{
-    build_patch, build_tarball_url, extract_archive_bytes, get_diff_content, select_pypi_sdist_url,
-    whitespace_mode, DiffFileEntry, DiffStatus, FileMapEntry, FileType, Patch, PyPiResponse,
-    PyPiUrl, WhitespaceMode,
+    archive_source, build_patch, choose_archive, get_diff_content, unpack_archive, whitespace_mode,
+    ArchiveSource, DiffFileEntry, DiffStatus, FileMapEntry, FileType, Patch, WhitespaceMode,
 };
 
 /// The tree of what changed between two versions' files.

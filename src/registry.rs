@@ -106,26 +106,24 @@ impl Registry {
     /// know which registry needs a second hop would be carrying this module's
     /// job around with it.
     ///
-    /// The URLs come from [`crate::engine`], which is the code the browser
-    /// runs. A pattern written out here would be a second copy of a string
-    /// that has to keep matching what the web app fetches.
+    /// The answer, and which of the two it is, come from
+    /// [`crate::engine`]'s `archive_source`, which is the code the browser
+    /// runs: PyPI's metadata URL included, so there is no pattern written out
+    /// here to be a second copy of a string that has to keep matching what
+    /// the web app fetches. PyPI is the one that answers with a Listing, and
+    /// the reason it cannot answer #10's `resolve_archive_url` from its
+    /// arguments alone.
     ///
     /// The `Err` is unreachable by construction — it is the engine refusing a
     /// registry identifier this module handed it, which is a disagreement
     /// between two files in this repository rather than anything a caller
     /// did, so it takes the internal channel rather than a panic.
     pub fn archive(self, package: &str, version: &str) -> Result<ArchiveSource, Failure> {
-        match self {
-            Self::Npm | Self::Crates => engine::build_tarball_url(self.id(), package, version)
-                .map(|url| ArchiveSource::Archive { url })
-                .map_err(|_| Failure::Internal {
-                    doing: "building an archive URL",
-                }),
-
-            // Two hops, and the reason PyPI cannot answer #10's
-            // `resolve_archive_url` from its arguments alone.
-            Self::PyPi => Ok(ArchiveSource::Listing {
-                url: format!("https://pypi.org/pypi/{package}/{version}/json"),
+        match engine::archive_source(self.id(), package, version) {
+            Ok(engine::ArchiveSource::Archive { url }) => Ok(ArchiveSource::Archive { url }),
+            Ok(engine::ArchiveSource::Listing { url }) => Ok(ArchiveSource::Listing { url }),
+            Err(_) => Err(Failure::Internal {
+                doing: "building an archive URL",
             }),
         }
     }
@@ -609,17 +607,13 @@ impl Registry {
     /// use is something the caller has to explain to a model, and the caller
     /// is the one holding the package name and the version that belong in
     /// that message.
+    ///
+    /// The engine's `choose_archive` reads it, parsing PyPI's metadata as
+    /// well as choosing from it, and refuses a registry whose archive URL is
+    /// built rather than listed: npm and crates.io have no metadata document
+    /// to read here and nothing to choose from, so theirs is `None` too.
     pub fn choose_archive(self, listing: &str) -> Option<String> {
-        match self {
-            // Their archive URL is built, not listed, so there is no
-            // metadata document to read and nothing to choose from.
-            Self::Npm | Self::Crates => None,
-
-            Self::PyPi => {
-                let metadata: engine::PyPiResponse = serde_json::from_str(listing).ok()?;
-                engine::select_pypi_sdist_url(&metadata.urls).ok()
-            }
-        }
+        engine::choose_archive(self.id(), listing).ok()
     }
 }
 
@@ -630,6 +624,11 @@ impl Registry {
 /// own metadata. A tool that answers from its arguments alone (#10's
 /// `resolve_archive_url`) can serve the first and not the second, and that is
 /// the whole of what it has to know.
+///
+/// The engine's `ArchiveSource` has the same two variants and is where
+/// [`Registry::archive`] gets its answer. This one is kept rather than
+/// re-exported because [`url`](Self::url) is this crate's, and a method
+/// cannot be added to a type from another crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchiveSource {
     /// The archive itself, at a URL built from the package and the version.

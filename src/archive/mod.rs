@@ -287,7 +287,7 @@ impl Archive {
         };
 
         let bytes = self.documents.body(&url, &about).await?;
-        extract(&bytes, package, version)
+        extract(registry, &bytes, package, version)
     }
 }
 
@@ -295,9 +295,23 @@ impl Archive {
 ///
 /// The extractor is [`crate::engine`]'s, which is the code the browser runs:
 /// a second implementation here would be two answers to "what is in this
-/// version" with nothing keeping them equal.
-fn extract(bytes: &[u8], package: &str, version: &str) -> Result<FileMap, Failure> {
-    engine::extract_archive_bytes(bytes)
+/// version" with nothing keeping them equal. It is asked per registry,
+/// because which wrapper directory an archive has is the registry's: every
+/// one this server knows puts a single top-level directory around it, and
+/// Go's `<module>@<version>/` (#28) is several, which a one-directory strip
+/// gets wrong.
+///
+/// An `Err` is always an archive the extractor could not read. The engine
+/// also refuses a registry it does not know that way, but
+/// [`Registry::archive`] asked it first and refused that registry on the
+/// internal channel before anything was downloaded.
+fn extract(
+    registry: Registry,
+    bytes: &[u8],
+    package: &str,
+    version: &str,
+) -> Result<FileMap, Failure> {
+    engine::unpack_archive(registry.id(), package, version, bytes)
         .map(FileMap::from)
         .map_err(|reason| Failure::MalformedArchive {
             package: package.to_owned(),
