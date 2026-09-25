@@ -10,27 +10,33 @@ noticed, and this is what was weighed.
 #26 asks for Vercel Firewall rules with diff calls limited more tightly than
 cached reads, and a comment on it holds three rules, each keyed per IP
 address: 20 `diff_package_versions` a minute, 200 an hour, and 600 requests of
-any kind a minute. MCP is one `POST` path, so a rule tells a diff from a read
-by the `Mcp-Name` header, which rmcp requires on every `tools/call`.
+any kind a minute. MCP is one `POST` path, so rules 1 and 2 tell a diff from a
+read by the `Mcp-Name` header, which the comment says rmcp requires before a
+handler runs. It does only when `MCP-Protocol-Version` is `2026-07-28` or
+later (`validate_standard_headers` in rmcp 3.4.0): a `2025-11-25` client, or
+a request naming no version, is served without one.
 
 #26 recorded the rate-limit action as Vercel Pro and above, and struck its
 first two criteria through as blocked on the plan, this project being on
-Hobby. Vercel's published documentation now says otherwise: its
+Hobby. Vercel's published documentation has said otherwise since 2025-05: its
 [changelog](https://vercel.com/changelog/rate-limiting-now-available-on-hobby-with-higher-included-usage-on-pro)
 and [WAF pricing](https://vercel.com/docs/vercel-firewall/vercel-waf/usage-and-pricing)
 give Hobby one rate-limit rule per project, fixed-window and keyed by IP, and
 its [custom rules](https://vercel.com/docs/vercel-firewall/vercel-waf/custom-rules)
-page puts the `header` condition on every plan. None of it has been confirmed
-in this project's dashboard. If it holds, #26's first rule can be created on
-Hobby today, and on its own it limits diffs more tightly than reads.
+page puts the `header` condition on every plan. None of it is confirmed in
+this project's dashboard; if it holds, one of #26's rules can be made today.
 
-The decision is the owner's nonetheless: no limit, for now. Two things on #26
-bear on a rule going in, and neither is settled. The rules comment leaves open
-which path the firewall sees, `/mcp` as sent or `/api/mcp` after the rewrite in
-`vercel.json`; and #26's second criterion wants #25 to show that ordinary
-agent use never trips a limit, and #25 has not run. As this record reads the
-trade-off, a rule applied before both are settled risks throttling legitimate
-use, and no rule risks what follows. The second is the one accepted.
+The decision is the owner's nonetheless: no limit, for now. Three things bear
+on a rule going in, and none is settled. The rules comment leaves open which
+path the firewall sees, `/mcp` as sent or `/api/mcp` after the rewrite in
+`vercel.json`. #26's second criterion wants #25 to show that ordinary agent
+use never trips a limit, and #25 has not run. And rule 1 can be sidestepped by
+leaving the header out — any pre-`2026-07-28` client, or a loop — and a cold
+`resources/read` never carries the tool's name, so whether Hobby's one rule
+should be rule 1 or rule 3 is itself open. As this record reads the
+trade-off, a rule applied before these are settled risks throttling
+legitimate use while missing the loops it is for, and no rule risks what
+follows. The second is the one accepted.
 
 ## What is being accepted
 
@@ -44,7 +50,7 @@ loop — a confused agent as easily as a hostile caller — spends three things:
 
 * **Function time and memory.** On Hobby, usage past the plan's allowance
   pauses the whole team — every project and deployment on it, not only this
-  one — until usage resets or Vercel's support lifts it
+  one — until usage resets, Vercel's support lifts it, or the team upgrades
   ([Hobby](https://vercel.com/docs/plans/hobby), [a blocked deployment](https://vercel.com/kb/guide/why-is-my-account-deployment-blocked)).
   The exposure is availability, not an invoice, and wider than this endpoint.
 * **Registry goodwill.** Every download is a request to npm, crates.io or PyPI
@@ -54,8 +60,8 @@ loop — a confused agent as easily as a hostile caller — spends three things:
   entries nobody reads again and evicts the ones people do.
 
 For scale: the production deployment, `dpl_D7Wj5mj2BiVw1pUgXubPivCnVkYs` at
-3b5a9d5 (#107's merge), logged no request in the 48 hours to 2026-09-25
-18:03 UTC but one `/health` probe, checked in Vercel's runtime logs that day.
+3b5a9d5 (#107's merge), logged only one `/health` probe in the 48 hours to
+2026-09-25 18:03 UTC, checked in Vercel's runtime logs that day.
 
 ## What bounds it today
 
@@ -74,21 +80,18 @@ single call can do is a known number.
   so `fetch::bytes` is bounded at twice that; and `maxDuration: 300` in
   `vercel.json` over the whole invocation.
 * **The budget.** `CACHE_MAX_BYTES` in `src/store/mod.rs`: 256 MB over the
-  whole blob store, swept oldest first (#22). A loop can churn the cache; it
-  cannot grow it.
+  whole blob store, swept oldest first (#22): a loop can churn it, not grow it.
 * **The line.** `src/log.rs` writes one structured line per tool call — tool,
   arguments, result, cache outcome, phase timings — to Vercel's runtime logs.
   A loop shows there as the same tool and arguments over and over, or as a
   miss rate no review makes. It records no caller address, so one source
-  dominating would have to be seen in Vercel's request logs or the firewall's
-  traffic view rather than here; and a `resources/read` writes no line yet
-  (`read_resource` in `src/mcp.rs`), though a read that misses the cache
-  works out a whole comparison.
+  dominating is for Vercel's request logs or the firewall's traffic view to
+  show; and a `resources/read` writes no line yet (`read_resource` in
+  `src/mcp.rs`), though one that misses the cache works out a whole comparison.
 
 ## When to revisit
 
-Any one of these reopens it, and the section below is where the answer starts
-rather than a fresh design:
+Any one of these reopens it, and the answer starts from the section below:
 
 * The line shows a loop — `diff_package_versions` at a rate no person drives,
   or one comparison asked for again and again — or Vercel's request logs show
@@ -97,29 +100,34 @@ rather than a fresh design:
 * A registry answers this server with `429` — the `rate_limited` cause on the
   line — or its operator gets in touch through the repository the
   `User-Agent` links to.
-* The project moves to a plan with room for more than one rate-limit rule.
+* The team moves to a plan with room for more than one rate-limit rule.
 
 ## Deferred: the one rule Hobby allows
 
 The first thing to do when this is revisited, whichever trigger reopens it:
 confirm in this project's firewall dashboard that Hobby offers a rate-limit
-rule with a `header` condition; settle which path the firewall sees, which #26
-says only a real blocked request answers; and apply #26's rule 1 — `POST` on
-that path with `mcp-name` equal to `diff_package_versions`, 20 a minute per IP
-address, deny for 60 s. That rule alone meets #26's first criterion; its
-second still wants #25 to show that ordinary agent use never trips it.
+rule with a `header` condition and the window and deny duration it needs;
+settle which path the firewall sees, which #26 says only a real blocked
+request answers; and choose the one rule, which nothing here settles:
 
-Rules 2 and 3 are a starting point to check against the plan's limits, not
-rules to apply as written. With rule 1 they are three against Hobby's one, and
-rule 2's one-hour window may be longer than any plan below Enterprise allows:
-sources citing Vercel put the longest at ten minutes, which is unconfirmed.
+* **Rule 1** — `POST` on that path with `mcp-name` equal to
+  `diff_package_versions`, 20 a minute per IP address, deny for 60 s — limits
+  only the diffs that name themselves. Leaving the header out sidesteps it
+  (any pre-`2026-07-28` client, or a loop), as does Base64-encoding the name,
+  which rmcp accepts; and a cold `resources/read` never carries that name.
+* **Rule 3** — every `POST`, 600 a minute — catches all of those, and limits
+  a diff no more tightly than a read.
+
+Either way #25 still has to show that ordinary agent use never trips it.
+Rule 2 is a starting point, not a rule to apply as written: check the longest
+window the plan allows before counting on its hour.
 
 ## Rejected: upgrading to Vercel Pro now
 
 #26 had it as the only way to meet its first criterion. On Vercel's published
-limits Hobby's one rule does that, and what Pro would add is room for more
-rules than one, which rules 2 and 3 need. Not now: it is a monthly charge, and
-what it buys waits on the same two open questions as the first rule.
+limits Hobby's one rule goes part of the way, and what Pro would add is room
+for rules 1 and 3 together. Not now: it is a monthly charge, and what it buys
+waits on the same open questions as Hobby's one rule.
 
 Pro would also change the shape of the risk rather than remove it. It bills
 on-demand usage up to a spend amount, and then [spend
@@ -131,12 +139,12 @@ a capped invoice followed by the same outage.
 
 A counter in the process, keyed on the caller's address. It is code this crate
 could write today and a test could drive, and it limits nothing that matters.
-Instances share no memory ([ADR 0008](0008-no-sessions.md)), so a count in
-one instance sees whichever of a caller's requests happened to reach it, and
-a loop spread across instances gets an allowance per instance. The download
-slots can be per instance because of what they bound: bytes held in one
-process are a fact about that process, where a rate is a fact about a caller
-across all of them.
+Instances share no memory ([ADR 0008](0008-no-sessions.md) makes the same
+point about invocations), so a count in one instance sees whichever of a
+caller's requests happened to reach it, and a loop spread across instances
+gets an allowance per instance. The download slots can be per instance
+because of what they bound: bytes held in one process are a fact about that
+process, where a rate is a fact about a caller across all of them.
 
 A shared counter would work, and needs a store that can count. The one this
 project has cannot: the blob store has no atomic increment, and its listing is
@@ -150,9 +158,8 @@ Vercel's own `checkRateLimit` is no shortcut either: it is the JavaScript
 
 ## Rejected: a proxy in front, such as Cloudflare
 
-Free at its lowest tier, and short on both halves of the problem.
-
-The tighter-for-diffs rule needs a header match, and Cloudflare offers request
+Free at its lowest tier, and short on both halves of the problem. The
+tighter-for-diffs rule needs a header match, and Cloudflare offers request
 headers to rate limiting rules only at Enterprise. Its free tier is one
 path-only rule on a ten-second window: one blunt limit on one `POST` path,
 serving a diff loop and the burst of file reads an ordinary review makes, which
