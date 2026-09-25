@@ -291,7 +291,9 @@ name:
 The second row is worth knowing: the server has two public front doors, not
 one. That is not a hole — everything here is public package content and the
 server is deliberately unauthenticated, the same posture `diffpack` itself
-takes — but the rate limiting in
+takes. Neither hostname is rate limited, by choice and for now: [ADR
+0018](docs/adr/0018-no-rate-limit-for-now.md) says why, what bounds the cost
+instead, and what reopens it. Any limit added later under
 [#26](https://github.com/philfreshman/diffpack-server/issues/26) has to cover
 both hostnames, and "it is only on a `.vercel.app` URL" is not a reason to
 treat something as unreachable.

@@ -28,6 +28,7 @@ directory was created (#40).
 | [0015](0015-one-implementation-beneath-three-registry-seams.md) | One implementation beneath three registry seams | done, #81 |
 | [0016](0016-the-walk-to-a-comparison-is-this-tools.md) | The walk from a handle to a comparison is `diff_package_versions`'s | done, #83 |
 | [0017](0017-a-failure-carries-the-code-it-earned.md) | A failure carries the code it earned, not the one its caller picked | done, #85 |
+| [0018](0018-no-rate-limit-for-now.md) | No rate limit on the public endpoint, for now | #26 |
 
 A new one goes in at the next number. The bar is the usual three: hard to
 reverse, surprising without the context, and the result of a real trade-off. A
