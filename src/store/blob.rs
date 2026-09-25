@@ -1043,7 +1043,7 @@ mod tests {
                 "/api/blob?prefix=diffs%2Fv1%2F&cursor=the-second-page",
                 "/api/blob?prefix=diffs%2Fv1%2F&cursor=the-third-page",
             ],
-            "each cursor should have been asked with once"
+            "each cursor should have been asked for once"
         );
     }
 
