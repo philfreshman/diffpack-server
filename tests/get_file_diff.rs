@@ -805,11 +805,12 @@ async fn a_change_in_the_middle_drops_the_lines_below_it_too() {
 /// Two changes more than twice the context apart are two hunks, and the lines
 /// neither of them needs are dropped from between them.
 ///
-/// Every other file this suite trims changes in one run of lines, so a trimmer
-/// that kept everything from the first change to the last, or wrote one header
-/// over the lot, would pass all of them. `apart`'s `src/far.js` has seven
-/// unchanged lines between its two changes, one more than the three either
-/// side of each keeps, so `between4` is the one line between them that goes.
+/// Every file this suite trims ahead of these two tests changes in one run of
+/// lines, so a trimmer that kept everything from the first change to the last,
+/// or wrote one header over the lot, would pass all of them. `apart`'s
+/// `src/far.js` has seven unchanged lines between its two changes, one more
+/// than the six that three lines either side keep, so `between4` is the one
+/// line between them that goes.
 ///
 /// The second header is the one worth reading. The first change replaced one
 /// line with two, so everything after it sits a line further down in the
@@ -850,10 +851,10 @@ async fn changes_more_than_twice_the_context_apart_are_two_hunks() {
   const after2 = 0;
   const after3 = 0;"
         ),
-        "seven unchanged lines between two changes is one more than three \
-         lines of context either side keeps, so the middle one is dropped and \
-         each change gets a header of its own, the second counted from where \
-         it sits in each file: got {answer}"
+        "seven unchanged lines between two changes is one more than the six \
+         that three lines of context either side keep, so the middle one is \
+         dropped and each change gets a header of its own, the second counted \
+         from where it sits in each file: got {answer}"
     );
 }
 
@@ -901,9 +902,9 @@ async fn changes_exactly_twice_the_context_apart_share_one_hunk() {
   const after2 = 0;
   const after3 = 0;"
         ),
-        "six unchanged lines between two changes is exactly what three lines \
-         of context either side keeps, so they stay one hunk with every line \
-         between them: got {answer}"
+        "six unchanged lines between two changes is exactly the six that three \
+         lines of context either side keep, so they stay one hunk with every \
+         line between them: got {answer}"
     );
 }
 
@@ -945,8 +946,9 @@ async fn a_diff_with_nothing_changed_in_it_is_its_header() {
 /// it, changed a prefix, normalised whitespace — the line would not be found
 /// in the full answer and this fails.
 ///
-/// Asserted over every file of two comparisons, so it is a claim about the
-/// trimmer rather than about the one file that was convenient.
+/// Asserted over files from five comparisons, one of them split into two
+/// hunks, so it is a claim about the trimmer rather than about the one file
+/// that was convenient.
 #[tokio::test]
 async fn a_trimmed_answer_carries_no_line_the_full_answer_does_not() {
     for (package, path) in [
@@ -956,6 +958,7 @@ async fn a_trimmed_answer_carries_no_line_the_full_answer_does_not() {
         ("diffable", "src/added.js"),
         ("diffable", "src/removed.js"),
         ("reformatted", "src/main.js"),
+        ("apart", "src/far.js"),
     ] {
         let mut arguments = json!({
             "handle": handle(package, "1.0.0", "2.0.0", false),
