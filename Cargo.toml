@@ -36,7 +36,7 @@ base64 = "0.22"
 # crate is not published to crates.io, so a git dependency is the only
 # option. `src/engine.rs` is the only module allowed to import it, and
 # `engine::VERSION` must agree with this tag — `tests/engine.rs` checks.
-diffpack-engine = { git = "https://github.com/philfreshman/diffpack-engine.git", tag = "v0.3.1" }
+diffpack-engine = { git = "https://github.com/philfreshman/diffpack-engine.git", rev = "906521d2c8ac2b018e05a745a4217a99037f40b6" }
 # Two things. `FutureExt::catch_unwind` turns a panic in a handler into a
 # JSON-RPC error: rmcp runs handlers on a task of its own, so a tower layer
 # never sees that unwind and the request hangs instead of failing. See

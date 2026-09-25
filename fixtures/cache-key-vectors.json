@@ -307,11 +307,11 @@
       "diff_id": "cf75711dc26e0fe58e1a9f0f4caf920df3703223fc882d9602a2376d51acc168"
     },
     {
-      "name": "npm/zod at engine 0.3.1",
-      "why": "The worked example at the engine diffpack-server pins, 0.3.1. The server's own tests mint a real handle and make a real call, which can only carry the pinned engine, so they read their expected diff_id from this vector. Its diff_id must differ from npm/zod's.",
+      "name": "npm/zod at engine 0.4.0",
+      "why": "The worked example at the engine diffpack-server pins, 0.4.0. The server's own tests mint a real handle and make a real call, which can only carry the pinned engine, so they read their expected diff_id from this vector. Its diff_id must differ from npm/zod's.",
       "input": {
         "schema": 1,
-        "engine": "0.3.1",
+        "engine": "0.4.0",
         "registry": "npm",
         "package": "zod",
         "from": "3.25.76",
@@ -319,8 +319,8 @@
         "similarity_threshold": 0.75,
         "ignore_whitespace": false
       },
-      "canonical": "{\"engine\":\"0.3.1\",\"from\":\"3.25.76\",\"ignore_whitespace\":false,\"package\":\"zod\",\"registry\":\"npm\",\"schema\":1,\"similarity_threshold\":\"0.7500\",\"to\":\"4.0.0\"}",
-      "diff_id": "ec14de6671b78a4707bb972417e043f2952e5e5578ae3fef2c4eaf46a25a2a90"
+      "canonical": "{\"engine\":\"0.4.0\",\"from\":\"3.25.76\",\"ignore_whitespace\":false,\"package\":\"zod\",\"registry\":\"npm\",\"schema\":1,\"similarity_threshold\":\"0.7500\",\"to\":\"4.0.0\"}",
+      "diff_id": "46b37358d4386ec20c326958ec3d7540a1dfb7ddde6b9616267c5cd172d5e219"
     }
   ]
 }
