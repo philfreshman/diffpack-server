@@ -65,3 +65,26 @@ than this record's: the engine's function takes the map a FileMap now keeps
 private (ADR 0001), so the version here takes two FileMaps and hands the
 engine the map inside each. Nothing of the engine's is re-implemented for it.
 The tree is still the engine's own, and only the crossing is written here.
+
+## Since: `diffpack-engine` 0.4.0
+
+The first rejected alternative happened. The engine made the renderer public
+as `build_patch`, with the `Patch` it returns, and `src/engine.rs` re-exports
+both instead of writing them out. Nothing else in this record changes: the
+renderer is still reached through the engine seam, both callers still ask for
+it by one name, and there is now no transcription to drift.
+
+The cost this record priced was paid. The engine version is a field in the
+cache key, so 0.4.0 starts every Entry cold, although nothing it changes
+reaches a Tree or a Patch. It was not paid for a line prefix alone: the same
+release carries the engine's per-registry archive lookup, which retires this
+server's other copies of what the engine knows about a registry — the PyPI
+metadata URL, the listing's parse, and which extractor an archive takes.
+
+Two things were checked rather than assumed. The four cases render the same
+bytes as the transcription did: a file only one version has is split on `\n`
+behind `+ ` or `- `, a byte-identical file is its content with
+`is_diff: false`, and the rest is `get_diff_content`, which is what
+`tests/get_file_diff.rs` and `tests/store.rs` hold without being changed. And
+the engine's `Patch` serialises as `data` and `is_diff`, which are the names a
+stored `patches.json` already has, so an Entry keeps the same shape.
