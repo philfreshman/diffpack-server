@@ -802,6 +802,112 @@ async fn a_change_in_the_middle_drops_the_lines_below_it_too() {
     );
 }
 
+/// Two changes more than twice the context apart are two hunks, and the lines
+/// neither of them needs are dropped from between them.
+///
+/// Every file this suite trims ahead of these two tests changes in one run of
+/// lines, so a trimmer that kept everything from the first change to the last,
+/// or wrote one header over the lot, would pass all of them. `apart`'s
+/// `src/far.js` has seven unchanged lines between its two changes, one more
+/// than the six that three lines either side keep, so `between4` is the one
+/// line between them that goes.
+///
+/// The second header is the one worth reading. The first change replaced one
+/// line with two, so everything after it sits a line further down in the
+/// second file, and the second hunk starts on line ten on the left and eleven
+/// on the right. Both headers are the ones `diff -U3` writes for the pair.
+#[tokio::test]
+async fn changes_more_than_twice_the_context_apart_are_two_hunks() {
+    let answer = patch(json!({
+        "handle": handle("apart", "1.0.0", "2.0.0", false),
+        "path": "src/far.js",
+        "context_lines": 3,
+    }))
+    .await;
+
+    assert_eq!(
+        answer["text"],
+        json!(
+            "\
+--- from/src/far.js
++++ to/src/far.js
+@@ -2,7 +2,8 @@
+  const before2 = 0;
+  const before3 = 0;
+  const before4 = 0;
+- export const first = \"old\";
++ export const first = \"new\";
++ export const firstToo = \"new\";
+  const between1 = 0;
+  const between2 = 0;
+  const between3 = 0;
+@@ -10,7 +11,7 @@
+  const between5 = 0;
+  const between6 = 0;
+  const between7 = 0;
+- export const second = \"old\";
++ export const second = \"new\";
+  const after1 = 0;
+  const after2 = 0;
+  const after3 = 0;"
+        ),
+        "seven unchanged lines between two changes is one more than the six \
+         that three lines of context either side keep, so the middle one is \
+         dropped and each change gets a header of its own, the second counted \
+         from where it sits in each file: got {answer}"
+    );
+}
+
+/// Two changes exactly twice the context apart share one hunk.
+///
+/// The other side of the line the test above stands on. `src/near.js` is
+/// `src/far.js` with one fewer line between its changes, so the three lines
+/// kept after the first change and the three kept before the second meet with
+/// nothing left out between them. `git` joins hunks that meet as well as hunks
+/// that overlap, and splitting these would be two headers with no gap between
+/// them. Between them the two tests put the line at exactly twice the context:
+/// a rule one line tighter splits this file, and one a line looser joins the
+/// other.
+#[tokio::test]
+async fn changes_exactly_twice_the_context_apart_share_one_hunk() {
+    let answer = patch(json!({
+        "handle": handle("apart", "1.0.0", "2.0.0", false),
+        "path": "src/near.js",
+        "context_lines": 3,
+    }))
+    .await;
+
+    assert_eq!(
+        answer["text"],
+        json!(
+            "\
+--- from/src/near.js
++++ to/src/near.js
+@@ -2,14 +2,15 @@
+  const before2 = 0;
+  const before3 = 0;
+  const before4 = 0;
+- export const first = \"old\";
++ export const first = \"new\";
++ export const firstToo = \"new\";
+  const between1 = 0;
+  const between2 = 0;
+  const between3 = 0;
+  const between4 = 0;
+  const between5 = 0;
+  const between6 = 0;
+- export const second = \"old\";
++ export const second = \"new\";
+  const after1 = 0;
+  const after2 = 0;
+  const after3 = 0;"
+        ),
+        "six unchanged lines between two changes is exactly the six that three \
+         lines of context either side keep, so they stay one hunk with every \
+         line between them: got {answer}"
+    );
+}
+
 /// A diff with no changed line in it trims to its header.
 ///
 /// The case a whitespace-only change makes when the handle says to ignore
@@ -840,8 +946,9 @@ async fn a_diff_with_nothing_changed_in_it_is_its_header() {
 /// it, changed a prefix, normalised whitespace — the line would not be found
 /// in the full answer and this fails.
 ///
-/// Asserted over every file of two comparisons, so it is a claim about the
-/// trimmer rather than about the one file that was convenient.
+/// Asserted over seven files from five comparisons, one of which (`apart`'s
+/// `src/far.js`) splits into two hunks, so it is a claim about the trimmer
+/// rather than about the one file that was convenient.
 #[tokio::test]
 async fn a_trimmed_answer_carries_no_line_the_full_answer_does_not() {
     for (package, path) in [
@@ -851,6 +958,7 @@ async fn a_trimmed_answer_carries_no_line_the_full_answer_does_not() {
         ("diffable", "src/added.js"),
         ("diffable", "src/removed.js"),
         ("reformatted", "src/main.js"),
+        ("apart", "src/far.js"),
     ] {
         let mut arguments = json!({
             "handle": handle(package, "1.0.0", "2.0.0", false),
