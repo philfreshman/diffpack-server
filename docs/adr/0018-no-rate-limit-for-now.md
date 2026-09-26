@@ -31,12 +31,12 @@ on a rule going in, and none is settled. The rules comment leaves open which
 path the firewall sees, `/mcp` as sent or `/api/mcp` after the rewrite in
 `vercel.json`. #26's second criterion wants #25 to show that ordinary agent
 use never trips a limit, and #25 has not run. And rule 1 can be sidestepped by
-leaving the header out — any pre-`2026-07-28` client, or a loop — and a cold
-`resources/read` never carries the tool's name, so whether Hobby's one rule
-should be rule 1 or rule 3 is itself open. As this record reads the
-trade-off, a rule applied before these are settled risks throttling
-legitimate use while missing the loops it is for, and no rule risks what
-follows. The second is the one accepted.
+leaving the header out along with the `2026-07-28` version — any older client,
+or a loop — and a cold `resources/read` never carries the tool's name, so
+whether Hobby's one rule should be rule 1 or rule 3 is itself open. As this
+record reads the trade-off, a rule applied before these are settled risks
+throttling legitimate use while rule 1 misses the loops it is for, and no rule
+risks what follows. The second is the one accepted.
 
 ## What is being accepted
 
@@ -112,22 +112,27 @@ request answers; and choose the one rule, which nothing here settles:
 
 * **Rule 1** — `POST` on that path with `mcp-name` equal to
   `diff_package_versions`, 20 a minute per IP address, deny for 60 s — limits
-  only the diffs that name themselves. Leaving the header out sidesteps it
-  (any pre-`2026-07-28` client, or a loop), as does Base64-encoding the name,
-  which rmcp accepts; and a cold `resources/read` never carries that name.
+  only the diffs that name themselves. Leaving the header out along with the
+  `2026-07-28` version sidesteps it (any older client, or a loop), as does
+  Base64-encoding the name, which rmcp accepts; and a cold `resources/read`
+  never carries that name.
 * **Rule 3** — every `POST`, 600 a minute — catches all of those, and limits
   a diff no more tightly than a read.
 
 Either way #25 still has to show that ordinary agent use never trips it.
 Rule 2 is a starting point, not a rule to apply as written: check the longest
-window the plan allows before counting on its hour.
+window and the deny durations the plan allows before counting on its hour or
+its 600 s deny, which is not among the durations Vercel lists (1, 5, 15 or 30
+minutes, or an hour).
 
 ## Rejected: upgrading to Vercel Pro now
 
 #26 had it as the only way to meet its first criterion. On Vercel's published
-limits Hobby's one rule goes part of the way, and what Pro would add is room
-for rules 1 and 3 together. Not now: it is a monthly charge, and what it buys
-waits on the same open questions as Hobby's one rule.
+limits Hobby's one rule goes part of the way, and Pro goes further without
+getting there: room for rules 1 and 3 together ends the choice between them,
+but a diff that leaves the header out is still held only to rule 3's rate.
+Not now: it is a monthly charge, and what it buys waits on the path and on
+#25, and on any plan a header rule counts only the diffs that name themselves.
 
 Pro would also change the shape of the risk rather than remove it. It bills
 on-demand usage up to a spend amount, and then [spend
