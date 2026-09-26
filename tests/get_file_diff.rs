@@ -946,9 +946,9 @@ async fn a_diff_with_nothing_changed_in_it_is_its_header() {
 /// it, changed a prefix, normalised whitespace — the line would not be found
 /// in the full answer and this fails.
 ///
-/// Asserted over files from five comparisons, one file of them split into
-/// two hunks, so it is a claim about the trimmer rather than about the one
-/// file that was convenient.
+/// Asserted over seven files from five comparisons, one of which (`apart`'s
+/// `src/far.js`) splits into two hunks, so it is a claim about the trimmer
+/// rather than about the one file that was convenient.
 #[tokio::test]
 async fn a_trimmed_answer_carries_no_line_the_full_answer_does_not() {
     for (package, path) in [
