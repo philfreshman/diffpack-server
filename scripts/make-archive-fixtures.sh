@@ -335,6 +335,49 @@ write "$shape/2.0.0/package/lib/index.js" 'export const shape = "a directory now
 targz "shape-1.0.0.tgz" "package" "$shape/1.0.0"
 targz "shape-2.0.0.tgz" "package" "$shape/2.0.0"
 
+# --- a file changed in two places ------------------------------------------
+#
+# Every other pair here changes a file in one run of lines, so a trimmed patch
+# of any of them is a single hunk. `get_file_diff` (#15) keeps two changes in
+# one hunk when at most twice its context lies between them and splits them
+# when more does, and this pair is the two sides of that line at three lines
+# of context, git's default: `src/far.js` has seven unchanged lines between
+# its two changes and `src/near.js` has six. Otherwise the two files are the
+# same.
+#
+# Four unchanged lines above the first change and four below the second, one
+# more than the context, so each hunk's outer edge is trimmed as well as the
+# lines between them. The first change replaces one line with two, so the
+# lines after it sit one further down in 2.0.0 and a hunk after it starts on
+# a different line in each file.
+#
+# The file with $1 unchanged lines between its two changes, as version $2
+# has it.
+apart_js() {
+  local between=$1 version=$2 i
+  for i in 1 2 3 4; do printf 'const before%d = 0;\n' "$i"; done
+  if [[ $version == 1.0.0 ]]; then
+    printf 'export const first = "old";\n'
+  else
+    printf 'export const first = "new";\nexport const firstToo = "new";\n'
+  fi
+  for i in $(seq 1 "$between"); do printf 'const between%d = 0;\n' "$i"; done
+  if [[ $version == 1.0.0 ]]; then
+    printf 'export const second = "old";\n'
+  else
+    printf 'export const second = "new";\n'
+  fi
+  for i in 1 2 3 4; do printf 'const after%d = 0;\n' "$i"; done
+}
+apart=$work/apart
+for version in 1.0.0 2.0.0; do
+  mkdir -p "$apart/$version/package/src"
+  apart_js 7 "$version" >"$apart/$version/package/src/far.js"
+  apart_js 6 "$version" >"$apart/$version/package/src/near.js"
+done
+targz "apart-1.0.0.tgz" "package" "$apart/1.0.0"
+targz "apart-2.0.0.tgz" "package" "$apart/2.0.0"
+
 # --- the archive this server will not fetch -------------------------------
 #
 # A real archive at a host no registry names, referenced by a listing that
