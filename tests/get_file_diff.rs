@@ -15,10 +15,10 @@
 //! is what makes the assertion able to disagree with this crate rather than
 //! agree with it by construction.
 //!
-//! The other four cases cannot be asked for. `build_diff_result` is a private
-//! `fn` in `diffpack-engine` 0.3.1 and `get_diff_for_path` is
-//! `#[wasm_bindgen]`, so neither is callable from here and `src/engine.rs`
-//! re-exports neither. Those four are held against literals worked out by
+//! The other four cases are not asked of the engine. `build_patch` has been
+//! public since `diffpack-engine` 0.4.0, but it is the function this tool
+//! renders through, so an expectation read from it would agree with this
+//! crate by construction. Those four are held against literals worked out by
 //! hand from the table in #15, which is the contract they exist to reproduce.
 //!
 //! # What is deliberately not asserted here
@@ -270,8 +270,8 @@ async fn a_changed_file_is_the_engines_own_diff() {
 /// A file only the second version has is every line of it, added.
 ///
 /// A literal rather than the engine, for the reason in the header: the
-/// renderer that produces this is private to `diffpack-engine` and there is
-/// nothing to call. What is written out is the table in #15 — `/dev/null` on
+/// renderer that produces this is the one this tool calls, so asking it would
+/// prove nothing. What is written out is the table in #15 — `/dev/null` on
 /// the left, every line prefixed — down to the trailing `+ ` that the
 /// engine's split leaves on a file ending in a newline.
 #[tokio::test]
