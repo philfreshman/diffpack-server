@@ -1,27 +1,3 @@
-//! The MCP endpoint, driven the way a client drives it.
-//!
-//! These tests send real requests through the real router and read real
-//! responses back. Nothing reaches into `rmcp` — the whole point of depending
-//! on the SDK is that its internals are not our contract, and a test that
-//! asserted against them would pass while the wire was broken and fail on an
-//! SDK upgrade that changed nothing a client can see.
-//!
-//! What *is* our contract is the HTTP surface: which methods answer, which
-//! status codes come back, which headers appear and which never do. That is
-//! what is pinned here.
-//!
-//! This is the one suite whose subject is the request rather than the answer,
-//! so it is also the one that takes `tests/common/mod.rs`'s client apart: a
-//! conforming request is what `Client::request` hands back, and each test
-//! below that is about a header changes that one rather than assembling
-//! another. A request built here from scratch would be a second opinion about
-//! what a conforming client sends, which is the thing that module exists to
-//! stop there being.
-//!
-//! No port is bound. `tower`'s `oneshot` hands a request straight to the
-//! router, which is the same code path `vercel_runtime` drives in production
-//! minus the socket.
-
 mod common;
 
 use axum::body::Body;
@@ -30,29 +6,18 @@ use common::{Client, CURRENT, PREVIOUS};
 use diffpack_server::router;
 use serde_json::{json, Value};
 
-/// A client of `version` driving the deployed router.
-///
-/// `router::router()` rather than a router this suite built, because what is
-/// pinned here is the HTTP surface `api/mcp.rs` mounts. The two tests that
-/// are about the allowed-origin list build their own, because the list is
-/// what they are asking about.
 fn client(version: &'static str) -> Client {
     Client::routed(router::router).speaking(version)
 }
 
-/// A JSON-RPC request body.
 fn body(id: u32, method: &str, params: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
 }
 
-/// The call every test that is not about a particular method makes.
 fn list_tools(id: u32) -> Value {
     body(id, "tools/list", json!({}))
 }
 
-/// `tools/list` succeeds on the current revision. An empty list is a correct
-/// answer until #11 lands a tool; what is being pinned is that a client can
-/// connect and ask at all.
 #[tokio::test]
 async fn a_current_client_lists_tools() {
     let answer = client(CURRENT).respond(list_tools(1)).await;
@@ -65,9 +30,6 @@ async fn a_current_client_lists_tools() {
     );
 }
 
-/// The same, from a client that has not moved to the current revision. This
-/// is the compatibility claim the whole design rests on: one stateless
-/// endpoint, every client we care about.
 #[tokio::test]
 async fn a_previous_revision_client_lists_tools() {
     let answer = client(PREVIOUS).respond(list_tools(1)).await;
@@ -76,11 +38,6 @@ async fn a_previous_revision_client_lists_tools() {
     assert!(answer.result()["tools"].is_array());
 }
 
-/// `server/discover` replaced the `initialize` handshake, so it is the only
-/// way a client learns what it is talking to. All three answers matter: the
-/// versions bound what can be negotiated, the capabilities say which requests
-/// are worth sending, and the identity is what a user sees in a client's
-/// server list.
 #[tokio::test]
 async fn discover_returns_versions_capabilities_and_identity() {
     let answer = client(CURRENT)
@@ -107,7 +64,6 @@ async fn discover_returns_versions_capabilities_and_identity() {
         result["capabilities"]
     );
 
-    // The identity travels in `_meta` under the key the spec reserves for it.
     let server_info = &result["_meta"]["io.modelcontextprotocol/serverInfo"];
     assert_eq!(server_info["name"], "diffpack");
     assert_eq!(
@@ -117,10 +73,6 @@ async fn discover_returns_versions_capabilities_and_identity() {
     );
 }
 
-/// A `tools/list` result has to carry `ttlMs` and `cacheScope`: from
-/// `2026-07-28` they are how a client knows whether it may reuse the list
-/// instead of asking again, and on a serverless function every avoided round
-/// trip is an avoided cold start.
 #[tokio::test]
 async fn tools_list_carries_a_ttl_and_a_cache_scope() {
     let result = client(CURRENT).respond(list_tools(1)).await.result();
@@ -136,10 +88,6 @@ async fn tools_list_carries_a_ttl_and_a_cache_scope() {
     );
 }
 
-/// The spec asks for a deterministic order so that a client can cache the
-/// list and compare it cheaply. `tests/tools.rs` says which tools there are;
-/// what is pinned here is that two calls agree and that the order is the
-/// one a client can predict without having seen a listing before.
 #[tokio::test]
 async fn tools_are_listed_in_a_deterministic_order() {
     let names = |result: &Value| -> Vec<String> {
@@ -164,10 +112,6 @@ async fn tools_are_listed_in_a_deterministic_order() {
     );
 }
 
-/// The transport says a server that does not offer a server-initiated stream
-/// answers `GET` with `405`, and the same for `DELETE`, which only ever
-/// existed to end a session. A serverless function has neither: there is no
-/// process to hold a stream open and no session to end.
 #[tokio::test]
 async fn get_and_delete_are_method_not_allowed() {
     for method in ["GET", "DELETE"] {
@@ -194,10 +138,6 @@ async fn get_and_delete_are_method_not_allowed() {
     }
 }
 
-/// No session id, ever — not echoed, not minted. The function that answers
-/// the next request is a different process with no memory of this one, so a
-/// session id would be a promise the deployment cannot keep: a client that
-/// believed it would send it back and be told the session is gone.
 #[tokio::test]
 async fn no_answer_carries_a_session_id() {
     let offered = "a-session-id-a-client-invented";
@@ -221,14 +161,6 @@ async fn no_answer_carries_a_session_id() {
     }
 }
 
-/// `Origin` is the one header a browser cannot be made to lie about, so it is
-/// the whole of the cross-origin defence for a public endpoint. A page that
-/// is not on the list must not be able to drive this server with a user's
-/// credentials.
-///
-/// A request with no `Origin` is not a browser request and is accepted: every
-/// MCP client we care about — Claude Code, Claude Desktop, Codex — is a local
-/// process that sends none.
 #[tokio::test]
 async fn a_disallowed_origin_is_forbidden_and_an_absent_one_is_not() {
     let client = allowing(vec![]);
@@ -252,8 +184,6 @@ async fn a_disallowed_origin_is_forbidden_and_an_absent_one_is_not() {
     );
 }
 
-/// The list is configuration, not a constant: a browser-based client can be
-/// let in without a code change, which is what #25 will need.
 #[tokio::test]
 async fn an_allowed_origin_is_served() {
     let client = allowing(vec!["https://app.example".to_owned()]);
@@ -267,8 +197,6 @@ async fn an_allowed_origin_is_served() {
     assert_eq!(client.send(request).await.status, StatusCode::OK);
 }
 
-/// A client over a router that allows exactly `origins` — the seam the two
-/// tests above need, because the allowed list is the thing under test.
 fn allowing(origins: Vec<String>) -> Client {
     Client::routed(move || {
         router::router_with(
@@ -278,9 +206,6 @@ fn allowing(origins: Vec<String>) -> Client {
     })
 }
 
-/// `/health` predates the protocol and outlives it: it is what #8 deploys
-/// against, and a change to the router that stranded it would take the only
-/// check that does not need an MCP client with it.
 #[tokio::test]
 async fn health_still_answers() {
     let request = Request::builder()
@@ -296,10 +221,6 @@ async fn health_still_answers() {
     assert_eq!(answer.json(), diffpack_server::health::body());
 }
 
-/// Every path reaches this function (`vercel.json` rewrites `/(.*)` to it), so
-/// the router owns the 404 as well. It is JSON because everything else this
-/// endpoint answers is, and a client parsing the body should not have to
-/// special-case one route.
 #[tokio::test]
 async fn an_unknown_path_is_not_found() {
     let request = Request::builder()

@@ -1,21 +1,5 @@
-//! What a registry is, asked of the one module that knows.
-//!
-//! Every expectation here comes from [`CONTEXT.md`](../CONTEXT.md) or from
-//! the issue that owns the fact — #10 for the archive URLs, #18 for the
-//! version sources and their orderings, #19 for search — and never from
-//! running the code and recording what it said. A test that agreed with the
-//! implementation by construction would let all five copies this module
-//! replaces come back one field at a time.
-//!
-//! Nothing here reaches the network, which is the property that makes every
-//! registry fact cheap to assert: this module says *where* and *what shape*,
-//! and `archive` (#10) is what fetches.
-
 use diffpack_server::registry::{self, ArchiveSource, Hit, Registry, SearchSource, VersionSource};
 
-/// The identifier is what a parameter and a cache key spell; the name is what
-/// a message to a model says. They are deliberately different strings —
-/// `crates` and `crates.io` — and CONTEXT.md is where the pairing is fixed.
 #[test]
 fn every_registry_carries_the_identifier_and_the_name_it_is_known_by() {
     let known: Vec<(&str, &str)> = Registry::ALL
@@ -30,10 +14,6 @@ fn every_registry_carries_the_identifier_and_the_name_it_is_known_by() {
     );
 }
 
-/// The identifier is also how a registry arrives: a tool is given `crates`,
-/// not a `Registry`. Round-tripping every variant is what keeps the parser
-/// and [`Registry::id`] from disagreeing about a spelling, which is the
-/// failure that makes a package unreachable rather than a compile error.
 #[test]
 fn a_registry_parses_from_its_identifier_and_nothing_else() {
     for registry in Registry::ALL {
@@ -62,10 +42,6 @@ fn a_registry_parses_from_its_identifier_and_nothing_else() {
     );
 }
 
-/// A registry crosses the wire as its identifier and is read back the same
-/// way, so the JSON a tool is called with, the JSON `diffpack://registries`
-/// (#16) serves and the value in a cache key are one spelling rather than
-/// three.
 #[test]
 fn a_registry_serialises_as_the_identifier_it_parses_from() {
     for registry in Registry::ALL {
@@ -83,10 +59,6 @@ fn a_registry_serialises_as_the_identifier_it_parses_from() {
     }
 }
 
-/// An identifier that is not one of ours is refused, and the refusal names
-/// the ones that are: the message reaches a client as `-32602` through
-/// [`Failure::InvalidParams`](diffpack_server::error::Failure), and a client
-/// that is told only "unknown variant" has to guess what would have worked.
 #[test]
 fn an_unknown_identifier_is_refused_by_naming_the_ones_that_exist() {
     let refusal = serde_json::from_value::<Registry>(serde_json::json!("go"))
@@ -102,11 +74,6 @@ fn an_unknown_identifier_is_refused_by_naming_the_ones_that_exist() {
     }
 }
 
-/// The `registry` enum a tool declares is this module's, generated from
-/// [`Registry::ALL`] rather than written out beside each tool. A fourth
-/// registry is then a variant, not a schema somebody has to remember to
-/// widen — and a schema that promised a registry the server cannot parse
-/// would be a tool advertising a call that always fails.
 #[test]
 fn the_schema_lists_exactly_the_registries_this_server_has() {
     let schema = serde_json::to_value(schemars::schema_for!(Registry)).expect("a schema is JSON");
@@ -122,18 +89,6 @@ fn the_schema_lists_exactly_the_registries_this_server_has() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Where a version's archive is
-// ---------------------------------------------------------------------------
-
-/// npm and crates.io publish an archive at a path anyone can construct; PyPI
-/// lists a version's files in its own metadata and nowhere else. Both are
-/// answers to the same question, which is why they are one type: a caller
-/// asks where the archive is and is told either the URL or what to fetch
-/// first, rather than learning that PyPI is special.
-///
-/// The URLs are #10's, and the npm rule is the one that is not obvious — the
-/// path keeps the scope and the filename drops it.
 #[test]
 fn every_registry_says_how_to_reach_a_version_archive() {
     let source = |registry: Registry, package: &str, version: &str| {
@@ -171,10 +126,6 @@ fn every_registry_says_how_to_reach_a_version_archive() {
     );
 }
 
-/// The second half of the PyPI hop: which of a version's files to take. A
-/// source distribution is what a diff wants — a wheel is built output — and
-/// the preference order is the engine's, so the browser and the server pick
-/// the same file for the same version.
 #[test]
 fn a_listing_is_read_for_the_archive_a_diff_wants() {
     let listing = |files: &str| format!(r#"{{"urls":[{files}]}}"#);
@@ -203,19 +154,6 @@ fn a_listing_is_read_for_the_archive_a_diff_wants() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Where the rest of a registry's answers come from
-// ---------------------------------------------------------------------------
-
-/// Where each registry's versions are listed.
-///
-/// This used to assert a direction beside each URL — which end of the
-/// document the newest release is at — and the direction was wrong. deps.dev
-/// sorts PyPI's versions lexically by version string rather than by date, so
-/// "oldest first, reversed" reported `requests` 2.9.2 as its newest release
-/// instead of 2.34.2; and npm's order never survived parsing, because its
-/// versions are a JSON object and this crate's map is a `BTreeMap`. Newest
-/// first is a date now, and `read_versions` is where it is asserted.
 #[test]
 fn every_registry_says_where_its_versions_are_listed() {
     assert_eq!(
@@ -244,14 +182,6 @@ fn every_registry_says_where_its_versions_are_listed() {
     );
 }
 
-/// Where a search is asked. npm and crates.io answer a query from an
-/// endpoint anyone can build; PyPI answers none, so what it is asked for is
-/// the index of everything it publishes and the query is applied on this
-/// side. #19 records why that is the source and what the alternatives cost.
-///
-/// The URL is the whole of what a caller is told, which is why PyPI's
-/// carries no query: a source that cannot be asked a question is still a
-/// source, and reading its answer is `read_hits`'s half of the job.
 #[test]
 fn search_comes_from_the_registrys_own_index() {
     assert_eq!(
@@ -282,12 +212,6 @@ fn search_comes_from_the_registrys_own_index() {
     );
 }
 
-/// Whether a source answers every query with the same document, which is the
-/// difference between holding one index and caching results. PyPI's URL
-/// carries no query — the matching happens here — so one fetch serves every
-/// search that instance makes; npm's and crates.io's carry the query, and
-/// holding those answers would be a result cache with a staleness nobody
-/// asked for.
 #[test]
 fn only_a_source_that_is_the_whole_index_says_so() {
     assert!(
@@ -303,10 +227,6 @@ fn only_a_source_that_is_the_whole_index_says_so() {
     }
 }
 
-/// What a source is asked *for* travels with where it is: the same URL serves
-/// PyPI's index as a web page or as PEP 691 JSON depending on what the
-/// request says it accepts, so a caller that sent the wrong one would be
-/// handed HTML and read no hits out of it at all.
 #[test]
 fn a_source_says_what_to_ask_it_for() {
     assert_eq!(
@@ -321,12 +241,6 @@ fn a_source_says_what_to_ask_it_for() {
     );
 }
 
-/// A limit is asked of a source in that source's own units, and no source is
-/// asked for more than it answers: npm refuses a `size` over 250 and
-/// crates.io a `per_page` over 100, so a caller's larger limit is narrowed
-/// here rather than sent and rejected. The narrowing is this module's
-/// because the numbers are the registries', and a caller that had to know
-/// them would be the per-registry match this module holds.
 #[test]
 fn a_source_is_never_asked_for_more_than_it_answers() {
     assert_eq!(
@@ -349,15 +263,6 @@ fn a_source_is_never_asked_for_more_than_it_answers() {
     );
 }
 
-/// What a search answers with is this module's to read, for the same reason
-/// where to ask it is: the three sources agree about nothing — npm wraps a
-/// package in an `objects` array, crates.io returns `crates`, and PyPI's
-/// index is a list of names with no version and no summary anywhere in it. A
-/// caller left to tell them apart would be the per-registry `match` this
-/// module exists to hold.
-///
-/// The body below is npm's own shape, cut down to the three fields a hit
-/// carries. #19 is where the fields are fixed.
 #[test]
 fn npms_search_answer_reads_as_hits() {
     let body = r#"{"objects":[
@@ -383,12 +288,6 @@ fn npms_search_answer_reads_as_hits() {
     );
 }
 
-/// crates.io answers with `crates`, and with three version fields that do not
-/// have to agree. The one a hit carries is `default_version` — what the
-/// registry hands a caller that did not ask for a version, which is the same
-/// thing npm's `version` is. `newest_version` would answer a search for a
-/// crate whose latest release is a pre-release with a version nobody is meant
-/// to install yet.
 #[test]
 fn crates_ios_search_answer_reads_as_hits() {
     let body = r#"{"crates":[
@@ -407,17 +306,6 @@ fn crates_ios_search_answer_reads_as_hits() {
     );
 }
 
-/// PyPI's index is every name it publishes and nothing else, so the matching
-/// and the ordering are this server's rather than a search engine's. The rule
-/// is one a model can be told in a sentence and a reader can predict: the
-/// name itself first, then the names that start with the query, then the ones
-/// that merely contain it; shortest first inside each group, and
-/// alphabetically where two are the same length.
-///
-/// Matching ignores case because a half-remembered name is the thing this
-/// tool is for. The name that comes back is still the index's own spelling —
-/// `PyYAML` is answered as `PyYAML`, because that is what every other tool
-/// here takes as a package.
 #[test]
 fn pypis_index_reads_as_hits_the_query_matches() {
     let body = r#"{"meta":{"api-version":"1.4"},"projects":[
@@ -443,10 +331,6 @@ fn pypis_index_reads_as_hits_the_query_matches() {
     );
 }
 
-/// A PyPI hit has a name and nothing else, and that is the source rather than
-/// an omission: the index carries no version and no summary for anything in
-/// it. A hit that invented either would be this server guessing on a
-/// registry's behalf.
 #[test]
 fn a_pypi_hit_carries_the_name_the_index_carries_and_no_more() {
     let body = r#"{"meta":{"api-version":"1.4"},"projects":[{"name":"requests"}]}"#;
@@ -461,16 +345,6 @@ fn a_pypi_hit_carries_the_name_the_index_carries_and_no_more() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The outbound allowlist
-// ---------------------------------------------------------------------------
-
-/// A registry's hosts are the hosts of the URLs it builds, which is what
-/// makes the allowlist a consequence of this module rather than a second list
-/// beside it. A source added above without its host reaching this set is a
-/// registry that is allowed to be asked and not allowed to answer, and that
-/// failure looks like a broken registry — which is how allowlists get widened
-/// until they allow everything.
 #[test]
 fn a_registrys_hosts_are_the_hosts_of_the_urls_it_builds() {
     for registry in Registry::ALL {
@@ -500,10 +374,6 @@ fn a_registrys_hosts_are_the_hosts_of_the_urls_it_builds() {
     }
 }
 
-/// PyPI's archives are served from a host no URL here names: the address
-/// comes out of the metadata at request time. It is declared beside the
-/// registry that needs it, so that the allowlist still covers everything the
-/// fetch path reaches.
 #[test]
 fn a_host_that_only_a_listing_names_is_allowed_too() {
     assert!(
@@ -513,10 +383,6 @@ fn a_host_that_only_a_listing_names_is_allowed_too() {
     );
 }
 
-/// The allowlist is the union over the registries there are, so adding one
-/// adds its hosts and no edit anywhere else. This is the property the issue
-/// asks to be proven rather than asserted: a list that has to be widened by
-/// hand is a list that is one registry behind.
 #[test]
 fn the_allowlist_is_the_union_and_grows_with_the_registries_in_it() {
     assert_eq!(
@@ -534,9 +400,6 @@ fn the_allowlist_is_the_union_and_grows_with_the_registries_in_it() {
     );
 }
 
-/// The point of the allowlist: a registry name arriving in a tool argument
-/// must never become a request to an arbitrary host. Each of these is a way
-/// of looking like a registry without being one.
 #[test]
 fn a_host_outside_the_allowlist_is_refused() {
     assert!(
@@ -565,16 +428,6 @@ fn a_host_outside_the_allowlist_is_refused() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The rules an agent cannot guess
-// ---------------------------------------------------------------------------
-
-/// #23's point: a name is taken verbatim, and what "verbatim" costs differs
-/// per registry. An agent that assumes npm names are one segment sends half
-/// of a scoped name, and one that assumes PyPI names are normalised asks for
-/// `typing-extensions` when the package is `Typing.Extensions`. Each
-/// registry says its own rule, and `diffpack://registries` (#16) is where an
-/// agent reads them.
 #[test]
 fn every_registry_states_the_name_rule_that_trips_an_agent() {
     let rules: Vec<&str> = Registry::ALL
@@ -610,10 +463,6 @@ fn every_registry_states_the_name_rule_that_trips_an_agent() {
     );
 }
 
-/// The rule that is not per-registry: a version is one published version, as
-/// the registry spells it. It sits beside the three because it is read in the
-/// same breath — an agent handed a name rule and left to guess whether a
-/// range works will try one.
 #[test]
 fn a_version_is_stated_to_be_exact_wherever_a_name_rule_is_read() {
     assert!(

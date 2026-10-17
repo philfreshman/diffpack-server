@@ -1,29 +1,13 @@
-//! What this server tells a client it is, and what it can do.
-//!
-//! [`Diffpack`] is the MCP handler: one value, built fresh for every request,
-//! answering `server/discover`, the two lists a client discovers this server
-//! through, and the calls and reads that follow them. It describes neither a
-//! tool nor a resource — [`crate::tools`] and [`crate::resources`] each hold
-//! a definition beside the handler that answers it, and what is left here is
-//! identity, capabilities and handing a request to the collection that owns
-//! it. [`transport_config`] is how the handler is exposed over Streamable
-//! HTTP; [`crate::router`] puts the two together.
-//!
-//! # Why there is no session
-//!
-//! Revision `2026-07-28` removed protocol-level sessions and the `initialize`
-//! handshake: every request carries its own protocol version and capabilities,
-//! and `server/discover` replaced the handshake. That is not a constraint here
-//! so much as a description — a Vercel function has no warm process to hold a
-//! session in, so a session id would be a promise the deployment could not
-//! keep. Clients on older revisions are served statelessly too, for the same
-//! reason: there is nowhere for their session to live either.
-
 use std::borrow::Cow;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 
 use futures::FutureExt as _;
+#[expect(
+    deprecated,
+    reason = "forwarding a deprecated method is still forwarding"
+)]
+use rmcp::model::SetLevelRequestParams;
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CancelTaskParams,
     CancelledNotificationParam, CompleteRequestParams, CompleteResult, CustomNotification,
@@ -34,14 +18,6 @@ use rmcp::model::{
     ReadResourceResponse, ServerCapabilities, ServerConfig, SubscribeRequestParams,
     SubscriptionFilter, Tool, UnsubscribeRequestParams, UpdateTaskParams,
 };
-// Logging was deprecated by SEP-2577, but `set_level` is still on the trait
-// and a wrapper that skipped it would answer for the handler it wraps. It is
-// forwarded like everything else; the deprecation is rmcp's to carry.
-#[expect(
-    deprecated,
-    reason = "forwarding a deprecated method is still forwarding"
-)]
-use rmcp::model::SetLevelRequestParams;
 use rmcp::service::{NotificationContext, RequestContext, SubscriptionContext};
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
@@ -50,66 +26,27 @@ use crate::error::Failure;
 use crate::resources;
 use crate::tools::{self, Call, Ctx};
 
-/// The name a client shows a user for this server.
-///
-/// Not `diffpack-server`: the crate is the server, but what a user picked in
-/// their client is the product. The version beside it is the crate's, so the
-/// identity names the build that answered — the same reasoning as
-/// [`crate::health`].
 pub const NAME: &str = "diffpack";
 
-/// How long a client may treat a `tools/list` answer as fresh.
-///
-/// The tool list changes only when a new build deploys, so an hour of
-/// staleness costs a client nothing and saves it a round trip — which on a
-/// serverless function is a round trip that might have paid for a cold start.
 pub const TOOL_LIST_TTL_MS: u64 = 60 * 60 * 1000;
 
-/// The MCP server.
-///
-/// Built by the service factory on every request, so it holds nothing that
-/// outlives one: shared state (the HTTP client, the Blob client of #20) is
-/// captured by the factory closure and cloned into [`Ctx`], not stored here.
-///
-/// It describes no tool. A tool's definition lives with its handler in its
-/// own module under [`crate::tools`], and what is left here is identity,
-/// capabilities and handing a call to the collection — see ADR 0002.
 #[derive(Debug, Clone, Default)]
 pub struct Diffpack {
-    /// What a tool handler is allowed to reach, for the length of one
-    /// request.
     ctx: Ctx,
 }
 
 impl Diffpack {
-    /// What the deployed function serves: archives from the registries.
     pub fn new() -> Self {
         Self::with_ctx(Ctx::new())
     }
 
-    /// The same handler, with what its tools may reach supplied.
-    ///
-    /// The other half of the seam `router_with` opens. A factory that builds
-    /// this is how the suite puts the fixture archive adapter behind every
-    /// tool without any tool knowing which adapter it has.
     pub fn with_ctx(ctx: Ctx) -> Self {
         Self { ctx }
     }
 }
 
 impl ServerHandler for Diffpack {
-    /// Identity, capabilities and the one paragraph an agent reads before it
-    /// decides whether this server is worth calling.
-    ///
-    /// `server/discover` is built from this and from
-    /// [`Self::supported_protocol_versions`], so there is one place to change
-    /// when either moves.
     fn get_info(&self) -> ServerConfig {
-        // Resources are advertised as well as served. The list answers
-        // whichever way this reads, so a server that offered them and said
-        // nothing here would reach a client as a server that has none —
-        // `server/discover` replaced the handshake, and this is the only
-        // place a client is told which requests are worth sending.
         ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
@@ -128,22 +65,10 @@ impl ServerHandler for Diffpack {
         )
     }
 
-    /// Every revision the SDK knows, oldest first.
-    ///
-    /// Deliberately not narrowed to the current one. The clients that matter
-    /// are not all on `2026-07-28`, this server holds no state that an older
-    /// revision's session rules could contradict, and a client turned away
-    /// here has no fallback — there is only the one endpoint.
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
         Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS)
     }
 
-    /// The tool list, with the freshness a client needs to avoid asking again.
-    ///
-    /// `cacheScope` is public because this server has no authorization
-    /// contexts to keep apart: every caller is anonymous and every caller gets
-    /// the same list, so an intermediary caching one answer for everyone is
-    /// correct rather than a leak.
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -154,17 +79,10 @@ impl ServerHandler for Diffpack {
             .with_cache_scope(CacheScope::Public))
     }
 
-    /// One tool's definition, which the transport reads to validate the
-    /// SEP-2243 `Mcp-Param-*` headers against the body. The same collection
-    /// answers it, so what a header is checked against is what `tools/list`
-    /// advertised.
     fn get_tool(&self, name: &str) -> Option<Tool> {
         tools::definition_of(name)
     }
 
-    /// The resources a client can read by name, with the same freshness hint
-    /// the tool list carries and for the same reason: the catalogue changes
-    /// only when a build deploys.
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -175,11 +93,6 @@ impl ServerHandler for Diffpack {
             .with_cache_scope(CacheScope::Public))
     }
 
-    /// The resources a client reads by filling a URI in.
-    ///
-    /// A separate method from [`Self::list_resources`] because they are
-    /// separate shapes — see [`crate::resources`] — and not because the
-    /// collection is split.
     async fn list_resource_templates(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -192,66 +105,17 @@ impl ServerHandler for Diffpack {
         )
     }
 
-    /// Hand the read to the module that owns that URI.
-    ///
-    /// The same shape as [`Self::call_tool`] and for the same reason: which
-    /// URI resolves to what, and which channel a refusal takes, is decided
-    /// once in [`crate::resources`] rather than here. Since #85 the code a
-    /// refusal carries is the [`Failure`]'s too, so there is nothing for this
-    /// method to choose and [`Failure::refuse`] is the whole of the mapping.
-    ///
-    /// # Why this writes no line, and what it now costs
-    ///
-    /// [`crate::tools::call`] leaves a [`Line`](crate::log::Line) behind and
-    /// this does not, so a resource read is invisible to [`crate::log`]: no
-    /// duration, no outcome, and no `cache` field. #26 owns it, and this is a
-    /// note about what has changed under that deferral rather than a repeat of
-    /// it.
-    ///
-    /// It was a small gap when resource reads fetched their own archives every
-    /// time. It is not one now. #83 made the two diff resources go through
-    /// `diff_package_versions::compare`, which is the path that consults the
-    /// store, and #84 gave an entry's patches a reader — so a read of one
-    /// file's diff can be served entirely out of the cache and fetch nothing
-    /// at all. The calls the cache does the most for are exactly the calls
-    /// nothing counts, which means the hit rate in the log is taken over the
-    /// population that benefits least.
-    ///
-    /// Landing it here would have been a second design inside a change about
-    /// error codes, and not a small one: a `Line` is built from a tool name
-    /// and a [`JsonObject`](rmcp::model::JsonObject) of arguments, and a read
-    /// has a URI and nothing else. What that line says — whether the handle is
-    /// decoded so the package and version can be counted, or logged opaque —
-    /// is a decision about what the log exposes, which is #26's to make along
-    /// with `Line`'s own shape and `CONTEXT.md`'s entry saying a Line is one
-    /// per tool call.
-    ///
-    /// What it will cost is smaller since #96. The step that makes a call's
-    /// tally, runs the work and writes the line is one function,
-    /// `tools::run`, so landing it is this read handed to that with whatever
-    /// line #26 settles on — not a copy of [`crate::tools::call`] with the
-    /// dispatch swapped out.
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        // A call of its own, so the read's tally is nobody else's. Nothing
-        // reads it: the line a read leaves is #26's, and until then the
-        // tally is filled and dropped, as it was when it lived in the `Ctx`.
         resources::read(&request.uri, &Call::new(&self.ctx))
             .await
             .map(ReadResourceResponse::from)
             .map_err(Failure::refuse)
     }
 
-    /// Hand the call to the module that owns that name.
-    ///
-    /// Every decision about the answer — whether the arguments validate,
-    /// which channel a failure takes, what `structuredContent` is built from
-    /// — is made once, in [`crate::tools`], for every tool. There is nothing
-    /// to add here, and a tool that needed something added here would be a
-    /// tool that had escaped the shape.
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
@@ -263,50 +127,10 @@ impl ServerHandler for Diffpack {
     }
 }
 
-/// A handler whose panics become JSON-RPC errors instead of silence.
-///
-/// # Why this cannot be an HTTP layer
-///
-/// The obvious place for a panic guard is a `tower` layer on the HTTP stack,
-/// and it is the wrong place. `rmcp` runs the handler on a task of its own
-/// (`tokio::spawn`, in its Streamable HTTP service), so a panic unwinds that
-/// task and never passes through the tower stack at all. The HTTP side is
-/// left awaiting a response that will never be sent: the request does not
-/// fail, it *hangs*, until Vercel kills the function at `maxDuration` and the
-/// client is left with a dropped connection and no idea which call did it.
-///
-/// That is strictly worse than the `500` #7 set out to prevent, so the guard
-/// has to be inside the handler, above the spawn. Here the panic is still a
-/// value, the request id is still in hand, and the answer is an ordinary
-/// JSON-RPC internal error that a client can render and a caller can report.
-///
-/// The panic's own message is deliberately not forwarded. It is written for
-/// us, it can name a file in this repository, and the caller can do nothing
-/// with it — #26 is where it reaches a log instead.
 #[derive(Debug, Clone)]
 pub struct Guarded<S>(pub S);
 
-/// # Why every method is written out
-///
-/// A wrapper that implements only the methods it cares about is not a
-/// wrapper: the ones it leaves out resolve to the *trait's* defaults, not to
-/// the handler underneath, and the inner handler is never called. For
-/// `resources/list` that default is an empty list, so the failure mode is a
-/// successful, wrong answer — a resource this server offers, reported as
-/// absent, with nothing anywhere saying so. `tests/errors.rs` pins it.
-///
-/// `rmcp` has this impl as a macro for its own `Box` and `Arc` wrappers, but
-/// it is private to that crate, so the forwarding is spelled out here. The
-/// cost is that a method added to `ServerHandler` in a later `rmcp` silently
-/// falls back to its default again; the compiler cannot warn about that, so
-/// the upgrade is the moment to re-read this impl against the trait.
 impl<S: ServerHandler> ServerHandler for Guarded<S> {
-    // -----------------------------------------------------------------------
-    // Not futures, so there is nothing for `catch_unwind` to wrap. These are
-    // read off a handler built moments ago, and a panic in one is a panic in
-    // a constant.
-    // -----------------------------------------------------------------------
-
     fn get_info(&self) -> ServerConfig {
         self.0.get_info()
     }
@@ -332,11 +156,6 @@ impl<S: ServerHandler> ServerHandler for Guarded<S> {
     fn get_tool(&self, name: &str) -> Option<Tool> {
         self.0.get_tool(name)
     }
-
-    // -----------------------------------------------------------------------
-    // Requests. Each one has a JSON-RPC id waiting on it, so each one can be
-    // answered with an error instead of left to hang.
-    // -----------------------------------------------------------------------
 
     async fn ping(&self, context: RequestContext<RoleServer>) -> Result<(), ErrorData> {
         guard("answering a ping", self.0.ping(context)).await
@@ -462,10 +281,6 @@ impl<S: ServerHandler> ServerHandler for Guarded<S> {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        // The one that matters. Every tool of phases 3 and 4 runs through
-        // here, against archives from registries we do not control, and an
-        // index that is off by one on a malformed file is a panic like any
-        // other.
         guard("calling a tool", self.0.call_tool(request, context)).await
     }
 
@@ -505,14 +320,6 @@ impl<S: ServerHandler> ServerHandler for Guarded<S> {
         guard("cancelling a task", self.0.cancel_task(request, context)).await
     }
 
-    // -----------------------------------------------------------------------
-    // Notifications. No id, no response, so there is nowhere to put an error
-    // and nothing waiting on one — the guard's whole argument is that a panic
-    // should become the answer, and here there is no answer. A panic in one
-    // of these unwinds the task that delivered the notification and stops
-    // there; #26 is where it reaches a log.
-    // -----------------------------------------------------------------------
-
     async fn on_cancelled(
         &self,
         notification: CancelledNotificationParam,
@@ -546,12 +353,6 @@ impl<S: ServerHandler> ServerHandler for Guarded<S> {
     }
 }
 
-/// Run `handler`, turning a panic into an internal error.
-///
-/// `AssertUnwindSafe` is the honest annotation rather than a way around the
-/// check: nothing here is shared across the catch. The handler is built fresh
-/// per request and dropped after it, so there is no state left half-updated
-/// for a later request to observe.
 async fn guard<T>(
     doing: &'static str,
     handler: impl Future<Output = Result<T, ErrorData>>,
@@ -567,36 +368,11 @@ async fn guard<T>(
         })
 }
 
-/// How the handler is exposed over Streamable HTTP.
-///
-/// `allowed_origins` is the browser origins permitted to drive this server;
-/// see [`crate::router::router`] for where it comes from.
 pub fn transport_config(allowed_origins: Vec<String>) -> StreamableHttpServerConfig {
     StreamableHttpServerConfig::default()
-        // No sessions, for any client. The default keeps them for revisions
-        // before `2026-07-28`, which would mean minting an id in one function
-        // invocation and looking it up in another that has never heard of it.
         .with_legacy_session_mode(false)
-        // An ordinary tool call answers with one `application/json` body
-        // rather than a one-message SSE stream. A stream costs a client a
-        // parser it does not need here, and buys nothing a function that
-        // answers once can deliver. The transport still falls back to SSE if a
-        // handler emits a notification before its result, so nothing is lost.
         .with_json_response(true)
-        // `Host` validation is rmcp's DNS-rebinding defence, and it is aimed
-        // at servers running on a developer's own machine: reject a `Host`
-        // that is not loopback and a rebound name cannot reach them. On a
-        // public deployment it defends nothing — an attacker's page can send
-        // the correct `Host` simply by fetching the real URL — while the
-        // default loopback list would reject every production and preview
-        // deployment. Turned off deliberately; `Origin` below is the defence
-        // that does apply.
         .disable_allowed_hosts()
-        // Enforced even when the list is empty, which is the point: with no
-        // entries every request that carries an `Origin` is refused, and a
-        // request with none is served. That is exactly the shape of the
-        // clients this server has — local processes, no browser — so the
-        // default is the closed one, and opening it is a deployment decision.
         .enforce_origin_validation()
         .with_allowed_origins(allowed_origins)
 }

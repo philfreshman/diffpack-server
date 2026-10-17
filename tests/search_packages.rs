@@ -1,22 +1,3 @@
-//! `search_packages`, driven the way an agent drives it.
-//!
-//! The same two seams the other tool suites use, for the same reason. Most of
-//! what is here goes over the wire — `tools/list` for what a client is told,
-//! `tools/call` for what it gets back — because a test that only called the
-//! handler would keep passing while the definition beside it stopped
-//! matching. The handler is reached directly only where the question is about
-//! the answer's *type* or about which `Failure` a path produces.
-//!
-//! The bodies under `fixtures/searches/` are the three sources' own answers,
-//! cut down to the fields a hit carries: npm's `objects`, crates.io's
-//! `crates`, and a few lines of PyPI's index. The set is keyed by URL, so a
-//! search that built a URL of its own finds nothing there — which makes this
-//! a test of where each registry is asked as well as of what comes back.
-//!
-//! What is deliberately not re-proven here: how a query is matched and
-//! ordered against PyPI's index. That is `crate::registry`'s and
-//! `tests/registry.rs` holds it against a body it can state in full.
-
 mod common;
 
 use common::{Client, FIXTURES};
@@ -29,14 +10,6 @@ use serde_json::{json, Value};
 
 const TOOL: &str = "search_packages";
 
-// ---------------------------------------------------------------------------
-// At the handler
-// ---------------------------------------------------------------------------
-
-/// Which failure a quiet source produces, which is the question the wire
-/// cannot answer: `isError` and a sentence look the same whichever variant
-/// built them, and the variant is what decides whether the sentence says
-/// "try again".
 #[tokio::test]
 async fn the_handler_returns_the_failure_that_says_the_source_is_unwell() {
     let failure = SearchPackages::call(
@@ -57,17 +30,6 @@ async fn the_handler_returns_the_failure_that_says_the_source_is_unwell() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// What a client is told
-// ---------------------------------------------------------------------------
-
-/// The arguments and the answer this tool in particular has, which is #23's
-/// question asked of one tool.
-///
-/// The rules every tool is held to — a description, an object input schema, a
-/// declared output shape, the read-only and open-world hints, the registry
-/// enum — are `tests/tools.rs`'s, over all eight at once. What is here is
-/// only what is true of this one.
 #[tokio::test]
 async fn the_definition_carries_everything_an_agent_needs() {
     let tool = listed(TOOL).await;
@@ -112,11 +74,6 @@ async fn the_definition_carries_everything_an_agent_needs() {
     }
 }
 
-/// The one hint this tool answers differently from every other one here, and
-/// the reason is the whole difference between a search and everything else
-/// this server does: a published version's contents cannot change, and what a
-/// registry has today can. An agent that cached a search on this hint would
-/// be answering tomorrow's question with yesterday's index.
 #[tokio::test]
 async fn a_search_does_not_claim_the_same_answer_twice() {
     let tool = listed(TOOL).await;
@@ -128,10 +85,6 @@ async fn a_search_does_not_claim_the_same_answer_twice() {
     );
 }
 
-/// The asymmetry an agent cannot infer from the schema: a hit's version and
-/// description are absent for PyPI and present for the other two, because
-/// PyPI's index carries neither. A tool that left this to be discovered
-/// would have an agent deciding a PyPI package has no releases.
 #[tokio::test]
 async fn the_description_says_which_registry_answers_with_less() {
     let tool = listed(TOOL).await;
@@ -147,13 +100,6 @@ async fn the_description_says_which_registry_answers_with_less() {
     );
 }
 
-/// The other asymmetry an agent cannot infer from the schema: `limit` says
-/// up to a thousand and no registry answers with that many.
-///
-/// It matters because of what `total` then is. A model asking for five
-/// hundred and reading a total of a hundred would take that as the number of
-/// packages crates.io has answering to its query, and decide on that basis
-/// that there is nothing else to look at.
 #[tokio::test]
 async fn the_description_says_no_registry_answers_with_as_many_as_limit_allows() {
     let tool = listed(TOOL).await;
@@ -169,13 +115,6 @@ async fn the_description_says_no_registry_answers_with_as_many_as_limit_allows()
     );
 }
 
-// ---------------------------------------------------------------------------
-// What it answers
-// ---------------------------------------------------------------------------
-
-/// The whole of what this tool is for: a name half-remembered, and the
-/// packages a registry has that answer to it. npm carries all three fields a
-/// hit can have, so this is also where a full hit is asserted.
 #[tokio::test]
 async fn an_npm_search_answers_with_the_packages_it_found() {
     let result = call(json!({
@@ -206,11 +145,6 @@ async fn an_npm_search_answers_with_the_packages_it_found() {
     );
 }
 
-/// crates.io, which answers in a shape of its own and with three version
-/// fields that need not agree. The version a hit carries is the one
-/// crates.io would install, which is what `tests/registry.rs` holds the
-/// reading to; what this asserts is that the tool goes through that reading
-/// rather than around it.
 #[tokio::test]
 async fn a_crates_io_search_answers_with_the_crates_it_found() {
     let result = call(json!({
@@ -231,10 +165,6 @@ async fn a_crates_io_search_answers_with_the_crates_it_found() {
     );
 }
 
-/// PyPI, whose answer is the index of everything it publishes rather than a
-/// reply to a query. What a caller sees is the same shape as the other two,
-/// minus the fields PyPI's index does not carry — which is the one asymmetry
-/// the tool's description tells an agent about out loud.
 #[tokio::test]
 async fn a_pypi_search_answers_with_names_and_says_no_more_than_that() {
     let result = call(json!({
@@ -256,11 +186,6 @@ async fn a_pypi_search_answers_with_names_and_says_no_more_than_that() {
     );
 }
 
-/// A limit is asked *of the source*, not applied to what comes back. The
-/// fixture set is keyed by URL, so this passes only if the number a caller
-/// gave reached the request npm was sent — which is the difference between
-/// politeness about how much an agent reads and politeness about how much
-/// somebody else's server is made to send.
 #[tokio::test]
 async fn a_limit_is_what_the_source_is_asked_for() {
     let result = call(json!({
@@ -287,10 +212,6 @@ async fn a_limit_is_what_the_source_is_asked_for() {
     );
 }
 
-/// A query nobody publishes anything for is an empty answer and not a
-/// failure: there is nothing for a model to fix, and an `isError` here would
-/// have it apologising for a registry's silence or retrying a search that
-/// worked.
 #[tokio::test]
 async fn a_query_that_matches_nothing_is_an_empty_page() {
     let result = call(json!({
@@ -312,12 +233,6 @@ async fn a_query_that_matches_nothing_is_an_empty_page() {
     );
 }
 
-/// The paging arguments say what binds, in `page`'s own words.
-///
-/// A `Page` can hand back a `nextCursor` — a page of long descriptions
-/// reaches the response ceiling before it reaches the limit — so the tool
-/// that returns one has to take one back. Without `cursor` in the schema a
-/// model is handed a resumption token and `deny_unknown_fields` refuses it.
 #[tokio::test]
 async fn the_paging_arguments_document_the_numbers_that_bind() {
     let tool = listed(TOOL).await;
@@ -330,15 +245,6 @@ async fn the_paging_arguments_document_the_numbers_that_bind() {
     assert_eq!(cursor["pattern"], "^p1:[0-9]+$", "got {cursor}");
 }
 
-/// A cursor resumes an answer rather than being refused.
-///
-/// `deny_unknown_fields` is what makes this worth a test: without `cursor`
-/// in `Args`, a model that passed a `nextCursor` back the way the schema
-/// tells it to would get a protocol error it cannot read.
-///
-/// What is resumed is a fresh answer to the same query rather than the page
-/// before it — the source is asked again — which is the whole of why this is
-/// the one tool here that is not idempotent.
 #[tokio::test]
 async fn a_cursor_resumes_the_answer_rather_than_being_refused() {
     let whole = call(json!({ "registry": "npm", "query": "zod" })).await;
@@ -370,17 +276,6 @@ async fn a_cursor_resumes_the_answer_rather_than_being_refused() {
     );
 }
 
-/// A blank query finds nothing, and finds it without asking anybody.
-///
-/// It is the one query the three sources would each answer differently:
-/// every name in PyPI's index begins with nothing, so matching it there
-/// returns a page of whatever happens to be shortest, and npm and crates.io
-/// each have their own idea of a query-less query. None of those is an
-/// answer to "which packages are called this", so the tool gives the one
-/// that is.
-///
-/// Driven against the registry whose fixture set would have answered, so a
-/// pass is the short circuit rather than a URL the set happens not to carry.
 #[tokio::test]
 async fn a_blank_query_finds_nothing_rather_than_everything() {
     for query in ["", "   "] {
@@ -400,11 +295,6 @@ async fn a_blank_query_finds_nothing_rather_than_everything() {
     }
 }
 
-/// A query with spaces around it is the query without them.
-///
-/// A model that pasted a name out of a sentence should get the same answer
-/// as one that typed it, and the alternative is a percent-encoded space in
-/// the URL that npm matches nothing for.
 #[tokio::test]
 async fn a_query_is_trimmed_before_it_reaches_a_registry() {
     let result = call(json!({ "registry": "npm", "query": "  zod  " })).await;
@@ -415,11 +305,6 @@ async fn a_query_is_trimmed_before_it_reaches_a_registry() {
     );
 }
 
-/// A source that is not answering is a tool error the model reads, not a
-/// protocol error it never sees: the remedy is to try again or to search
-/// somewhere else, and only the model can choose. The message says which
-/// registry went quiet and that trying again is worth it, which is the
-/// distinction #7 exists to keep.
 #[tokio::test]
 async fn a_source_that_is_not_answering_is_a_tool_error_a_model_can_retry() {
     let result = call(json!({
@@ -445,10 +330,6 @@ async fn a_source_that_is_not_answering_is_a_tool_error_a_model_can_retry() {
     );
 }
 
-/// And it takes out that registry's search rather than the tool. An agent
-/// that met one failing source and concluded `search_packages` was broken
-/// would stop using it for the two registries that are answering perfectly
-/// well.
 #[tokio::test]
 async fn one_source_being_down_leaves_the_others_answering() {
     let down = call(json!({ "registry": "npm", "query": "outage" })).await;
@@ -461,16 +342,10 @@ async fn one_source_being_down_leaves_the_others_answering() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Driving the endpoint
-// ---------------------------------------------------------------------------
-
-/// The listed definition of `name`, or a panic naming what was listed.
 async fn listed(name: &str) -> Value {
     Client::fixture().listed(name).await
 }
 
-/// Call this tool with `arguments`, returning the `result`.
 async fn call(arguments: Value) -> Value {
     Client::fixture().call(TOOL, arguments).await
 }

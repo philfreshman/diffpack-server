@@ -1,19 +1,3 @@
-//! The live adapter, against the registries themselves.
-//!
-//! Every test here reaches npm, crates.io or PyPI over the network, so every
-//! one is `#[ignore]`d: `cargo test` stays offline and deterministic, and
-//! these are run deliberately.
-//!
-//! ```text
-//! cargo test --test networked -- --ignored
-//! ```
-//!
-//! What they are for is the half `tests/archive.rs` cannot state. That suite
-//! proves what this server does with an archive; this one proves that the
-//! URLs it builds are the URLs these three registries actually serve — which
-//! is a fact about somebody else's server and can only be checked by asking
-//! it. A registry that moved a path would fail here and nowhere else.
-
 use std::time::Instant;
 
 use diffpack_server::archive::{Archive, At};
@@ -22,11 +6,6 @@ use diffpack_server::error::Failure;
 use diffpack_server::registry::{Registry, Version, Versions};
 use diffpack_server::search::Search;
 
-/// npm, end to end: the URL `resolve_archive_url` answers with is a URL npm
-/// serves, and what comes back is a package. The scoped name is the case
-/// worth spending a real request on — the path keeps the scope and the
-/// filename drops it, and a mistake there is a 404 for every `@types/*`
-/// package there is.
 #[tokio::test]
 #[ignore = "networked: fetches from registry.npmjs.org"]
 async fn npm_serves_the_archive_this_server_asks_it_for() {
@@ -41,7 +20,6 @@ async fn npm_serves_the_archive_this_server_asks_it_for() {
     );
 }
 
-/// crates.io, end to end, from the static host rather than the API one.
 #[tokio::test]
 #[ignore = "networked: fetches from static.crates.io"]
 async fn crates_io_serves_the_archive_this_server_asks_it_for() {
@@ -56,12 +34,6 @@ async fn crates_io_serves_the_archive_this_server_asks_it_for() {
     );
 }
 
-/// PyPI, end to end, which is two requests: the version's metadata, then the
-/// artefact it names. That the second URL is one PyPI serves is the part only
-/// a real request can settle — it is chosen from a document rather than built.
-///
-/// `requests` 2.31.0 publishes both an sdist and a wheel, so it is also where
-/// the preference is checked against the real listing rather than a fixture's.
 #[tokio::test]
 #[ignore = "networked: fetches from pypi.org and files.pythonhosted.org"]
 async fn pypi_serves_the_source_distribution_it_lists() {
@@ -83,9 +55,6 @@ async fn pypi_serves_the_source_distribution_it_lists() {
     );
 }
 
-/// The size cap, against a body a registry really serves: the refusal has to
-/// come from the length the registry declares, before the body is read, or
-/// the cap is a report on memory already spent.
 #[tokio::test]
 #[ignore = "networked: fetches from static.crates.io"]
 async fn an_archive_over_the_cap_is_refused_before_it_is_downloaded() {
@@ -104,11 +73,6 @@ async fn an_archive_over_the_cap_is_refused_before_it_is_downloaded() {
     }
 }
 
-/// A version that does not exist is the commonest thing to get wrong, and the
-/// answer has to be one a model can act on — ask for a version that exists —
-/// rather than a status code. What the registry actually answers for a
-/// missing archive is a fact about the registry, which is why this is here
-/// and not in a suite that invents the response.
 #[tokio::test]
 #[ignore = "networked: fetches from registry.npmjs.org"]
 async fn a_version_no_registry_has_is_a_failure_a_model_can_act_on() {
@@ -128,31 +92,6 @@ async fn a_version_no_registry_has_is_a_failure_a_model_can_act_on() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Where a package's versions come from
-// ---------------------------------------------------------------------------
-//
-// The fixture suite proves what this server does with a version document.
-// These prove that the documents are the ones these three sources actually
-// serve, and that each still carries a date per version — which is the field
-// the whole order rests on, and the one a source is free to stop sending.
-//
-// None of them asserts a version number as the newest. That was checked by
-// hand at implementation time and written into #18; asserting it here would
-// be a test that fails the next time somebody publishes. What is asserted is
-// what stays true: a release this server has seen is still listed, and the
-// newest is recent.
-//
-// Each one also asserts that the registry still names a current version, for
-// the reason this file exists: each registry spells that pointer its own way
-// — `dist-tags.latest`, `default_version`, an `isDefault` flag — and a
-// fixture cannot notice one of them being renamed or dropped. The value is
-// not asserted, for the same reason the newest version is not: it moves when
-// somebody publishes. That it is there at all is what a fixture cannot say.
-
-/// npm, end to end. A scoped name is the case worth a real request: it is one
-/// escaped path segment, and getting that wrong is a 404 for every `@types/*`
-/// package there is.
 #[tokio::test]
 #[ignore = "networked: fetches from registry.npmjs.org"]
 async fn npm_lists_the_versions_this_server_asks_it_for() {
@@ -169,7 +108,6 @@ async fn npm_lists_the_versions_this_server_asks_it_for() {
     assert_points_somewhere(&versions, "`dist-tags.latest`");
 }
 
-/// crates.io, end to end, from the API host rather than the static one.
 #[tokio::test]
 #[ignore = "networked: fetches from crates.io"]
 async fn crates_io_lists_the_versions_this_server_asks_it_for() {
@@ -186,13 +124,6 @@ async fn crates_io_lists_the_versions_this_server_asks_it_for() {
     assert_points_somewhere(&versions, "`crate.default_version`");
 }
 
-/// PyPI through deps.dev, and the one that would have shipped wrong.
-///
-/// #18 specified that this source lists oldest-first and should be reversed.
-/// It does not: it sorts lexically by version string, so `requests` ends at
-/// 2.9.2 and the reversal announces a 2016 release as the newest. The fixture
-/// suite proves the ordering against a document that cannot change; this
-/// proves the same thing against the source itself, which can.
 #[tokio::test]
 #[ignore = "networked: fetches from api.deps.dev"]
 async fn pypi_versions_are_ordered_by_date_rather_than_by_the_sources_order() {
@@ -219,7 +150,6 @@ async fn pypi_versions_are_ordered_by_date_rather_than_by_the_sources_order() {
     assert_points_somewhere(&versions, "an `isDefault` version");
 }
 
-/// A package no registry has, asked for by name rather than by version.
 #[tokio::test]
 #[ignore = "networked: fetches from registry.npmjs.org"]
 async fn a_package_no_registry_has_is_a_failure_a_model_can_act_on() {
@@ -236,12 +166,6 @@ async fn a_package_no_registry_has_is_a_failure_a_model_can_act_on() {
     }
 }
 
-/// The newest entry was published in or after `year`, and the list is in the
-/// order this server promises.
-///
-/// The year is a floor rather than a value: a package that has had a release
-/// since then is one whose source is still answering with real dates, and it
-/// does not go stale the way a version number would.
 fn assert_recent(versions: &[Version], year: &str) {
     let newest = versions.first().expect("a published package has versions");
     let published_at = newest
@@ -264,19 +188,6 @@ fn assert_recent(versions: &[Version], year: &str) {
     );
 }
 
-/// The registry still names a current version, and it is one of the versions
-/// it listed.
-///
-/// `field` is where this server reads it, so a failure says which document to
-/// look at rather than only that something moved. The version itself is not
-/// asserted: it changes when somebody publishes, which is what makes it a
-/// thing #61 checked by hand rather than a constant in this file.
-///
-/// That it is *in the list* is asserted here and nowhere in the fixture
-/// suite, because it is a fact about the live document rather than about this
-/// server: a registry may point past its own list — npm does, after an
-/// unpublish — and this server passes that through on purpose. On a package
-/// as ordinary as these three, the two disagreeing means the field moved.
 fn assert_points_somewhere(versions: &Versions, field: &str) {
     let current = versions
         .current
@@ -291,13 +202,6 @@ fn assert_points_somewhere(versions: &Versions, field: &str) {
     );
 }
 
-// ---------------------------------------------------------------------------
-// What a registry publishes
-// ---------------------------------------------------------------------------
-
-/// npm's search endpoint, which is the easy one: it takes a query and answers
-/// it. What only a real request settles is that the shape this server reads
-/// is the shape npm sends.
 #[tokio::test]
 #[ignore = "networked: searches registry.npmjs.org"]
 async fn npm_answers_a_search_in_the_shape_this_server_reads() {
@@ -315,7 +219,6 @@ async fn npm_answers_a_search_in_the_shape_this_server_reads() {
     assert!(hits.len() <= 5, "five were asked for, got {}", hits.len());
 }
 
-/// crates.io, the same question asked of a different shape.
 #[tokio::test]
 #[ignore = "networked: searches crates.io"]
 async fn crates_io_answers_a_search_in_the_shape_this_server_reads() {
@@ -332,11 +235,6 @@ async fn crates_io_answers_a_search_in_the_shape_this_server_reads() {
     );
 }
 
-/// PyPI, which is the whole index and the reason #19 needed deciding. Three
-/// things only a real request can settle: that the index still answers JSON
-/// when asked for PEP 691's media type, that it arrives inside the upstream
-/// timeout at all — it is 44 MB uncompressed — and that a name spelled the
-/// way PyPI spells it comes back spelled that way.
 #[tokio::test]
 #[ignore = "networked: fetches the whole of pypi.org/simple/"]
 async fn pypi_answers_a_search_out_of_the_index_it_publishes() {
@@ -359,13 +257,6 @@ async fn pypi_answers_a_search_out_of_the_index_it_publishes() {
     );
 }
 
-/// And the second search does not fetch it again. A 44 MB document per query
-/// is a tool an agent stops using, so the index a warm instance already has
-/// is the one it answers from until it goes stale.
-///
-/// Timed rather than counted, because what is being asserted is the cost: the
-/// first search is seconds of transfer and the second is a scan of a string
-/// already in memory.
 #[tokio::test]
 #[ignore = "networked: fetches the whole of pypi.org/simple/"]
 async fn a_second_pypi_search_is_answered_from_the_index_already_fetched() {
