@@ -1,14 +1,4 @@
 #!/usr/bin/env bash
-#
-# `src/engine.rs` is the only module allowed to name `diffpack_engine`.
-#
-# The rule is worth enforcing rather than documenting because the failure it
-# prevents is silent: a second importer costs nothing today and turns the next
-# engine bump into an archaeology exercise across the whole crate. A convention
-# holds until someone is in a hurry.
-#
-# Run from the repository root. Exits non-zero, naming every offender, if any
-# file under `src/` or `api/` other than `src/engine.rs` mentions the crate.
 
 set -euo pipefail
 

@@ -1,23 +1,9 @@
-//! The diff handle: what it carries, and what it refuses.
-//!
-//! The handle is what passes between the tool that computes a diff (#13) and
-//! the three that read one back (#14, #15, #16). ADR 0006 says why it carries
-//! the inputs beside the `diff_id`; these tests are that ADR, written as
-//! assertions.
-//!
-//! The expected `diff_id`s come from `fixtures/cache-key-vectors.json`, which
-//! was generated from `docs/cache-key.md` rather than from this crate. A test
-//! that minted a handle and asked the same code what its `diff_id` was would
-//! agree with itself whatever either side did.
-
 use base64::Engine as _;
 use diffpack_server::cache_key::DiffKey;
 use diffpack_server::handle::{DiffHandle, Inputs};
 use diffpack_server::registry::Registry;
 use serde_json::json;
 
-/// The worked example in `docs/cache-key.md`, and the first vector in the
-/// fixture: npm, `zod`, 3.25.76 → 4.0.0, at the default threshold.
 fn zod() -> Inputs {
     Inputs {
         registry: Registry::Npm,
@@ -29,13 +15,8 @@ fn zod() -> Inputs {
     }
 }
 
-/// That vector's `diff_id`, copied from the fixture.
 const ZOD_DIFF_ID: &str = "282467a6bd7b210db4077e71bcf3901550b219852386085452f5739c6b6c436c";
 
-/// The whole point of the handle. An entry the budget's sweep has taken is
-/// gone, so what the reading tools have left is whatever the handle carried:
-/// if every input survives the round trip, a miss costs a recomputation and
-/// nothing else.
 #[test]
 fn a_handle_carries_every_input_a_recompute_needs() {
     let minted = DiffHandle::mint(zod());
@@ -50,9 +31,6 @@ fn a_handle_carries_every_input_a_recompute_needs() {
     );
 }
 
-/// And it still names the same diff. The `diff_id` is the cache lookup and
-/// the string #27 needs; a handle that carried the inputs but pointed at a
-/// different entry would be worse than one that carried nothing.
 #[test]
 fn a_handle_names_the_diff_the_cache_key_document_names() {
     let minted = DiffHandle::mint(zod());
@@ -71,16 +49,8 @@ fn a_handle_names_the_diff_the_cache_key_document_names() {
     );
 }
 
-/// The reason the handle is opaque and verified rather than a JSON object an
-/// agent fills in: with the inputs in it, an agent that can read a field will
-/// eventually edit one, and a handle whose `diff_id` no longer names the diff
-/// its inputs describe is a bug with no good error message. So the two halves
-/// are checked against each other, and a forged handle is the client's
-/// mistake — `-32602`, on the channel a model never reads, because a model
-/// did not write it.
 #[test]
 fn a_handle_whose_diff_id_disagrees_with_its_inputs_is_refused() {
-    // zod's `diff_id`, beside somebody else's package.
     let forged = handle_of(json!({
         "diff_id": ZOD_DIFF_ID,
         "schema": 1,
@@ -106,10 +76,6 @@ fn a_handle_whose_diff_id_disagrees_with_its_inputs_is_refused() {
     );
 }
 
-/// The wire format, written out here rather than read back from the encoder:
-/// a version prefix, and one base64url payload with nothing in it a client is
-/// invited to edit. The prefix is what lets a second format arrive later
-/// without a handle from this one being mistaken for it.
 #[test]
 fn a_handle_is_a_version_prefix_and_an_opaque_payload() {
     let encoded = DiffHandle::mint(zod()).encode();
@@ -135,9 +101,6 @@ fn a_handle_is_a_version_prefix_and_an_opaque_payload() {
     );
 }
 
-/// Every way a string can fail to be a handle takes the same channel and
-/// says the same thing, because the fix is the same call. `-32602` and not a
-/// tool error: a model did not write any of these.
 #[test]
 fn a_malformed_handle_is_refused() {
     let payload = json!({
@@ -210,12 +173,6 @@ fn a_malformed_handle_is_refused() {
     }
 }
 
-/// A handle minted before an engine bump is internally consistent — its
-/// `diff_id` is the hash of the inputs beside it — and still not one this
-/// build can act on: the entry it names was computed by code that is no
-/// longer here, and recomputing would write today's diff under yesterday's
-/// key. It is refused, and the refusal says which of the two problems it is
-/// rather than leaving a stale handle looking like a forged one.
 #[test]
 fn a_handle_from_another_build_of_this_server_is_refused() {
     let older = DiffKey {
@@ -253,10 +210,6 @@ fn a_handle_from_another_build_of_this_server_is_refused() {
     );
 }
 
-/// What #13 puts in its answer and what #14, #15 and #16 read out of their
-/// arguments: one string, not an object with six fields a client fills in.
-/// The `diff_id` still travels beside it as a plain string, because #27 looks
-/// a result up by exactly that.
 #[test]
 fn a_handle_is_one_string_on_the_wire() {
     let handle = DiffHandle::mint(zod());
@@ -274,10 +227,6 @@ fn a_handle_is_one_string_on_the_wire() {
     );
 }
 
-/// A handle that does not survive `decode` does not survive deserialisation
-/// either, which is what makes a tool's `-32602` automatic: `tools::invoke`
-/// turns a rejected argument into `InvalidParams` before a handler runs, so
-/// no handler has to remember to verify one.
 #[test]
 fn an_argument_that_is_not_a_handle_is_refused_before_a_handler_runs() {
     let refused = serde_json::from_value::<DiffHandle>(json!(ZOD_DIFF_ID))
@@ -290,8 +239,6 @@ fn an_argument_that_is_not_a_handle_is_refused_before_a_handler_runs() {
     );
 }
 
-/// And what a client is shown for it: a string, described where the field is,
-/// saying where a handle comes from and that it is not built by hand (#23).
 #[test]
 fn the_schema_says_a_handle_is_minted_rather_than_written() {
     let schema = serde_json::to_value(schemars::schema_for!(DiffHandle)).expect("a schema is JSON");
@@ -314,8 +261,6 @@ fn the_schema_says_a_handle_is_minted_rather_than_written() {
     );
 }
 
-/// A handle built from `payload`, encoded the way the format says rather than
-/// the way this crate happens to encode one.
 fn handle_of(payload: serde_json::Value) -> String {
     format!(
         "d1:{}",
