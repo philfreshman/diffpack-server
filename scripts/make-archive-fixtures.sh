@@ -378,6 +378,45 @@ done
 targz "apart-1.0.0.tgz" "package" "$apart/1.0.0"
 targz "apart-2.0.0.tgz" "package" "$apart/2.0.0"
 
+# --- a comparison over bytes that do not decode ----------------------------
+#
+# `odd-files` holds one undecodable file in one version, which is enough for
+# `get_file_content` and not for a diff: `get_file_diff` (#70) has two sides
+# and two branches, and has to say on each whether what it shows is what the
+# files hold. One file per question:
+#
+# - `logo.png` is binary in both and changed, so it is a diff over
+#   replacement characters. The two differ in their legible tail and not only
+#   in bytes that do not decode: the engine compares decoded text, so two
+#   files differing only there would read as unchanged
+# - `icon.png` is binary and byte-identical, so the answer is the file itself
+# - `README.md` and `src/index.js` decode cleanly, unchanged and changed
+# - `src/legacy.js` is Latin-1 in 1.0.0 and UTF-8 in 2.0.0, so only the first
+#   side fails to decode
+# - `src/far.js` has a Latin-1 line nine lines above its one change, which a
+#   trim at three lines of context leaves out of the answer
+undecodable=$work/undecodable
+for version in 1.0.0 2.0.0; do
+  root=$undecodable/$version/package
+  mkdir -p "$root/src"
+  printf '\211PNG\r\n\032\n\377\375' >"$root/icon.png"
+  write "$root/README.md" '# undecodable
+'
+  {
+    printf '// caf\351\n'
+    for i in 1 2 3 4 5 6 7 8; do printf 'const pad%d = 0;\n' "$i"; done
+    printf 'export const far = %s;\n' "${version%%.*}"
+  } >"$root/src/far.js"
+  write "$root/src/index.js" "export const version = ${version%%.*};
+"
+done
+printf '\211PNG\r\n\032\n\377\376' >"$undecodable/1.0.0/package/logo.png"
+printf '\211PNG\r\n\032\n\377\376IHDR' >"$undecodable/2.0.0/package/logo.png"
+printf '// caf\351\nexport const legacy = 1;\n' >"$undecodable/1.0.0/package/src/legacy.js"
+printf '// caf\303\251\nexport const legacy = 1;\n' >"$undecodable/2.0.0/package/src/legacy.js"
+targz "undecodable-1.0.0.tgz" "package" "$undecodable/1.0.0"
+targz "undecodable-2.0.0.tgz" "package" "$undecodable/2.0.0"
+
 # --- the archive this server will not fetch -------------------------------
 #
 # A real archive at a host no registry names, referenced by a listing that
