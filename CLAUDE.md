@@ -27,8 +27,8 @@ access. Never skip the pre-commit hook with `--no-verify`.
 
 - Only `src/engine.rs` may import `diffpack_engine`. Never reimplement engine
   logic here: a change to how a diff is computed belongs in `diffpack-engine`.
-- Code under `src/tools/` and `src/resources/` reaches the network and the cache
-  only through the seam modules. The allow-list is in
+- Code under `src/tools/`, `src/resources/` and `src/prompts/` reaches the
+  network and the cache only through the seam modules. The allow-list is in
   `scripts/check-tool-seams.sh` and repeated in `docs/architecture.md`; change
   both together.
 - An engine bump moves the `tag` in `Cargo.toml` and `VERSION` in
