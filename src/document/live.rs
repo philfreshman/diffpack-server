@@ -71,3 +71,267 @@ struct Held {
     fetched: Instant,
     body: Arc<[u8]>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::collections::BTreeSet;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use axum::extract::State;
+    use axum::http::StatusCode;
+    use axum::routing::get;
+    use axum::Router;
+    use tokio::sync::watch;
+
+    use crate::fetch::tests::ONE_AT_A_TIME;
+    use crate::fetch::DOWNLOADS_AT_ONCE;
+    use crate::registry::Registry;
+
+    const BURST: usize = DOWNLOADS_AT_ONCE * 2;
+
+    const LIMIT: u64 = 1024;
+
+    const INDEX: &str = "every package there is";
+
+    const ARCHIVE: &str = "one version of one package";
+
+    #[tokio::test]
+    async fn a_cold_burst_fetches_the_index_once() {
+        let _alone = ONE_AT_A_TIME.lock().await;
+        let (urls, stub) = serve(Index::Served).await;
+
+        burst(&urls.index).await;
+
+        assert_eq!(
+            stub.asked(),
+            1,
+            "{BURST} searches arriving together on a cold instance should cost one fetch of \
+             the index"
+        );
+    }
+
+    #[tokio::test]
+    async fn everyone_in_a_cold_burst_is_answered_with_the_index_as_served() {
+        let _alone = ONE_AT_A_TIME.lock().await;
+        let (urls, _) = serve(Index::Served).await;
+
+        for answer in burst(&urls.index).await {
+            let body = answer.expect("the stub serves the index to whoever asks");
+            assert_eq!(
+                &*body,
+                INDEX.as_bytes(),
+                "a search that waited should be answered with what a search alone would get"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cold_burst_leaves_a_download_slot_for_an_archive() {
+        let _alone = ONE_AT_A_TIME.lock().await;
+        let (urls, stub) = serve(Index::HeldUntilAnArchiveArrives).await;
+        let live = Live::new();
+        let a_document = a_document();
+
+        let (searches, archive) = futures::join!(
+            burst(&urls.index),
+            live.body(&urls.archive, LIMIT, &a_document),
+        );
+
+        assert!(
+            archive.is_ok(),
+            "an archive asked for during a burst of index fetches should get a download slot, \
+             got {archive:?}"
+        );
+        assert!(
+            searches.iter().all(Result::is_ok),
+            "the index is served once the archive has arrived, got {searches:?}"
+        );
+        assert_eq!(
+            stub.most_at_once(),
+            1,
+            "a burst of index fetches should hold one download slot at a time"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_fetch_is_not_remembered() {
+        let _alone = ONE_AT_A_TIME.lock().await;
+        let (urls, stub) = serve(Index::RefusedWithItsOwnStatus).await;
+
+        let statuses: BTreeSet<u16> = burst(&urls.index)
+            .await
+            .into_iter()
+            .map(|answer| match answer {
+                Err(Failure::Unavailable { status, .. }) => status,
+                other => panic!("the stub refuses every request for the index, got {other:?}"),
+            })
+            .collect();
+
+        assert_eq!(
+            stub.asked(),
+            BURST,
+            "every caller after a failed fetch should fetch again rather than inherit the failure"
+        );
+        assert_eq!(
+            statuses.len(),
+            BURST,
+            "each caller should get back the failure of its own fetch, got {statuses:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_document_nobody_remembers_does_not_wait_for_the_index() {
+        let _alone = ONE_AT_A_TIME.lock().await;
+        let (urls, _) = serve(Index::HeldUntilAnArchiveArrives).await;
+        let live = Live::new();
+        let (the_index, a_document) = (the_index(), a_document());
+
+        let (index, archive) = futures::join!(
+            live.body(&urls.index, LIMIT, &the_index),
+            live.body(&urls.archive, LIMIT, &a_document),
+        );
+
+        assert!(
+            index.is_ok() && archive.is_ok(),
+            "the index is served only once the archive has arrived, so an archive waiting on \
+             the index's turn leaves both waiting, got {index:?} and {archive:?}"
+        );
+    }
+
+    async fn burst(url: &str) -> Vec<Result<Body, Failure>> {
+        let live = Live::new();
+        let about = the_index();
+
+        futures::future::join_all((0..BURST).map(|_| live.body(url, LIMIT, &about))).await
+    }
+
+    fn the_index() -> About<'static> {
+        About {
+            remember_for: Some(Duration::from_secs(600)),
+            ..a_document()
+        }
+    }
+
+    fn a_document() -> About<'static> {
+        About {
+            registry: Registry::PyPi,
+            accept: None,
+            compressed: false,
+            remember_for: None,
+            nothing_there: 404,
+            blocked: &|| Failure::Internal {
+                doing: "reaching the stub",
+            },
+            missing: &|status| Failure::Unavailable {
+                registry: "pypi".to_owned(),
+                status,
+            },
+            too_large: &|_| Failure::Internal {
+                doing: "reading the stub",
+            },
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum Index {
+        Served,
+        HeldUntilAnArchiveArrives,
+        RefusedWithItsOwnStatus,
+    }
+
+    struct Urls {
+        index: String,
+        archive: String,
+    }
+
+    #[derive(Clone)]
+    struct Stub {
+        index: Index,
+        asked: Arc<AtomicUsize>,
+        in_flight: Arc<AtomicUsize>,
+        peak: Arc<AtomicUsize>,
+        archive_arrived: Arc<watch::Sender<bool>>,
+    }
+
+    impl Stub {
+        fn new(index: Index) -> Self {
+            Self {
+                index,
+                asked: Arc::default(),
+                in_flight: Arc::default(),
+                peak: Arc::default(),
+                archive_arrived: Arc::new(watch::Sender::new(false)),
+            }
+        }
+
+        fn asked(&self) -> usize {
+            self.asked.load(Ordering::SeqCst)
+        }
+
+        fn most_at_once(&self) -> usize {
+            self.peak.load(Ordering::SeqCst)
+        }
+    }
+
+    async fn serve(index: Index) -> (Urls, Stub) {
+        let stub = Stub::new(index);
+        let app = Router::new()
+            .route("/archive", get(answer_archive))
+            .fallback(answer_index)
+            .with_state(stub.clone());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a test can bind a loopback port");
+        let addr = listener
+            .local_addr()
+            .expect("a bound listener has an address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let urls = Urls {
+            index: format!("http://{addr}{}", a_path_no_other_test_has_fetched()),
+            archive: format!("http://{addr}/archive"),
+        };
+        (urls, stub)
+    }
+
+    fn a_path_no_other_test_has_fetched() -> String {
+        static STUBS: AtomicUsize = AtomicUsize::new(0);
+        format!("/simple/{}/", STUBS.fetch_add(1, Ordering::SeqCst))
+    }
+
+    async fn answer_index(State(stub): State<Stub>) -> (StatusCode, &'static str) {
+        let asked = stub.asked.fetch_add(1, Ordering::SeqCst) + 1;
+        let now = stub.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        stub.peak.fetch_max(now, Ordering::SeqCst);
+
+        let answer = match stub.index {
+            Index::Served => (StatusCode::OK, INDEX),
+
+            Index::HeldUntilAnArchiveArrives => {
+                let mut arrived = stub.archive_arrived.subscribe();
+                let _ = arrived.wait_for(|arrived| *arrived).await;
+                (StatusCode::OK, INDEX)
+            }
+
+            Index::RefusedWithItsOwnStatus => (a_refusal_of_its_own(asked), "down"),
+        };
+
+        stub.in_flight.fetch_sub(1, Ordering::SeqCst);
+        answer
+    }
+
+    fn a_refusal_of_its_own(asked: usize) -> StatusCode {
+        let status = 500 + u16::try_from(asked).expect("a test asks a handful of times");
+        StatusCode::from_u16(status).expect("a status in the 500s is a status")
+    }
+
+    async fn answer_archive(State(stub): State<Stub>) -> &'static str {
+        stub.archive_arrived.send_replace(true);
+        ARCHIVE
+    }
+}
