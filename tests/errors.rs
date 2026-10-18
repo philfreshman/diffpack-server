@@ -67,6 +67,16 @@ fn a_resource_that_does_not_resolve_is_invalid_params() {
 }
 
 #[test]
+fn a_prompt_that_does_not_exist_is_invalid_params() {
+    let error = Failure::NoSuchPrompt {
+        name: "review_everything".to_owned(),
+    }
+    .refuse();
+
+    assert_eq!(error.code.0, -32602);
+}
+
+#[test]
 fn our_own_codes_stay_inside_the_implementation_range() {
     for failure in [
         Failure::Internal {
@@ -306,6 +316,10 @@ fn every_cause_a_line_can_carry_names_one_failure() {
         .kind(),
         Failure::NoSuchResource {
             uri: "diffpack://nothing".to_owned(),
+        }
+        .kind(),
+        Failure::NoSuchPrompt {
+            name: "review_everything".to_owned(),
         }
         .kind(),
         Failure::Internal {

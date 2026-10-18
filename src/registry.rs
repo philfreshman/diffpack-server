@@ -65,6 +65,22 @@ impl Registry {
         }
     }
 
+    pub fn manifest(self) -> &'static str {
+        match self {
+            Self::Npm => "`package.json`",
+            Self::Crates => "`Cargo.toml`",
+            Self::PyPi => "`PKG-INFO`, `pyproject.toml` or `setup.py`",
+        }
+    }
+
+    pub fn runtime(self) -> &'static str {
+        match self {
+            Self::Npm => "Node.js",
+            Self::Crates => "Rust",
+            Self::PyPi => "Python",
+        }
+    }
+
     pub fn versions(self, package: &str) -> VersionSource {
         let escaped = escape(package);
         match self {

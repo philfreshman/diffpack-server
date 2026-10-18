@@ -126,6 +126,10 @@ pub enum Failure {
         uri: String,
     },
 
+    NoSuchPrompt {
+        name: String,
+    },
+
     Internal {
         doing: &'static str,
     },
@@ -183,9 +187,10 @@ impl Failure {
                 Channel::Model(ASK_FOR_LESS)
             }
 
-            Self::InvalidParams { .. } | Self::NoSuchTool { .. } | Self::NoSuchResource { .. } => {
-                Channel::Protocol(ErrorCode::INVALID_PARAMS)
-            }
+            Self::InvalidParams { .. }
+            | Self::NoSuchTool { .. }
+            | Self::NoSuchResource { .. }
+            | Self::NoSuchPrompt { .. } => Channel::Protocol(ErrorCode::INVALID_PARAMS),
 
             Self::Internal { .. } => Channel::Protocol(INTERNAL_FAILURE),
         }
@@ -213,6 +218,7 @@ impl Failure {
             Self::InvalidParams { .. } => "invalid_params",
             Self::NoSuchTool { .. } => "no_such_tool",
             Self::NoSuchResource { .. } => "no_such_resource",
+            Self::NoSuchPrompt { .. } => "no_such_prompt",
             Self::Internal { .. } => "internal",
         }
     }
@@ -382,6 +388,7 @@ impl Failure {
             Self::NoSuchResource { uri } => format!("No resource at `{}`.", redact(uri)),
             Self::Internal { doing } => format!("diffpack failed while {doing}."),
             Self::NoSuchTool { name } => format!("No tool named `{}`.", redact(name)),
+            Self::NoSuchPrompt { name } => format!("No prompt named `{}`.", redact(name)),
         }
     }
 }

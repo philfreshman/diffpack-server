@@ -410,6 +410,19 @@ what `resources/list` carries and a template is what
 can follow as it stands.
 _Avoid_: document, asset
 
+**Prompt**:
+A message an agent is handed rather than a call it makes: what to do with the
+Tools, in what order, for one task a person names. A Tool does something and a
+Resource says what is there; a Prompt says how to go about a question with
+both. It renders text from its arguments and reaches nothing — no registry,
+no DiffStore — so a package that does not exist is found out by the first Tool
+the Prompt sends an agent to, not by the Prompt. It names Tools and their
+fields, which makes it the one thing on the surface that goes stale when a
+Tool is renamed; `tests/prompts.rs` holds every name in its text to the tool
+list. `review_upgrade` is the one there is.
+_Avoid_: template, script, recipe, workflow, instructions (that is the
+server's own field)
+
 **Failure**:
 Anything that goes wrong, together with which of MCP's two channels it reaches
 the client on and the JSON-RPC code it carries: a *protocol error* the model

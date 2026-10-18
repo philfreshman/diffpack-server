@@ -10,6 +10,7 @@ pub mod health;
 pub mod log;
 pub mod mcp;
 pub mod page;
+pub mod prompts;
 pub mod registry;
 pub mod resources;
 pub mod router;
