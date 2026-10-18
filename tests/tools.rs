@@ -15,6 +15,14 @@ const TOOLS: [&str; 8] = [
     "search_packages",
 ];
 
+const NEIGHBOURS: [(&str, &str); 5] = [
+    ("get_file_content", "get_file_diff"),
+    ("list_package_files", "get_diff_tree"),
+    ("diff_package_versions", "get_diff_tree"),
+    ("search_packages", "list_package_versions"),
+    ("resolve_archive_url", "list_package_files"),
+];
+
 #[tokio::test]
 async fn the_collection_is_the_tools_the_list_declares() {
     assert_eq!(
@@ -54,6 +62,44 @@ async fn every_tool_is_listed_with_everything_an_agent_needs() {
             "`{name}` answers with structured content, so it has to declare \
              its shape: got {tool}"
         );
+    }
+}
+
+#[tokio::test]
+async fn every_tool_has_a_neighbour_an_agent_could_mistake_it_for() {
+    for name in TOOLS {
+        assert!(
+            NEIGHBOURS
+                .iter()
+                .any(|(one, other)| [one, other].contains(&&name)),
+            "`{name}` should be paired with the tool an agent would weigh it \
+             against, so that its description is held to naming it"
+        );
+    }
+}
+
+#[tokio::test]
+async fn every_tool_says_when_to_call_its_neighbour_instead() {
+    let tools = Client::fixture().tools().await;
+    let description = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| named(tool) == name)
+            .and_then(|tool| tool["description"].as_str())
+            .unwrap_or_default()
+            .to_owned()
+    };
+
+    for (one, other) in NEIGHBOURS {
+        for (tool, neighbour) in [(one, other), (other, one)] {
+            assert!(
+                description(tool).contains(&format!("`{neighbour}`")),
+                "`{tool}` and `{neighbour}` are both plausible answers to \
+                 one question, so `{tool}`'s description should name \
+                 `{neighbour}` and say when to call it instead: got {}",
+                description(tool)
+            );
+        }
     }
 }
 

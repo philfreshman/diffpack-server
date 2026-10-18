@@ -48,7 +48,8 @@ impl Tool for ResolveArchiveUrl {
         `crates` (crates.io), which publish at a predictable path. Takes a \
         registry, a package name and one exact version, all spelled the way \
         the registry spells them. Fetches nothing: the answer is built from \
-        the arguments.";
+        the arguments. To see what is inside a version, call \
+        `list_package_files` instead.";
 
     const READ_ONLY: bool = true;
 

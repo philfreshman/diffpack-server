@@ -253,7 +253,9 @@ impl Tool for GetFileDiff {
     const TITLE: &'static str = "Get file diff";
     const DESCRIPTION: &'static str = "\
         Read one file's diff out of a comparison you have already made, so \
-        you can see what actually changed in it. Takes the handle \
+        you can see what actually changed in it. To read a file as one \
+        version ships it, with nothing to compare it to, call \
+        `get_file_content` instead. Takes the handle \
         `diff_package_versions` gave you and a path from that comparison's \
         tree. Answers with a unified diff: a `--- from` / `+++ to` header, \
         `@@` hunks, and one line per change written as a sign, a space and \

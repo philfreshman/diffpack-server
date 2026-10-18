@@ -64,7 +64,9 @@ impl Tool for SearchPackages {
     const DESCRIPTION: &'static str = "\
         Find packages on a registry from a name you only half remember, or \
         from a word that describes what they do, so you can get an exact \
-        package name to diff. Takes a registry and a query. Hits come back \
+        package name to diff. Once you have the exact name, call \
+        `list_package_versions` instead: a search is for finding a name, not \
+        its versions. Takes a registry and a query. Hits come back \
         best match first, each with the name to pass to the other tools. \
         npm and crates.io hits also carry the current version and the \
         package's own description; PyPI hits carry a name alone, because the \
