@@ -17,10 +17,10 @@ EOF
   fi
 }
 
-require_commands() {
+require_conformance_tools() {
   local missing=()
   local command
-  for command in "$@"; do
+  for command in node npm jq curl; do
     command -v "$command" >/dev/null 2>&1 || missing+=("$command")
   done
   if [[ ${#missing[@]} -gt 0 ]]; then
@@ -59,7 +59,7 @@ run_test() {
 }
 
 run_conformance() {
-  require_commands node npm jq curl || return 1
+  require_conformance_tools || return 1
   ./scripts/conformance.sh
 }
 
