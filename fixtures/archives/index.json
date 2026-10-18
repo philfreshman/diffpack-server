@@ -44,6 +44,9 @@
   "https://registry.npmjs.org/apart/-/apart-1.0.0.tgz": "apart-1.0.0.tgz",
   "https://registry.npmjs.org/apart/-/apart-2.0.0.tgz": "apart-2.0.0.tgz",
 
+  "https://registry.npmjs.org/undecodable/-/undecodable-1.0.0.tgz": "undecodable-1.0.0.tgz",
+  "https://registry.npmjs.org/undecodable/-/undecodable-2.0.0.tgz": "undecodable-2.0.0.tgz",
+
   "https://pypi.org/pypi/sneaky/1.0.0/json": "sneaky-1.0.0.json",
   "https://cdn.example.invalid/sneaky-1.0.0.tar.gz": "sneaky-1.0.0.tar.gz",
 

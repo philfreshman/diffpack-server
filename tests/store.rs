@@ -586,6 +586,50 @@ async fn a_file_diff_is_served_the_stored_patch_rather_than_the_archives() {
 }
 
 #[tokio::test]
+async fn a_remembered_patch_says_whether_its_files_decoded() {
+    let store = Memory::new();
+
+    let diffed = call(
+        || store.store(),
+        json!({
+            "registry": "npm",
+            "package": "undecodable",
+            "from_version": "1.0.0",
+            "to_version": "2.0.0",
+        }),
+    )
+    .await;
+    settles(&store, 2).await;
+    let patches = blob(&store, &patches_of(&diffed));
+
+    for path in ["logo.png", "src/far.js"] {
+        assert!(
+            patches[path].is_object(),
+            "`{path}` changed, so the entry holds its patch and the warm call \
+             below is served it: got {patches}"
+        );
+
+        let asked = json!({
+            "handle": diffed["structuredContent"]["handle"].clone(),
+            "path": path,
+        });
+        let warm = call_tool(|| store.store(), "get_file_diff", asked.clone()).await;
+        let cold = Memory::new();
+
+        assert_eq!(
+            warm["structuredContent"]["validUtf8"],
+            json!(false),
+            "`{path}`: got {warm}"
+        );
+        assert_eq!(
+            warm,
+            call_tool(|| cold.store(), "get_file_diff", asked).await,
+            "`{path}`: a remembered patch is the rendered one, flag and all"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_renamed_file_is_served_only_the_patch_it_was_asked_for() {
     let store = Memory::new();
 

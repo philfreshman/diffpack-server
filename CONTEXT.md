@@ -117,7 +117,9 @@ content is text, because extraction decodes it that way: bytes that are not
 valid UTF-8 become replacement characters rather than an error, so a FileMap
 holds a readable rendering of a binary file and not the file. Nothing
 downstream can undo that, which is why a tool returning content says whether
-it happened — and whether it happened is asked of the FileMap. What is at a
+it happened — `get_file_content` of one file, `get_file_diff` of either
+version of one — and whether it happened is asked by the FileMap's rule, of a
+file or of a patch rendered from two. What is at a
 path is one of three answers: a file with its text, a directory, or nothing.
 A directory is not an empty file, even though the extractor gives it empty
 content.

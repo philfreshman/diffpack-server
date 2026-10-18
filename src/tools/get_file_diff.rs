@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 use serde::{de, Deserialize, Deserializer, Serialize};
 
+use crate::archive;
 use crate::engine;
 use crate::error::Failure;
 use crate::handle::DiffHandle;
@@ -59,6 +60,17 @@ pub struct Patch {
         `false` as a file rather than trying to parse it as a patch."
     )]
     pub is_diff: bool,
+
+    #[schemars(
+        description = "False when the text you were given is not what the files hold: a byte\n\
+        in either version of the file was not valid UTF-8, and each one that\n\
+        could not be decoded is shown as the `U+FFFD` replacement character. A\n\
+        binary file therefore reads as mostly replacement characters instead\n\
+        of failing. It describes the whole file in both versions, including\n\
+        lines left out around the changes, so it can be false when the text\n\
+        you see has none. True means every byte decoded."
+    )]
+    pub valid_utf8: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,8 +266,13 @@ impl Tool for GetFileDiff {
         the whole file, added. And `context_lines` is how many unchanged \
         lines come with each change, three by default: a short answer usually \
         means the rest of the file was left out rather than that little \
-        changed, and `full` is how you ask for all of it. A long diff is cut \
-        short, and the answer says so and gives the whole thing's size.";
+        changed, and `full` is how you ask for all of it. A file whose bytes \
+        are not valid UTF-8, such as an image, is decoded anyway, with each \
+        byte that could not be decoded shown as `U+FFFD`; `validUtf8` is \
+        false when either version of the file had one, even if none of the \
+        lines you were shown do, so replacement characters do not mean the \
+        file arrived broken. A long diff is cut short, and the answer says so \
+        and gives the whole thing's size.";
 
     const READ_ONLY: bool = true;
 
@@ -300,5 +317,6 @@ pub fn presented(rendered: &engine::Patch, asked: &OneFile<'_>) -> Patch {
     Patch {
         excerpt: page::truncate(&text, asked.max_bytes),
         is_diff: rendered.is_diff,
+        valid_utf8: archive::decoded_cleanly(&rendered.data),
     }
 }
