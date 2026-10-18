@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use crate::error::Failure;
 use crate::fetch::{self, About as Fetching};
 
-use super::{About, Body};
+use super::{weighed, About, Body};
 
 #[derive(Debug)]
 pub struct Live;
@@ -14,34 +14,34 @@ impl Live {
         Self
     }
 
-    pub fn held(&self, url: &str, about: &About<'_>) -> Option<Body> {
-        let fresh_for = about.remember_for?;
-        remembered(url, fresh_for).map(Body::Shared)
-    }
+    pub async fn body(&self, url: &str, limit: u64, about: &About<'_>) -> Result<Body, Failure> {
+        let Some(fresh_for) = about.remember_for else {
+            return download(url, limit, about).await.map(Body::Owned);
+        };
 
-    pub async fn fetch(&self, url: &str, limit: u64, about: &About<'_>) -> Result<Body, Failure> {
-        let bytes = fetch::bytes(
-            url,
-            limit,
-            &Fetching {
-                registry: about.registry,
-                accept: about.accept,
-                compressed: about.compressed,
-                missing: about.missing,
-                too_large: about.too_large,
-            },
-        )
-        .await?;
-
-        match about.remember_for {
-            Some(_) => {
-                let body: Arc<[u8]> = Arc::from(bytes);
-                remember(url, &body);
-                Ok(Body::Shared(body))
-            }
-            None => Ok(Body::Owned(bytes)),
+        if let Some(body) = remembered(url, fresh_for) {
+            return weighed(Body::Shared(body), limit, about);
         }
+
+        let body: Arc<[u8]> = Arc::from(download(url, limit, about).await?);
+        remember(url, &body);
+        Ok(Body::Shared(body))
     }
+}
+
+async fn download(url: &str, limit: u64, about: &About<'_>) -> Result<Vec<u8>, Failure> {
+    fetch::bytes(
+        url,
+        limit,
+        &Fetching {
+            registry: about.registry,
+            accept: about.accept,
+            compressed: about.compressed,
+            missing: about.missing,
+            too_large: about.too_large,
+        },
+    )
+    .await
 }
 
 fn remembered(url: &str, fresh_for: Duration) -> Option<Arc<[u8]>> {
