@@ -894,6 +894,58 @@ async fn a_file_diff_is_served_the_stored_patch_rather_than_the_archives() {
     );
 }
 
+/// A remembered patch says whether its files decoded, the way a rendered one
+/// does.
+///
+/// An entry holds a patch's text and whether it is a diff, and nothing about
+/// the bytes it was rendered from. So the flag has to be something the text
+/// itself answers, or a warm call would have nothing to give it from. Asked
+/// of `undecodable`, whose `logo.png` and `src/far.js` both changed and both
+/// hold a byte that does not decode, warm and cold.
+#[tokio::test]
+async fn a_remembered_patch_says_whether_its_files_decoded() {
+    let store = Memory::new();
+
+    let diffed = call(
+        || store.store(),
+        json!({
+            "registry": "npm",
+            "package": "undecodable",
+            "from_version": "1.0.0",
+            "to_version": "2.0.0",
+        }),
+    )
+    .await;
+    settles(&store, 2).await;
+    let patches = blob(&store, &patches_of(&diffed));
+
+    for path in ["logo.png", "src/far.js"] {
+        assert!(
+            patches[path].is_object(),
+            "`{path}` changed, so the entry holds its patch and the warm call \
+             below is served it: got {patches}"
+        );
+
+        let asked = json!({
+            "handle": diffed["structuredContent"]["handle"].clone(),
+            "path": path,
+        });
+        let warm = call_tool(|| store.store(), "get_file_diff", asked.clone()).await;
+        let cold = Memory::new();
+
+        assert_eq!(
+            warm["structuredContent"]["validUtf8"],
+            json!(false),
+            "`{path}`: got {warm}"
+        );
+        assert_eq!(
+            warm,
+            call_tool(|| cold.store(), "get_file_diff", asked).await,
+            "`{path}`: a remembered patch is the rendered one, flag and all"
+        );
+    }
+}
+
 /// A renamed file is served the patch that answers the question asked.
 ///
 /// A patch is rendered from one path in each version, and an entry holds the

@@ -136,7 +136,7 @@ async fn the_definition_carries_everything_an_agent_needs() {
          name; everything else has an answer without it: got {}",
         tool["inputSchema"]
     );
-    for field in ["text", "truncated", "bytes", "isDiff"] {
+    for field in ["text", "truncated", "bytes", "isDiff", "validUtf8"] {
         assert!(
             tool["outputSchema"]["properties"][field].is_object(),
             "the output schema should describe `{field}`, got {}",
@@ -210,7 +210,8 @@ async fn the_context_argument_documents_the_default_that_binds() {
 /// that was not told: an answer that is a file rather than a patch, a renamed
 /// file that reads as added unless its old path comes with it, and a patch
 /// that is short because context was trimmed rather than because little
-/// changed.
+/// changed. And a fourth, which `get_file_content` says too: replacement
+/// characters in the text, and the field that says why they are there.
 #[tokio::test]
 async fn the_description_says_what_an_agent_would_otherwise_get_wrong() {
     let tool = listed(TOOL).await;
@@ -226,6 +227,12 @@ async fn the_description_says_what_an_agent_would_otherwise_get_wrong() {
              told: got {description}"
         );
     }
+    assert!(
+        description.contains("U+FFFD") && description.contains("validUtf8"),
+        "a diff over bytes that did not decode shows replacement characters, \
+         which read as a corrupt file to an agent that was not told which \
+         field says so: got {description}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1134,6 +1141,125 @@ async fn an_answer_larger_than_a_response_is_cut_without_being_asked() {
 }
 
 // ---------------------------------------------------------------------------
+// Bytes that did not decode
+// ---------------------------------------------------------------------------
+//
+// `undecodable` 1.0.0 → 2.0.0 holds one file per question; the fixture script
+// says which is which. Every test here asks at the default context, because
+// that is what an agent reads and the trim is where a flag read off the
+// answer rather than off the files would go wrong.
+
+/// A binary that changed is a diff over replacement characters, and the
+/// answer says the text is not what the files hold.
+#[tokio::test]
+async fn a_diff_over_bytes_that_did_not_decode_says_so() {
+    let answer = undecodable("logo.png").await;
+
+    assert_eq!(answer["isDiff"], json!(true), "got {answer}");
+    assert!(
+        text(&answer).contains('\u{FFFD}'),
+        "the diff shows the bytes that did not decode as replacement \
+         characters: got {answer}"
+    );
+    assert_eq!(
+        answer["validUtf8"],
+        json!(false),
+        "without this an agent cannot tell a changed binary from a source \
+         file that arrived broken: got {answer}"
+    );
+}
+
+/// A binary both versions ship byte for byte is answered with the file, and
+/// the flag is the one `get_file_content` gives for the same file.
+#[tokio::test]
+async fn an_unchanged_binary_says_what_get_file_content_says() {
+    let answer = undecodable("icon.png").await;
+    let content = Client::fixture()
+        .call(
+            "get_file_content",
+            json!({
+                "registry": "npm",
+                "package": "undecodable",
+                "version": "2.0.0",
+                "path": "icon.png",
+            }),
+        )
+        .await;
+    let content = &content["structuredContent"];
+
+    assert_eq!(answer["isDiff"], json!(false), "got {answer}");
+    assert_eq!(
+        answer["text"], content["text"],
+        "the answer is the file, so it is the text `get_file_content` gives"
+    );
+    assert_eq!(
+        answer["validUtf8"],
+        json!(false),
+        "and it did not decode: got {answer}"
+    );
+    assert_eq!(
+        answer["validUtf8"], content["validUtf8"],
+        "two tools asked about one file agree on whether it decoded"
+    );
+}
+
+/// A file that decodes cleanly says so on both branches. A flag that was
+/// false on every answer would be one an agent learns to skip.
+#[tokio::test]
+async fn a_file_that_decoded_cleanly_says_so_on_both_branches() {
+    for (path, is_diff) in [("src/index.js", true), ("README.md", false)] {
+        let answer = undecodable(path).await;
+
+        assert_eq!(answer["isDiff"], json!(is_diff), "`{path}`: got {answer}");
+        assert_eq!(
+            answer["validUtf8"],
+            json!(true),
+            "`{path}`: every byte of both versions decoded: got {answer}"
+        );
+    }
+}
+
+/// One side is enough. A file whose encoding was fixed between the two
+/// versions decodes cleanly in the second and not in the first, and the diff
+/// still shows a replacement character on its removed side.
+#[tokio::test]
+async fn a_diff_with_one_side_that_did_not_decode_says_so() {
+    let answer = undecodable("src/legacy.js").await;
+
+    assert_eq!(answer["isDiff"], json!(true), "got {answer}");
+    assert_eq!(
+        answer["validUtf8"],
+        json!(false),
+        "the first version's bytes did not decode, so the removed line is not \
+         what that file holds: got {answer}"
+    );
+}
+
+/// The flag is about the files, not about the lines the trim kept.
+///
+/// `src/far.js` has a line that does not decode nine lines above its one
+/// change, so an answer at three lines of context shows none of it. A flag
+/// read off that answer would call the file clean, and an agent that then
+/// asked for `full` would be handed replacement characters it was told were
+/// not there.
+#[tokio::test]
+async fn a_line_that_did_not_decode_counts_where_the_trim_left_it_out() {
+    let answer = undecodable("src/far.js").await;
+
+    assert!(
+        !text(&answer).contains('\u{FFFD}'),
+        "the fixture should keep the undecodable line out of a trimmed \
+         answer, or this test proves nothing: got {answer}"
+    );
+    assert_eq!(
+        answer["validUtf8"],
+        json!(false),
+        "the file did not decode, whichever of its lines were shown: got \
+         {answer}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // What is refused
 // ---------------------------------------------------------------------------
 
@@ -1358,6 +1484,16 @@ async fn the_root_is_refused_as_a_directory() {
 /// `tests/get_diff_tree.rs` settled on.
 fn diffable() -> String {
     handle("diffable", "1.0.0", "2.0.0", false)
+}
+
+/// This tool's answer for `path` in `undecodable` 1.0.0 → 2.0.0, at the
+/// defaults.
+async fn undecodable(path: &str) -> Value {
+    patch(json!({
+        "handle": handle("undecodable", "1.0.0", "2.0.0", false),
+        "path": path,
+    }))
+    .await
 }
 
 /// A handle for one npm comparison, at the defaults `diff_package_versions`

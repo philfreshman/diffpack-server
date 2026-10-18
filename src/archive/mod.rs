@@ -159,22 +159,31 @@ impl<'a> File<'a> {
     }
 
     /// Whether every byte of the file decoded as UTF-8, so the text is the
-    /// file.
-    ///
-    /// Read off the text rather than off the bytes, because the bytes are
-    /// gone: extraction decodes lossily, and what a FileMap holds is the
-    /// result. The cost is that a text file that really does contain a
-    /// replacement character is reported as not decoding cleanly. That is
-    /// rare, and it is the safe direction to be wrong in: an agent told a
-    /// file may not have decoded reads it more carefully, where one told a
-    /// binary is clean text does not.
+    /// file. See [`decoded_cleanly`].
     ///
     /// Always the whole file. A caller that cut the text first and asked of
     /// the cut would report a binary as clean wherever the cut fell before
     /// the first byte that did not decode.
     pub fn decoded_cleanly(self) -> bool {
-        !self.text.contains(char::REPLACEMENT_CHARACTER)
+        decoded_cleanly(self.text)
     }
+}
+
+/// Whether `text`, made from files extraction decoded, holds every byte
+/// those files did.
+///
+/// Read off the text rather than off the bytes, because the bytes are gone:
+/// extraction decodes lossily, and what a FileMap holds is the result. The
+/// cost is that a text file that really does contain a replacement character
+/// is reported as not decoding cleanly. That is rare, and it is the safe
+/// direction to be wrong in: an agent told a file may not have decoded reads
+/// it more carefully, where one told a binary is clean text does not.
+///
+/// A function of the text and not only of a [`File`], because a patch is
+/// asked the same question and a stored one has no file behind it: what the
+/// cache keeps is the rendering, and this is the one rule both read it by.
+pub fn decoded_cleanly(text: &str) -> bool {
+    !text.contains(char::REPLACEMENT_CHARACTER)
 }
 
 /// The most any one body this server downloads may weigh.

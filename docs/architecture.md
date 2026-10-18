@@ -383,7 +383,10 @@ questions: `at(path)`, which is a file with its text, a directory, or nothing
 cannot say plainly — a directory's content is the empty string, so emptiness
 cannot tell a directory from an empty file, and a file that was not UTF-8
 holds replacement characters rather than its bytes — so it is said once here
-rather than worked out again by every tool that reads one (#95). The engine is
+rather than worked out again by every tool that reads one (#95). The decoding
+rule is also a free function, `archive::decoded_cleanly`, because
+`get_file_diff` asks it of a patch, and a patch the cache kept has no FileMap
+behind it (#70). The engine is
 the one reader of the map itself, to build a tree, and it gets it through
 `engine::build_diff_tree`, which takes two FileMaps: the map crosses back to
 the engine in the one module that imports it. The accessor that crossing uses
