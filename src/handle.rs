@@ -177,8 +177,11 @@ impl JsonSchema for DiffHandle {
                 exactly as it arrived. It carries the diff's inputs as well as its \
                 `diff_id`, which is what lets this server recompute the diff when its \
                 cached result has been evicted rather than asking you to start again. It \
-                is not a `diff_id` and it is not written by hand: a handle whose contents \
-                do not agree with each other is refused.",
+                also fixes how the comparison was made, `similarity_threshold` and \
+                `ignore_whitespace` included, so neither is accepted beside it: to compare \
+                with different ones, call `diff_package_versions` again for a new handle. \
+                It is not a `diff_id` and it is not written by hand: a handle whose \
+                contents do not agree with each other is refused.",
         })
     }
 }

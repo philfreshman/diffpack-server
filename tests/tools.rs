@@ -15,6 +15,8 @@ const TOOLS: [&str; 8] = [
     "search_packages",
 ];
 
+const COMPARISON_OPTIONS: [&str; 2] = ["similarity_threshold", "ignore_whitespace"];
+
 const NEIGHBOURS: [(&str, &str); 5] = [
     ("get_file_content", "get_file_diff"),
     ("list_package_files", "get_diff_tree"),
@@ -299,6 +301,65 @@ async fn every_bounded_argument_says_where_its_bounds_are() {
         asked >= 16,
         "five kinds of argument carry sixteen bounds between them, so \
          finding {asked} means this walked the wrong field"
+    );
+}
+
+#[tokio::test]
+async fn a_comparisons_options_come_with_its_handle_and_are_not_asked_again() {
+    let client = Client::fixture();
+    let made = client
+        .call(
+            "diff_package_versions",
+            json!({
+                "registry": "npm",
+                "package": "diffable",
+                "from_version": "1.0.0",
+                "to_version": "2.0.0",
+            }),
+        )
+        .await;
+    let handle = &made["structuredContent"]["handle"];
+    let mut asked = 0;
+
+    for tool in client.tools().await {
+        let name = named(&tool);
+        let Some(schema) = tool["inputSchema"]["properties"].get("handle") else {
+            continue;
+        };
+
+        asked += 1;
+        let said = schema["description"].as_str().unwrap_or_default();
+        for option in COMPARISON_OPTIONS {
+            assert!(
+                said.contains(&format!("`{option}`")),
+                "`{name}`'s `handle` should say that `{option}` is fixed by \
+                 it, or an agent will try to pass it again: got {schema}"
+            );
+
+            let answer = client
+                .respond(json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": name,
+                        "arguments": { "handle": handle, "path": "index.js", option: 0.5 },
+                    },
+                }))
+                .await
+                .json();
+            assert_eq!(
+                answer["error"]["code"], -32602,
+                "`{name}` should refuse `{option}` rather than ignore it, \
+                 since the handle already fixed it: got {answer}"
+            );
+        }
+    }
+
+    assert_eq!(
+        asked, 2,
+        "two tools read a comparison back, so finding {asked} means this \
+         walked the wrong field"
     );
 }
 
