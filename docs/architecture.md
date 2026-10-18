@@ -19,6 +19,7 @@ src/tools/          one module per tool: definition and handler together,
                     Ctx, the seams that outlive a call, and Call, one call
                     over them with its own tally
 src/resources/      one module per resource: URI and handler together
+src/prompts/        one module per prompt: arguments and messages together
 src/registry.rs     what a registry is: npm, crates, pypi (go later); and the
                     package and version arguments that state its rules
 src/archive/        fetch(registry, package, version) -> FileMap, and what
@@ -52,11 +53,12 @@ new engine release is one file to change and one file to read.
 [`scripts/check-engine-seam.sh`](../scripts/check-engine-seam.sh) fails the
 build otherwise. See [ADR 0007](adr/0007-one-importer-of-the-engine.md).
 
-**A tool or a resource module goes through the seams, not around them.** A
-module under `src/tools/` or `src/resources/` may import the standard library,
-the MCP and serialisation crates, `futures` for the one file under there that
-waits on two fetches at once, and `crate::{archive, cache_key, catalogue,
-engine, error, handle, page, registry, resources, search, store, tools}`. It
+**A tool, resource or prompt module goes through the seams, not around
+them.** A module under `src/tools/`, `src/resources/` or `src/prompts/` may
+import the standard library, the MCP and serialisation crates, `futures` for
+the one file under there that waits on two fetches at once, and
+`crate::{archive, cache_key, catalogue, engine, error, handle, page, prompts,
+registry, resources, search, store, tools}`. It
 may not name an HTTP client or the blob store: those are `fetch`'s and
 `store`'s business, and eight tools that each know how to fetch is eight
 places to fix a timeout. Nor may it name the accessor that hands a FileMap's
@@ -80,10 +82,10 @@ the one line per call is written once by the dispatch rather than nineteen
 times by the tools that remembered. That exact path and no other: a tool is
 free to grow into a directory, and `src/tools/thing/mod.rs` is then a tool
 like any other. The name deny-list still covers the collection, so the
-exemption is from the list and not from the rule. `src/resources/mod.rs` is a
-collection too and deliberately does not get one: it needs nothing a resource
-may not have, and an exemption granted before it is needed is a rule weakened
-for free.
+exemption is from the list and not from the rule. `src/resources/mod.rs` and
+`src/prompts/mod.rs` are collections too and deliberately do not get one: each
+needs nothing the modules beside it may not have, and an exemption granted
+before it is needed is a rule weakened for free.
 
 **`docs/cache-key.md` is normative, not descriptive.** The cache key is a
 contract with a TypeScript implementation (#27) that will never share a line of
@@ -113,12 +115,14 @@ origin list as parameters, which is the seam the transport tests drive.
 ### `src/mcp.rs` — what this server says it is
 
 The `ServerHandler`: identity, capabilities, protocol revisions, the sorted
-tool list, and the two lists a client discovers this server's resources
-through. It collects; it does not describe — a tool's definition lives with
-its handler under `src/tools/` ([ADR 0002](adr/0002-one-module-per-tool.md))
-and a resource's URI lives with its handler under `src/resources/`. Which URI
-resolves to what is `resources::read`'s, the way which name runs what is
-`tools::call`'s. `Guarded` is also here: the wrapper
+tool list, the two lists a client discovers this server's resources through,
+and the sorted prompt list. It collects; it does not describe — a tool's
+definition lives with its handler under `src/tools/` ([ADR
+0002](adr/0002-one-module-per-tool.md)), a resource's URI lives with its
+handler under `src/resources/`, and a prompt's arguments live with its
+messages under `src/prompts/`. Which URI resolves to what is
+`resources::read`'s, the way which name runs what is `tools::call`'s and which
+name renders what is `prompts::get`'s. `Guarded` is also here: the wrapper
 that turns a panic inside a handler into a JSON-RPC error rather than a hung
 request, which has to be inside the handler because `rmcp` runs handlers on a
 task of their own.
@@ -327,13 +331,60 @@ resource states its own freshness — the catalogue changes when a build deploys
 and a comparison cannot change at all, because a handle that would be answered
 differently is one this build refuses.
 
+### `src/prompts/` — what an agent is asked to do with the tools
+
+One module per prompt, in the shape `src/tools/` has: its name, title and
+description, the arguments it takes, and the messages it renders, together.
+`mod.rs` is the collection — the `prompts!` list, sorted by name the way the
+tool list is, the `Prompt` trait every prompt implements, and `prompts::get`,
+which parses the arguments and renders the messages. A prompt name that is
+not on the list is `Failure::NoSuchPrompt`, `-32602`, like a tool name that is
+not on its list.
+
+A prompt is the one module that describes an order of operations over the
+tools rather than doing one, so it is the one that goes stale when a tool is
+renamed. Two things keep it from going stale quietly. It names every tool by
+that tool's `NAME` constant rather than by a string of its own, so a renamed
+tool renames itself in the prompt. And `tests/prompts.rs` reads the rendered
+text back over the wire and fails on any backticked field-shaped name —
+`from_version`, `old_path`, `nextCursor` — that is not a tool in `tools/list`
+or a field of one of their schemas. That second check is the one that caught
+`next_cursor` while `review_upgrade` was written: the Rust field is spelt one
+way and the wire another, and only the wire is what an agent reads.
+
+A prompt's arguments are listed by hand rather than generated from its `Args`
+type the way a tool's schema is. `prompts/list` carries a flat list of named
+strings rather than a JSON Schema, and a client that fills them in by position
+— Claude Code turns a prompt into a slash command — fills them in the order
+they are listed, which a generated schema's alphabetical properties would
+scramble. What keeps the list and the type in step is the test that drops
+each listed argument in turn and expects `-32602` naming it, beside the one
+that passes all of them and expects messages. `Args` is
+`deny_unknown_fields`, as a tool's is, so an argument the list does not have is
+refused rather than ignored.
+
+An argument that arrives as an empty string is treated as absent before the
+arguments are parsed. A client filling arguments by position sends what was
+not typed as `""`, and that is no more a package name than a missing one.
+
+It fetches nothing and has no `Call`. Rendering a prompt is pure: the
+arguments in, the text out, with no registry reached to check that the
+package or either version exists. The first tool the prompt sends an agent
+to is the one that finds out, and answers on the channel that can say so. Any
+per-registry fact a prompt states — the file a package declares its
+dependencies in, the runtime it targets — is a `match` in `src/registry.rs`
+like every other one, so a fourth registry is told what it owes the prompt by
+the compiler.
+
 ### `src/registry.rs` — what a registry is
 
 npm, crates.io and PyPI, described once: the identifier used in a parameter and
 in a cache key (`npm`, `crates`, `pypi`), the name the registry calls itself in
 a message to a model (`npm`, `crates.io`, `PyPI`), where a version's archive is,
 where versions and search come from, the hosts it may be reached at, and the
-name rules an agent would otherwise guess at. Every per-registry fact is a
+name rules an agent would otherwise guess at, and the manifest a package
+declares its dependencies in and the runtime it targets, which
+`review_upgrade` sends an agent to. Every per-registry fact is a
 `match` over the three variants in this one file, so the compiler enumerates
 what a fourth registry owes.
 
@@ -383,7 +434,10 @@ questions: `at(path)`, which is a file with its text, a directory, or nothing
 cannot say plainly — a directory's content is the empty string, so emptiness
 cannot tell a directory from an empty file, and a file that was not UTF-8
 holds replacement characters rather than its bytes — so it is said once here
-rather than worked out again by every tool that reads one (#95). The engine is
+rather than worked out again by every tool that reads one (#95). The decoding
+rule is also a free function, `archive::decoded_cleanly`, because
+`get_file_diff` asks it of a patch, and a patch the cache kept has no FileMap
+behind it (#70). The engine is
 the one reader of the map itself, to build a tree, and it gets it through
 `engine::build_diff_tree`, which takes two FileMaps: the map crosses back to
 the engine in the one module that imports it. The accessor that crossing uses

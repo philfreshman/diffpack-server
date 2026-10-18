@@ -70,8 +70,12 @@ impl<'a> File<'a> {
     }
 
     pub fn decoded_cleanly(self) -> bool {
-        !self.text.contains(char::REPLACEMENT_CHARACTER)
+        decoded_cleanly(self.text)
     }
+}
+
+pub fn decoded_cleanly(text: &str) -> bool {
+    !text.contains(char::REPLACEMENT_CHARACTER)
 }
 
 pub const SIZE_LIMIT: u64 = 128 * 1024 * 1024;

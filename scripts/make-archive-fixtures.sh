@@ -190,6 +190,28 @@ done
 targz "apart-1.0.0.tgz" "package" "$apart/1.0.0"
 targz "apart-2.0.0.tgz" "package" "$apart/2.0.0"
 
+undecodable=$work/undecodable
+for version in 1.0.0 2.0.0; do
+  root=$undecodable/$version/package
+  mkdir -p "$root/src"
+  printf '\211PNG\r\n\032\n\377\375' >"$root/icon.png"
+  write "$root/README.md" '# undecodable
+'
+  {
+    printf '// caf\351\n'
+    for i in 1 2 3 4 5 6 7 8; do printf 'const pad%d = 0;\n' "$i"; done
+    printf 'export const far = %s;\n' "${version%%.*}"
+  } >"$root/src/far.js"
+  write "$root/src/index.js" "export const version = ${version%%.*};
+"
+done
+printf '\211PNG\r\n\032\n\377\376' >"$undecodable/1.0.0/package/logo.png"
+printf '\211PNG\r\n\032\n\377\376IHDR' >"$undecodable/2.0.0/package/logo.png"
+printf '// caf\351\nexport const legacy = 1;\n' >"$undecodable/1.0.0/package/src/legacy.js"
+printf '// caf\303\251\nexport const legacy = 1;\n' >"$undecodable/2.0.0/package/src/legacy.js"
+targz "undecodable-1.0.0.tgz" "package" "$undecodable/1.0.0"
+targz "undecodable-2.0.0.tgz" "package" "$undecodable/2.0.0"
+
 sneaky=$work/sneaky-1.0.0
 write "$sneaky/setup.py" 'from setuptools import setup
 
