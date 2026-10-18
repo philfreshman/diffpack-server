@@ -1,12 +1,3 @@
-//! The cache key, driven entirely by `fixtures/cache-key-vectors.json`.
-//!
-//! The vectors are the point. `docs/cache-key.md` is normative and the
-//! TypeScript side of the cache (#27) will be held to the same file, so a
-//! test here that asserted what this implementation happens to produce would
-//! be worth nothing: it would agree with itself while the two languages
-//! disagreed with each other. Every expected value below is read from the
-//! fixture, which was generated from the document rather than from this code.
-
 use diffpack_server::cache_key::{prefix, DiffKey};
 use serde::Deserialize;
 
@@ -58,9 +49,6 @@ fn a_diff_id_is_sixty_four_lowercase_hex_characters() {
     }
 }
 
-/// The fixture is only worth something if it actually exercises the rules it
-/// claims to. A vector file that silently lost its scoped-name case would
-/// still pass every assertion above.
 #[test]
 fn the_fixture_covers_the_cases_the_specification_calls_out() {
     let names: Vec<String> = vectors().into_iter().map(|v| v.name).collect();
@@ -82,7 +70,6 @@ fn the_fixture_covers_the_cases_the_specification_calls_out() {
     }
 }
 
-/// A→B is not B→A. The whole cache is wrong if this stops holding.
 #[test]
 fn reversing_the_version_pair_changes_the_key() {
     let forward = find("order A to B");
@@ -92,9 +79,6 @@ fn reversing_the_version_pair_changes_the_key() {
     assert_ne!(forward.input.diff_id(), backward.input.diff_id());
 }
 
-/// Three spellings PyPI itself treats as one project stay three keys under
-/// v1's verbatim rule. A cache miss is the cheap failure; serving the wrong
-/// diff is not.
 #[test]
 fn pypi_names_are_not_normalised() {
     let ids: std::collections::HashSet<String> = [
@@ -120,9 +104,6 @@ fn find(name: &str) -> Vector {
         .unwrap_or_else(|| panic!("no vector named {name}"))
 }
 
-/// Every field is load-bearing, and nothing outside the eight is. The second
-/// half is the half that catches a future field being added to `DiffKey`
-/// without being added to `canonical`.
 #[test]
 fn the_key_changes_when_and_only_when_a_field_changes() {
     let base = find("npm/zod").input;
@@ -191,8 +172,6 @@ fn the_key_changes_when_and_only_when_a_field_changes() {
         assert_ne!(mutated.diff_id(), id, "changing {field} left the key alone");
     }
 
-    // Distinct from each other too: a `canonical` that concatenated two
-    // fields in the wrong slots would still pass the loop above.
     let ids: std::collections::HashSet<String> =
         mutations.iter().map(|(_, k)| k.diff_id()).collect();
     assert_eq!(
@@ -208,19 +187,6 @@ fn the_key_changes_when_and_only_when_a_field_changes() {
     );
 }
 
-/// The precision rule, pinned at its boundary.
-///
-/// **This inverts the bullet in issue #5**, which asks for a test proving
-/// `0.75` and `0.750000001` produce *different* keys. They cannot: four
-/// decimal places is the specified precision, and both values round to
-/// `"0.7500"`. The bullet describes the behaviour of an implementation with
-/// no fixed-precision rule at all, where the raw float reaches the key and
-/// the two languages are free to format it differently — which is the thing
-/// the rule exists to prevent.
-///
-/// So the test pins what the rule actually does: agreement to four places is
-/// the same cache entry, and one step outside it is not. Widening the
-/// partition means changing the precision, which is a `schema` bump.
 #[test]
 fn thresholds_agreeing_to_four_places_are_one_entry_and_no_more_than_that() {
     let coarse = find("npm/zod").input;
@@ -241,8 +207,6 @@ fn thresholds_agreeing_to_four_places_are_one_entry_and_no_more_than_that() {
     );
 }
 
-/// Formatting is fixed-precision in both directions: digits are added to a
-/// short value and dropped from a long one.
 #[test]
 fn the_threshold_is_always_four_decimal_places_in_the_canonical_string() {
     for (name, expected) in [
@@ -267,13 +231,6 @@ fn blob_paths_are_the_diff_id_under_the_schema_prefix() {
     assert_eq!(key.meta_path(), format!("diffs/v1/{id}/meta.json"));
     assert_eq!(key.patches_path(), format!("diffs/v1/{id}/patches.json"));
 
-    // The literals above are the layout. This is that `cache_key::prefix`
-    // names the same one — which matters because it is what `src/store/`
-    // counts and sweeps by, and the only other place that asks where an
-    // entry lives. The two could not disagree about the version number,
-    // both deriving from `SCHEMA`, and that is not the drift worth
-    // guarding against: a prefix that stopped being a prefix of a pathname
-    // is a sweep counting a store nothing writes to.
     for path in [key.meta_path(), key.patches_path()] {
         assert!(
             path.starts_with(&prefix(key.schema)),

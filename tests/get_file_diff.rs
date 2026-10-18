@@ -1,42 +1,3 @@
-//! `get_file_diff`, driven the way an agent drives it.
-//!
-//! One seam: the wire. `tools/list` for what a client is told and
-//! `tools/call` for what it gets back, both through `router_with` over the
-//! fixture archives. Testing here rather than at the handler is what keeps
-//! the definition and the handler from drifting apart: a schema that stopped
-//! describing what the handler reads is a confident wrong answer to a model,
-//! and a handler test would go on passing through it.
-//!
-//! # Where an expected diff comes from
-//!
-//! The engine, wherever the engine can be asked. `get_diff_content` is
-//! public, so the case where both versions have the file and they differ is
-//! held against the engine's own output over the fixture's own bytes — which
-//! is what makes the assertion able to disagree with this crate rather than
-//! agree with it by construction.
-//!
-//! The other four cases are not asked of the engine. `build_patch` has been
-//! public since `diffpack-engine` 0.4.0, but it is the function this tool
-//! renders through, so an expectation read from it would agree with this
-//! crate by construction. Those four are held against literals worked out by
-//! hand from the table in #15, which is the contract they exist to reproduce.
-//!
-//! # What is deliberately not asserted here
-//!
-//! Where a cut falls, what the marker says, and that the ceiling is measured
-//! on serialised bytes rather than on length. Those are `src/page.rs`'s and
-//! `tests/page.rs` holds them against generated text. What this suite asserts
-//! is that this tool goes *through* that module rather than around it.
-//!
-//! That the handle format is what it is. `tests/handle.rs` holds the four
-//! ways a handle is refused against hand-built payloads. What is here is two
-//! of them reaching *this* tool's argument, because a tool that took a handle
-//! and verified it late would pass every test in that file.
-//!
-//! Nor that no `description` an agent reads names a Rust path — that is a
-//! rule every tool is held to rather than a fact about this one, so
-//! `tests/tools.rs` holds it over the whole of `tools/list`.
-
 mod common;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -50,25 +11,10 @@ use serde_json::{json, Value};
 
 const TOOL: &str = "get_file_diff";
 
-// ---------------------------------------------------------------------------
-// The bytes the fixtures hold
-// ---------------------------------------------------------------------------
-//
-// Written out rather than read back out of the archive, so that an expected
-// diff is computed from what `fixtures/archives/diffable-*.tgz` is known to
-// contain rather than from whatever this crate's extractor returned. A test
-// that took both sides from the extractor would agree with it about a file it
-// had decoded wrongly.
-
-/// `src/index.js` in `diffable` 1.0.0 — the file the second version edits.
 const INDEX_FROM: &str = "export function greet(name) {\n  return \"Hello, \" + name;\n}\n";
 
-/// The same file in 2.0.0.
 const INDEX_TO: &str = "export function greet(name) {\n  return \"Hi, \" + name;\n}\n";
 
-/// `src/handler.js` in `renamey` 1.0.0 — ten lines the second version keeps
-/// and five it replaces, which is what makes the pair a rename and what
-/// leaves enough unchanged context to trim.
 const HANDLER: &str = "\
 const shared00 = 0;
 const shared01 = 0;
@@ -87,7 +33,6 @@ const alpha03 = 1;
 const alpha04 = 1;
 ";
 
-/// The same file in 2.0.0, under the name it moved to.
 const PROCESSOR: &str = "\
 const shared00 = 0;
 const shared01 = 0;
@@ -106,17 +51,6 @@ const bravo03 = 2;
 const bravo04 = 2;
 ";
 
-// ---------------------------------------------------------------------------
-// What a client is told
-// ---------------------------------------------------------------------------
-
-/// The arguments and the answer this tool in particular has, which is #23's
-/// question asked of one tool.
-///
-/// The rules every tool is held to — a description, an object input schema, a
-/// declared output shape, the read-only and open-world hints, the registry
-/// enum — are `tests/tools.rs`'s, over all eight at once. What is here is
-/// only what is true of this one.
 #[tokio::test]
 async fn the_definition_carries_everything_an_agent_needs() {
     let tool = listed(TOOL).await;
@@ -152,12 +86,6 @@ async fn the_definition_carries_everything_an_agent_needs() {
     );
 }
 
-/// The handle this tool takes is described by the module that mints it.
-///
-/// Four tools take one, and a sentence written here would be a fifth
-/// description of the same string. What a caller has to know — where it comes
-/// from, and that it is not built by hand — belongs to the one module that
-/// knows it.
 #[tokio::test]
 async fn the_handle_this_tool_takes_is_described_by_the_module_that_mints_it() {
     let tool = listed(TOOL).await;
@@ -176,11 +104,6 @@ async fn the_handle_this_tool_takes_is_described_by_the_module_that_mints_it() {
     );
 }
 
-/// The context argument documents the number that binds.
-///
-/// The default reaches a model from the schema rather than from a sentence
-/// this tool wrote, so the number an agent reads and the number the handler
-/// applies cannot be two different threes.
 #[tokio::test]
 async fn the_context_argument_documents_the_default_that_binds() {
     let tool = listed(TOOL).await;
@@ -204,13 +127,6 @@ async fn the_context_argument_documents_the_default_that_binds() {
     );
 }
 
-/// The description says the three things an agent would otherwise get wrong.
-///
-/// Each is a case where a correct answer reads as a wrong one to a caller
-/// that was not told: an answer that is a file rather than a patch, a renamed
-/// file that reads as added unless its old path comes with it, and a patch
-/// that is short because context was trimmed rather than because little
-/// changed.
 #[tokio::test]
 async fn the_description_says_what_an_agent_would_otherwise_get_wrong() {
     let tool = listed(TOOL).await;
@@ -228,17 +144,6 @@ async fn the_description_says_what_an_agent_would_otherwise_get_wrong() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The five cases
-// ---------------------------------------------------------------------------
-
-/// A file both versions have and that changed is the engine's own diff.
-///
-/// The one case the engine can be asked about directly: `get_diff_content` is
-/// public, so the expectation is its output over the fixture's bytes rather
-/// than a string written beside the implementation. `context_lines: "full"`
-/// because that is the setting #15 defines as the engine's output untouched;
-/// what a trimmed answer looks like is a question further down this file.
 #[tokio::test]
 async fn a_changed_file_is_the_engines_own_diff() {
     let answer = patch(json!({
@@ -267,13 +172,6 @@ async fn a_changed_file_is_the_engines_own_diff() {
     );
 }
 
-/// A file only the second version has is every line of it, added.
-///
-/// A literal rather than the engine, for the reason in the header: the
-/// renderer that produces this is the one this tool calls, so asking it would
-/// prove nothing. What is written out is the table in #15 — `/dev/null` on
-/// the left, every line prefixed — down to the trailing `+ ` that the
-/// engine's split leaves on a file ending in a newline.
 #[tokio::test]
 async fn a_file_only_the_second_version_has_is_every_line_added() {
     let answer = patch(json!({
@@ -296,11 +194,6 @@ async fn a_file_only_the_second_version_has_is_every_line_added() {
     );
 }
 
-/// A file only the first version has is every line of it, removed.
-///
-/// The mirror of the case above, and the `path` argument reads the other way
-/// round with it: there is nothing at this path in the second version, so
-/// what was passed is where the file *was*.
 #[tokio::test]
 async fn a_file_only_the_first_version_has_is_every_line_removed() {
     let answer = patch(json!({
@@ -323,12 +216,6 @@ async fn a_file_only_the_first_version_has_is_every_line_removed() {
     );
 }
 
-/// A file both versions have byte for byte is the file, not a diff of it.
-///
-/// The case `isDiff` exists for. Rendering it as a patch of nothing but
-/// context lines would be true and useless — an agent would parse a file as a
-/// diff, strip a prefix off every line and read a file it had subtly altered.
-/// So the file comes back as itself and the flag says to read it as one.
 #[tokio::test]
 async fn a_file_neither_version_touched_is_the_file_itself() {
     let answer = patch(json!({
@@ -352,12 +239,6 @@ async fn a_file_neither_version_touched_is_the_file_itself() {
     );
 }
 
-/// A path neither version has is a sentence saying so, not a failure.
-///
-/// The engine's fifth case, and it is an answer rather than an error on
-/// purpose: a comparison is a pair of versions and "this path is in neither
-/// of them" is a fact about the pair. What a caller does next is look at the
-/// tree, which is what the sentence is for.
 #[tokio::test]
 async fn a_path_in_neither_version_says_so_rather_than_failing() {
     let answer = patch(json!({
@@ -381,17 +262,6 @@ async fn a_path_in_neither_version_says_so_rather_than_failing() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// A file that moved
-// ---------------------------------------------------------------------------
-
-/// A renamed file is its old path in the first version against its new one in
-/// the second.
-///
-/// The header names the new path on both sides, which is the engine's and is
-/// worth reading twice: the `--- from/` line says `src/processor.js` even
-/// though those lines came out of `src/handler.js`. It is what the browser
-/// shows, so it is what an agent is shown.
 #[tokio::test]
 async fn a_renamed_file_diffs_where_it_was_against_where_it_is() {
     let answer = patch(json!({
@@ -415,13 +285,6 @@ async fn a_renamed_file_diffs_where_it_was_against_where_it_is() {
     );
 }
 
-/// Omitting `old_path` on a renamed file reads it as added, not as a rename.
-///
-/// The argument is doing the work rather than a rename being detected here a
-/// second time: without it there is no file at this path in the first
-/// version, and "no file there" is the added case. Asserting it is what stops
-/// the test above from passing on a tool that ignored the argument and
-/// guessed.
 #[tokio::test]
 async fn a_rename_without_its_old_path_reads_as_an_added_file() {
     let answer = patch(json!({
@@ -440,22 +303,10 @@ async fn a_rename_without_its_old_path_reads_as_an_added_file() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// What the handle fixes and this tool does not take
-// ---------------------------------------------------------------------------
-
-/// `src/main.js` in `reformatted` 1.0.0 — a tab and no spaces around `=`.
 const MAIN_FROM: &str = "function main() {\n\tlet x=1;\n}\n";
 
-/// The same file in 2.0.0, reindented and spaced out. Nothing else moved.
 const MAIN_TO: &str = "function main() {\n    let x = 1;\n}\n";
 
-/// A handle minted with `ignore_whitespace` carries it into the patch.
-///
-/// The two calls below differ in the handle and in nothing else, and they
-/// come back different — which is the whole of what "fixed by the `diff_id`"
-/// means. A reformatting is the only change in this pair, so ignoring
-/// whitespace leaves a diff with no `+` and no `-` line in it at all.
 #[tokio::test]
 async fn whitespace_is_ignored_when_the_handle_was_minted_that_way() {
     let exactly = patch(json!({
@@ -501,13 +352,6 @@ async fn whitespace_is_ignored_when_the_handle_was_minted_that_way() {
     );
 }
 
-/// Whitespace is not something a caller may change after the fact.
-///
-/// Two option sets are two diffs, so a tool that took this argument would be
-/// answering about a comparison nobody computed — and the `diff_id` beside it
-/// would name the other one. The refusal is the protocol channel, because a
-/// model cannot fix it by rewording: the way to a different setting is a new
-/// call to the tool that mints handles.
 #[tokio::test]
 async fn whitespace_is_not_an_argument_this_tool_accepts() {
     let answer = Client::fixture()
@@ -535,7 +379,6 @@ async fn whitespace_is_not_an_argument_this_tool_accepts() {
     );
 }
 
-/// Nor is the threshold that decided what a rename is.
 #[tokio::test]
 async fn the_similarity_threshold_is_not_an_argument_this_tool_accepts() {
     let answer = Client::fixture()
@@ -562,17 +405,6 @@ async fn the_similarity_threshold_is_not_an_argument_this_tool_accepts() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// How much of the file comes with the change
-// ---------------------------------------------------------------------------
-
-/// Three lines of context is a hunk with the header a unified diff has.
-///
-/// The expectation is written out rather than derived. `renamey` keeps ten
-/// lines and replaces five, so both sides of the hunk start at line 8 — three
-/// lines of context before the first change — and run for eight: the three
-/// context lines plus five of the caller's own side. Seven unchanged lines
-/// above that are what trimming is for.
 #[tokio::test]
 async fn three_lines_of_context_is_a_hunk_with_line_numbers() {
     let answer = patch(json!({
@@ -610,7 +442,6 @@ async fn three_lines_of_context_is_a_hunk_with_line_numbers() {
     );
 }
 
-/// Omitting the argument is asking for three.
 #[tokio::test]
 async fn context_defaults_to_three_lines() {
     let asked = patch(json!({
@@ -636,11 +467,6 @@ async fn context_defaults_to_three_lines() {
     );
 }
 
-/// A hunk one line long on a side writes that side's start and no count.
-///
-/// The unified-diff rule, and the one a parser written against `git diff`
-/// will be holding us to. `churny` changes one line of a one-line file, so
-/// both sides are the single-line case at once.
 #[tokio::test]
 async fn a_single_line_side_is_written_without_a_count() {
     let answer = patch(json!({
@@ -665,11 +491,6 @@ async fn a_single_line_side_is_written_without_a_count() {
     );
 }
 
-/// `\"full\"` is the engine's output with nothing done to it.
-///
-/// The other half of the criterion the hunks above are the first half of: at
-/// this setting there is no header to add and no line to drop, so what comes
-/// back is what the engine rendered.
 #[tokio::test]
 async fn full_context_is_the_engines_output_untouched() {
     let answer = patch(json!({
@@ -693,11 +514,6 @@ async fn full_context_is_the_engines_output_untouched() {
     );
 }
 
-/// A file only one version has gets the empty side `git` writes for it.
-///
-/// There is nothing to trim — every line is a change — so what a numeric
-/// `context_lines` adds here is the line numbers, and the side that has no
-/// lines is `0,0` rather than being left out.
 #[tokio::test]
 async fn a_one_sided_file_names_the_side_that_has_no_lines() {
     let added = patch(json!({
@@ -733,7 +549,6 @@ async fn a_one_sided_file_names_the_side_that_has_no_lines() {
     );
 }
 
-/// No context at all is the changed lines and the header, and nothing else.
 #[tokio::test]
 async fn no_context_is_the_changed_lines_alone() {
     let answer = patch(json!({
@@ -768,15 +583,6 @@ async fn no_context_is_the_changed_lines_alone() {
     );
 }
 
-/// Trimming drops the lines below the last change as well as those above the
-/// first.
-///
-/// Every other hunk in this file runs to the end of the body it came from —
-/// `renamey` replaces its last five lines and `churny` its only one — so a
-/// trimmer that cut the top of a file and kept the bottom would pass all of
-/// them. `src/index.js` changes the middle line of three, which is the shape
-/// that tells the two apart: the `}` below the change goes with the
-/// declaration above it.
 #[tokio::test]
 async fn a_change_in_the_middle_drops_the_lines_below_it_too() {
     let answer = patch(json!({
@@ -802,20 +608,6 @@ async fn a_change_in_the_middle_drops_the_lines_below_it_too() {
     );
 }
 
-/// Two changes more than twice the context apart are two hunks, and the lines
-/// neither of them needs are dropped from between them.
-///
-/// Every file this suite trims ahead of these two tests changes in one run of
-/// lines, so a trimmer that kept everything from the first change to the last,
-/// or wrote one header over the lot, would pass all of them. `apart`'s
-/// `src/far.js` has seven unchanged lines between its two changes, one more
-/// than the six that three lines either side keep, so `between4` is the one
-/// line between them that goes.
-///
-/// The second header is the one worth reading. The first change replaced one
-/// line with two, so everything after it sits a line further down in the
-/// second file, and the second hunk starts on line ten on the left and eleven
-/// on the right. Both headers are the ones `diff -U3` writes for the pair.
 #[tokio::test]
 async fn changes_more_than_twice_the_context_apart_are_two_hunks() {
     let answer = patch(json!({
@@ -858,16 +650,6 @@ async fn changes_more_than_twice_the_context_apart_are_two_hunks() {
     );
 }
 
-/// Two changes exactly twice the context apart share one hunk.
-///
-/// The other side of the line the test above stands on. `src/near.js` is
-/// `src/far.js` with one fewer line between its changes, so the three lines
-/// kept after the first change and the three kept before the second meet with
-/// nothing left out between them. `git` joins hunks that meet as well as hunks
-/// that overlap, and splitting these would be two headers with no gap between
-/// them. Between them the two tests put the line at exactly twice the context:
-/// a rule one line tighter splits this file, and one a line looser joins the
-/// other.
 #[tokio::test]
 async fn changes_exactly_twice_the_context_apart_share_one_hunk() {
     let answer = patch(json!({
@@ -908,13 +690,6 @@ async fn changes_exactly_twice_the_context_apart_share_one_hunk() {
     );
 }
 
-/// A diff with no changed line in it trims to its header.
-///
-/// The case a whitespace-only change makes when the handle says to ignore
-/// whitespace: the two files differ in bytes, so this is a diff, and no line
-/// differs, so there is no hunk. A header on its own is what a unified diff
-/// of nothing looks like, and it is the honest answer — the full setting is
-/// there for a caller that wants to see the file anyway.
 #[tokio::test]
 async fn a_diff_with_nothing_changed_in_it_is_its_header() {
     let answer = patch(json!({
@@ -938,17 +713,6 @@ async fn a_diff_with_nothing_changed_in_it_is_its_header() {
     );
 }
 
-/// Every line a trimmed answer carries, the full answer carries too.
-///
-/// What "presentation over the engine's output" means, held as a property
-/// rather than read off one example: trimming drops lines and adds hunk
-/// headers, and it invents no content. If it ever rewrote a line — re-wrapped
-/// it, changed a prefix, normalised whitespace — the line would not be found
-/// in the full answer and this fails.
-///
-/// Asserted over seven files from five comparisons, one of which (`apart`'s
-/// `src/far.js`) splits into two hunks, so it is a claim about the trimmer
-/// rather than about the one file that was convenient.
 #[tokio::test]
 async fn a_trimmed_answer_carries_no_line_the_full_answer_does_not() {
     for (package, path) in [
@@ -1000,15 +764,6 @@ async fn a_trimmed_answer_carries_no_line_the_full_answer_does_not() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// How much of it comes back
-// ---------------------------------------------------------------------------
-
-/// A patch over `max_bytes` is cut, says so, and states its real size.
-///
-/// The cut itself is `src/page.rs`'s and `tests/page.rs` holds where it
-/// falls. What is here is that this tool goes through that module rather than
-/// handing back whatever it rendered.
 #[tokio::test]
 async fn a_patch_over_max_bytes_is_cut_and_says_so() {
     let whole = patch(json!({
@@ -1045,11 +800,6 @@ async fn a_patch_over_max_bytes_is_cut_and_says_so() {
     );
 }
 
-/// The size a cut is measured against is the patch at the context asked for.
-///
-/// Trimming happens before the cut, which is what makes `context_lines` worth
-/// having: a caller that asked for three lines of context is not charged the
-/// response budget for the lines it asked to be spared.
 #[tokio::test]
 async fn the_reported_size_is_the_patch_at_the_context_asked_for() {
     let trimmed = patch(json!({
@@ -1080,17 +830,6 @@ async fn the_reported_size_is_the_patch_at_the_context_asked_for() {
     );
 }
 
-/// A file larger than a response is cut with nothing asked for.
-///
-/// `odd-files` ships a two-megabyte file and has one version, so comparing it
-/// against itself is the largest answer this suite can produce — a file
-/// neither version touched, carried whole. The server's own cap is what stops
-/// it, because a response over the platform's limit is not a long answer but
-/// an error with nothing in it.
-///
-/// What this does not prove is the same cap over a *diff* that large, which
-/// no pair of fixture archives can build. It is the same call to the same
-/// module either way, and `tests/page.rs` is what holds where the cut falls.
 #[tokio::test]
 async fn an_answer_larger_than_a_response_is_cut_without_being_asked() {
     let sent = Client::fixture()
@@ -1133,16 +872,6 @@ async fn an_answer_larger_than_a_response_is_cut_without_being_asked() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// What is refused
-// ---------------------------------------------------------------------------
-
-/// A handle that is not one never reaches the handler.
-///
-/// `tests/handle.rs` holds the four ways a handle is refused. What is asserted
-/// here is that this tool's argument is that type rather than a string it
-/// checks itself: a tool that verified late would answer `-32603` or, worse,
-/// fetch something first.
 #[tokio::test]
 async fn a_handle_that_is_not_one_is_a_protocol_error() {
     let answer = Client::fixture()
@@ -1165,7 +894,6 @@ async fn a_handle_that_is_not_one_is_a_protocol_error() {
     );
 }
 
-/// A handle whose two halves disagree is refused before anything is fetched.
 #[tokio::test]
 async fn a_handle_whose_halves_disagree_is_a_protocol_error() {
     let answer = Client::fixture()
@@ -1188,11 +916,6 @@ async fn a_handle_whose_halves_disagree_is_a_protocol_error() {
     );
 }
 
-/// A version the registry does not have is a tool error naming it.
-///
-/// The model channel rather than the protocol one: the handle decoded and the
-/// arguments were well formed, and what went wrong is something an agent can
-/// act on by asking for a version that exists.
 #[tokio::test]
 async fn a_version_the_registry_does_not_have_names_what_was_not_found() {
     let result = call(json!({
@@ -1218,11 +941,6 @@ async fn a_version_the_registry_does_not_have_names_what_was_not_found() {
     );
 }
 
-/// A package the registry does not have is a tool error naming it.
-///
-/// A crate rather than an npm package, because the fixture set's way of
-/// saying "the registry serves nothing here" is a `null` entry and that is
-/// where it has one.
 #[tokio::test]
 async fn a_package_the_registry_does_not_have_names_what_was_not_found() {
     let handle = DiffHandle::mint(Inputs {
@@ -1250,14 +968,6 @@ async fn a_package_the_registry_does_not_have_names_what_was_not_found() {
     );
 }
 
-/// A directory is refused rather than reported as a path in neither version.
-///
-/// The one place this tool departs from the engine on purpose. A directory
-/// has no content, so the engine's reading of it is "absent on both sides",
-/// and reproducing that answers `src` — a directory both versions ship — with
-/// a sentence saying it is in neither of them. That sentence is wrong and an
-/// agent has nothing to doubt it with. The remedy is a different path, which
-/// is a thing to be told.
 #[tokio::test]
 async fn a_directory_is_refused_rather_than_called_absent() {
     let result = call(json!({
@@ -1283,14 +993,6 @@ async fn a_directory_is_refused_rather_than_called_absent() {
     );
 }
 
-/// So is a directory only one version has.
-///
-/// `moved` renames `src/legacy/reporter.js` to `src/reporter.js`, so
-/// `src/legacy` is a directory in 1.0.0 and nothing in 2.0.0. There is no
-/// file at that path in either version, so there is nothing to diff, and the
-/// refusal names the version that has the directory. Both ways round: one way
-/// the tree has the directory, the other way a rename emptied it and only the
-/// file maps have it.
 #[tokio::test]
 async fn a_directory_only_one_version_has_is_refused() {
     for (from, to) in [("1.0.0", "2.0.0"), ("2.0.0", "1.0.0")] {
@@ -1320,12 +1022,6 @@ async fn a_directory_only_one_version_has_is_refused() {
     }
 }
 
-/// So is the root, which is the directory everything else is in.
-///
-/// The tree names its root `/`, so asking for `/` is asking for a directory
-/// and gets that refusal. Until #93 it was told `/` was in neither version,
-/// because the refusal was made out of the file maps and those have no entry
-/// for the root. #97 is where the other tools' reading of `/` is settled.
 #[tokio::test]
 async fn the_root_is_refused_as_a_directory() {
     let result = call(json!({ "handle": diffable(), "path": "/" })).await;
@@ -1346,22 +1042,10 @@ async fn the_root_is_refused_as_a_directory() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Getting there
-// ---------------------------------------------------------------------------
-
-/// A handle for `diffable` 1.0.0 → 2.0.0, minted rather than fetched.
-///
-/// The tool that mints one is called where the *agreement* between the two is
-/// what is being asserted. Everywhere else a handle is just the argument, and
-/// minting it here is one call rather than two — the shape
-/// `tests/get_diff_tree.rs` settled on.
 fn diffable() -> String {
     handle("diffable", "1.0.0", "2.0.0", false)
 }
 
-/// A handle for one npm comparison, at the defaults `diff_package_versions`
-/// would have used unless `ignore_whitespace` says otherwise.
 fn handle(package: &str, from: &str, to: &str, ignore_whitespace: bool) -> String {
     DiffHandle::mint(Inputs {
         registry: Registry::Npm,
@@ -1374,10 +1058,6 @@ fn handle(package: &str, from: &str, to: &str, ignore_whitespace: bool) -> Strin
     .encode()
 }
 
-/// The answer this tool gives to `arguments`, or a panic naming the failure.
-///
-/// The structured half, which is where a patch's `text`, `isDiff` and the
-/// three fields describing a cut arrive.
 async fn patch(arguments: Value) -> Value {
     let result = call(arguments).await;
 
@@ -1390,13 +1070,6 @@ async fn patch(arguments: Value) -> Value {
     result["structuredContent"].clone()
 }
 
-/// A handle with its package changed and its `diff_id` left alone.
-///
-/// What an agent does to a handle it can read part of: change the thing it is
-/// asking about and leave the identifier, which looks like an internal
-/// detail. The encoding is spelled out here rather than taken from the crate,
-/// so this is a forgery a client could send rather than one this server
-/// helped build.
 fn edited() -> String {
     let encoded = diffable();
     let encoded = encoded
@@ -1412,19 +1085,16 @@ fn edited() -> String {
     format!("d1:{}", URL_SAFE_NO_PAD.encode(payload.to_string()))
 }
 
-/// The `text` of an answer, or a panic naming what came back instead.
 fn text(answer: &Value) -> &str {
     answer["text"]
         .as_str()
         .unwrap_or_else(|| panic!("a patch carries text, got {answer}"))
 }
 
-/// The listed definition of `name`, or a panic naming what was listed.
 async fn listed(name: &str) -> Value {
     Client::fixture().listed(name).await
 }
 
-/// Call this tool with `arguments`, returning the `result`.
 async fn call(arguments: Value) -> Value {
     Client::fixture().call(TOOL, arguments).await
 }
