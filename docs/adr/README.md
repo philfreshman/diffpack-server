@@ -32,4 +32,5 @@ directory was created (#40).
 
 A new one goes in at the next number. The bar is the usual three: hard to
 reverse, surprising without the context, and the result of a real trade-off. A
-decision that fails any of them is a comment in the code, not a file here.
+decision that fails any of them goes in the commit message or the PR
+description, not a file here and not a comment in the code.
