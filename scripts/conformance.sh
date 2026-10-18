@@ -86,6 +86,10 @@ check() {
   fi
 }
 
+is_present() {
+  [[ -n "$1" ]]
+}
+
 negotiates_its_revision() {
   local era=$1
   local expected negotiated
@@ -109,7 +113,7 @@ lists_tools_whose_schemas_are_json_schema_2020_12() {
 
 listed_tools() {
   local era=$1
-  inspect "$era" --method tools/list 2>/dev/null | jq -r '.result.tools[].name'
+  inspect "$era" --method tools/list 2>/dev/null | jq -er '.result.tools[].name'
 }
 
 example_arguments() {
@@ -283,9 +287,11 @@ check_era() {
   check "${client} lists both diff templates" lists_both_diff_templates "$era"
   check "${client} lists the ${PROMPT} prompt" lists_the_prompt "$era"
 
-  local handle tool
+  local handle tools tool
   handle=$(minted_handle "$era")
-  for tool in $(listed_tools "$era"); do
+  tools=$(listed_tools "$era")
+  check "${client} lists the tools it is about to call" is_present "$tools"
+  for tool in $tools; do
     check "${client} calls ${tool} and gets the shape it declares" \
       answers_its_example_call "$era" "$tool" "$handle"
   done
