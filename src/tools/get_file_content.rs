@@ -19,7 +19,11 @@ pub struct Args {
 
     pub version: VersionName,
 
-    #[schemars(description = "Where the file is inside the archive, with the archive's top-level\ndirectory already removed: `src/index.js`, never\n`zod-4.0.0/src/index.js`.")]
+    #[schemars(
+        description = "Where the file is inside the archive, with the archive's top-level\n\
+        directory already removed: `src/index.js`, never\n\
+        `zod-4.0.0/src/index.js`."
+    )]
     pub path: String,
 
     #[serde(default)]
@@ -33,7 +37,13 @@ pub struct Content {
     #[serde(flatten)]
     pub excerpt: Excerpt,
 
-    #[schemars(description = "False when the text you were given is not what the file holds: its\nbytes were not valid UTF-8, and each one that could not be decoded is\nshown as the `U+FFFD` replacement character. A binary file therefore\nreads as mostly replacement characters instead of failing. True means\nevery byte decoded, so the text is the file.")]
+    #[schemars(
+        description = "False when the text you were given is not what the file holds: its\n\
+        bytes were not valid UTF-8, and each one that could not be decoded is\n\
+        shown as the `U+FFFD` replacement character. A binary file therefore\n\
+        reads as mostly replacement characters instead of failing. True means\n\
+        every byte decoded, so the text is the file."
+    )]
     pub valid_utf8: bool,
 }
 

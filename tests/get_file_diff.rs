@@ -70,7 +70,7 @@ async fn the_definition_carries_everything_an_agent_needs() {
          name; everything else has an answer without it: got {}",
         tool["inputSchema"]
     );
-    for field in ["text", "truncated", "bytes", "isDiff"] {
+    for field in ["text", "truncated", "bytes", "isDiff", "validUtf8"] {
         assert!(
             tool["outputSchema"]["properties"][field].is_object(),
             "the output schema should describe `{field}`, got {}",
@@ -142,6 +142,12 @@ async fn the_description_says_what_an_agent_would_otherwise_get_wrong() {
              told: got {description}"
         );
     }
+    assert!(
+        description.contains("U+FFFD") && description.contains("validUtf8"),
+        "a diff over bytes that did not decode shows replacement characters, \
+         which read as a corrupt file to an agent that was not told which \
+         field says so: got {description}"
+    );
 }
 
 #[tokio::test]
@@ -609,6 +615,88 @@ async fn a_change_in_the_middle_drops_the_lines_below_it_too() {
 }
 
 #[tokio::test]
+async fn changes_more_than_twice_the_context_apart_are_two_hunks() {
+    let answer = patch(json!({
+        "handle": handle("apart", "1.0.0", "2.0.0", false),
+        "path": "src/far.js",
+        "context_lines": 3,
+    }))
+    .await;
+
+    assert_eq!(
+        answer["text"],
+        json!(
+            "\
+--- from/src/far.js
++++ to/src/far.js
+@@ -2,7 +2,8 @@
+  const before2 = 0;
+  const before3 = 0;
+  const before4 = 0;
+- export const first = \"old\";
++ export const first = \"new\";
++ export const firstToo = \"new\";
+  const between1 = 0;
+  const between2 = 0;
+  const between3 = 0;
+@@ -10,7 +11,7 @@
+  const between5 = 0;
+  const between6 = 0;
+  const between7 = 0;
+- export const second = \"old\";
++ export const second = \"new\";
+  const after1 = 0;
+  const after2 = 0;
+  const after3 = 0;"
+        ),
+        "seven unchanged lines between two changes is one more than the six \
+         that three lines of context either side keep, so the middle one is \
+         dropped and each change gets a header of its own, the second counted \
+         from where it sits in each file: got {answer}"
+    );
+}
+
+#[tokio::test]
+async fn changes_exactly_twice_the_context_apart_share_one_hunk() {
+    let answer = patch(json!({
+        "handle": handle("apart", "1.0.0", "2.0.0", false),
+        "path": "src/near.js",
+        "context_lines": 3,
+    }))
+    .await;
+
+    assert_eq!(
+        answer["text"],
+        json!(
+            "\
+--- from/src/near.js
++++ to/src/near.js
+@@ -2,14 +2,15 @@
+  const before2 = 0;
+  const before3 = 0;
+  const before4 = 0;
+- export const first = \"old\";
++ export const first = \"new\";
++ export const firstToo = \"new\";
+  const between1 = 0;
+  const between2 = 0;
+  const between3 = 0;
+  const between4 = 0;
+  const between5 = 0;
+  const between6 = 0;
+- export const second = \"old\";
++ export const second = \"new\";
+  const after1 = 0;
+  const after2 = 0;
+  const after3 = 0;"
+        ),
+        "six unchanged lines between two changes is exactly the six that three \
+         lines of context either side keep, so they stay one hunk with every \
+         line between them: got {answer}"
+    );
+}
+
+#[tokio::test]
 async fn a_diff_with_nothing_changed_in_it_is_its_header() {
     let answer = patch(json!({
         "handle": handle("reformatted", "1.0.0", "2.0.0", true),
@@ -640,6 +728,7 @@ async fn a_trimmed_answer_carries_no_line_the_full_answer_does_not() {
         ("diffable", "src/added.js"),
         ("diffable", "src/removed.js"),
         ("reformatted", "src/main.js"),
+        ("apart", "src/far.js"),
     ] {
         let mut arguments = json!({
             "handle": handle(package, "1.0.0", "2.0.0", false),
@@ -790,6 +879,100 @@ async fn an_answer_larger_than_a_response_is_cut_without_being_asked() {
 }
 
 #[tokio::test]
+async fn a_diff_over_bytes_that_did_not_decode_says_so() {
+    let answer = undecodable("logo.png").await;
+
+    assert_eq!(answer["isDiff"], json!(true), "got {answer}");
+    assert!(
+        text(&answer).contains('\u{FFFD}'),
+        "the diff shows the bytes that did not decode as replacement \
+         characters: got {answer}"
+    );
+    assert_eq!(
+        answer["validUtf8"],
+        json!(false),
+        "without this an agent cannot tell a changed binary from a source \
+         file that arrived broken: got {answer}"
+    );
+}
+
+#[tokio::test]
+async fn an_unchanged_binary_says_what_get_file_content_says() {
+    let answer = undecodable("icon.png").await;
+    let content = Client::fixture()
+        .call(
+            "get_file_content",
+            json!({
+                "registry": "npm",
+                "package": "undecodable",
+                "version": "2.0.0",
+                "path": "icon.png",
+            }),
+        )
+        .await;
+    let content = &content["structuredContent"];
+
+    assert_eq!(answer["isDiff"], json!(false), "got {answer}");
+    assert_eq!(
+        answer["text"], content["text"],
+        "the answer is the file, so it is the text `get_file_content` gives"
+    );
+    assert_eq!(
+        answer["validUtf8"],
+        json!(false),
+        "and it did not decode: got {answer}"
+    );
+    assert_eq!(
+        answer["validUtf8"], content["validUtf8"],
+        "two tools asked about one file agree on whether it decoded"
+    );
+}
+
+#[tokio::test]
+async fn a_file_that_decoded_cleanly_says_so_on_both_branches() {
+    for (path, is_diff) in [("src/index.js", true), ("README.md", false)] {
+        let answer = undecodable(path).await;
+
+        assert_eq!(answer["isDiff"], json!(is_diff), "`{path}`: got {answer}");
+        assert_eq!(
+            answer["validUtf8"],
+            json!(true),
+            "`{path}`: every byte of both versions decoded: got {answer}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_diff_with_one_side_that_did_not_decode_says_so() {
+    let answer = undecodable("src/legacy.js").await;
+
+    assert_eq!(answer["isDiff"], json!(true), "got {answer}");
+    assert_eq!(
+        answer["validUtf8"],
+        json!(false),
+        "the first version's bytes did not decode, so the removed line is not \
+         what that file holds: got {answer}"
+    );
+}
+
+#[tokio::test]
+async fn a_line_that_did_not_decode_counts_where_the_trim_left_it_out() {
+    let answer = undecodable("src/far.js").await;
+
+    assert!(
+        !text(&answer).contains('\u{FFFD}'),
+        "the fixture should keep the undecodable line out of a trimmed \
+         answer, or this test proves nothing: got {answer}"
+    );
+    assert_eq!(
+        answer["validUtf8"],
+        json!(false),
+        "the file did not decode, whichever of its lines were shown: got \
+         {answer}"
+    );
+}
+
+#[tokio::test]
 async fn a_handle_that_is_not_one_is_a_protocol_error() {
     let answer = Client::fixture()
         .post(json!({
@@ -911,6 +1094,35 @@ async fn a_directory_is_refused_rather_than_called_absent() {
 }
 
 #[tokio::test]
+async fn a_directory_only_one_version_has_is_refused() {
+    for (from, to) in [("1.0.0", "2.0.0"), ("2.0.0", "1.0.0")] {
+        let result = call(json!({
+            "handle": handle("moved", from, to, false),
+            "path": "src/legacy",
+        }))
+        .await;
+
+        assert_eq!(
+            result["isError"],
+            json!(true),
+            "{from} → {to}: `src/legacy` is a directory in 1.0.0 and missing \
+             from 2.0.0, so there is no file to diff: got {result}"
+        );
+
+        let message = result["content"][0]["text"]
+            .as_str()
+            .expect("a tool error carries text for the model");
+        assert!(
+            message.contains("`src/legacy`")
+                && message.contains("1.0.0")
+                && message.contains("directory"),
+            "{from} → {to}: the refusal names the path and the version it is a \
+             directory in: got {message}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn the_root_is_refused_as_a_directory() {
     let result = call(json!({ "handle": diffable(), "path": "/" })).await;
 
@@ -932,6 +1144,14 @@ async fn the_root_is_refused_as_a_directory() {
 
 fn diffable() -> String {
     handle("diffable", "1.0.0", "2.0.0", false)
+}
+
+async fn undecodable(path: &str) -> Value {
+    patch(json!({
+        "handle": handle("undecodable", "1.0.0", "2.0.0", false),
+        "path": path,
+    }))
+    .await
 }
 
 fn handle(package: &str, from: &str, to: &str, ignore_whitespace: bool) -> String {

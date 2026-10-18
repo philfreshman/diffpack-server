@@ -8,7 +8,13 @@ use crate::tools::{Call, Tool};
 pub struct ListPackageVersions;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[schemars(description = "What a caller asks for.\n\nNothing is normalised: the package name goes to the registry exactly as it\narrives, the rule `docs/cache-key.md` fixes for the cache key and every\nother tool here follows.")]
+#[schemars(
+    description = "What a caller asks for.\n\
+    \n\
+    Nothing is normalised: the package name goes to the registry exactly as it\n\
+    arrives, the rule `docs/cache-key.md` fixes for the cache key and every\n\
+    other tool here follows."
+)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
     #[schemars(description = "The registry that publishes the package.")]
@@ -24,13 +30,32 @@ pub struct Args {
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-#[schemars(description = "What the registry says the package has.\n\nA wrapper around the page rather than a page on its own, because there are\ntwo answers here and only one of them is a sequence. See the module\nheader.")]
+#[schemars(
+    description = "What the registry says the package has.\n\
+    \n\
+    A wrapper around the page rather than a page on its own, because there are\n\
+    two answers here and only one of them is a sequence. See the module\n\
+    header."
+)]
 #[serde(rename_all = "camelCase")]
 pub struct Output {
     #[schemars(description = "The published versions, most recently published first.")]
     pub versions: Page<Version>,
 
-    #[schemars(description = "The version this registry itself points at: the one it installs for\nsomeone who names no version, and what to answer when you are asked\nwhich version a package is on. It is **not** the first entry of\n`versions` — that is the most recently published version, which on a\npackage with several live release lines is often a patch to an older\none.\n\nBeside the list rather than marked on an entry, so that asking for a\nsmall page cannot hide it: it is the same answer whichever page you\nasked for, and it may name a version that is not on this one.\n\nAbsent where the registry names none.")]
+    #[schemars(
+        description = "The version this registry itself points at: the one it installs for\n\
+        someone who names no version, and what to answer when you are asked\n\
+        which version a package is on. It is **not** the first entry of\n\
+        `versions` — that is the most recently published version, which on a\n\
+        package with several live release lines is often a patch to an older\n\
+        one.\n\
+        \n\
+        Beside the list rather than marked on an entry, so that asking for a\n\
+        small page cannot hide it: it is the same answer whichever page you\n\
+        asked for, and it may name a version that is not on this one.\n\
+        \n\
+        Absent where the registry names none."
+    )]
     pub current_version: Option<String>,
 }
 
@@ -38,13 +63,29 @@ pub struct Output {
 #[schemars(description = "One published version of the package.")]
 #[serde(rename_all = "camelCase")]
 pub struct Version {
-    #[schemars(description = "The version as the registry spells it. Pass it back exactly as it is\nwritten here: `v4.0.0` and `4.0.0` are different versions.")]
+    #[schemars(
+        description = "The version as the registry spells it. Pass it back exactly as it is\n\
+        written here: `v4.0.0` and `4.0.0` are different versions."
+    )]
     pub version: String,
 
-    #[schemars(description = "When the registry says this version was published, in the registry's\nown wording. This is what the list is ordered by.\n\nAbsent where the registry does not say. A version without one is\nlisted after every version that has one, so it is at the end of the\nlist without being the oldest release.")]
+    #[schemars(
+        description = "When the registry says this version was published, in the registry's\n\
+        own wording. This is what the list is ordered by.\n\
+        \n\
+        Absent where the registry does not say. A version without one is\n\
+        listed after every version that has one, so it is at the end of the\n\
+        list without being the oldest release."
+    )]
     pub published_at: Option<String>,
 
-    #[schemars(description = "Whether this is a preview — an alpha, a beta, a release candidate or\na development build — rather than a release. Use it to avoid diffing\nagainst a preview by accident; do not use it to pick the version a\npackage is on, which is `currentVersion` and is often neither a\npreview nor the newest entry.")]
+    #[schemars(
+        description = "Whether this is a preview — an alpha, a beta, a release candidate or\n\
+        a development build — rather than a release. Use it to avoid diffing\n\
+        against a preview by accident; do not use it to pick the version a\n\
+        package is on, which is `currentVersion` and is often neither a\n\
+        preview nor the newest entry."
+    )]
     pub prerelease: bool,
 }
 

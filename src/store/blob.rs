@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -183,6 +184,7 @@ impl Api {
 
         let mut blobs = Vec::new();
         let mut cursor: Option<String> = None;
+        let mut followed = HashSet::new();
 
         loop {
             let mut url = self.url(&self.base)?;
@@ -197,8 +199,8 @@ impl Api {
             blobs.extend(page.blobs);
 
             match page.cursor.filter(|_| page.has_more) {
-                Some(next) => cursor = Some(next),
-                None => return Ok(blobs),
+                Some(next) if followed.insert(next.clone()) => cursor = Some(next),
+                _ => return Ok(blobs),
             }
         }
     }
@@ -637,6 +639,59 @@ mod tests {
             stub.requests().len(),
             1,
             "there was no cursor to follow, so there was nothing to ask twice"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_list_sent_back_to_a_cursor_it_already_followed_ends_rather_than_asking_again() {
+        let stub = Stub::answering(vec![
+            Reply::ok(
+                r#"{"blobs":[{"pathname":"diffs/v1/aaa/meta.json","size":10,
+                    "uploadedAt":"2026-09-21T10:00:00.000Z"}],
+                    "cursor":"the-second-page","hasMore":true}"#,
+            ),
+            Reply::ok(
+                r#"{"blobs":[{"pathname":"diffs/v1/bbb/meta.json","size":20,
+                    "uploadedAt":"2026-09-21T11:00:00.000Z"}],
+                    "cursor":"the-third-page","hasMore":true}"#,
+            ),
+            Reply::ok(
+                r#"{"blobs":[{"pathname":"diffs/v1/ccc/meta.json","size":30,
+                    "uploadedAt":"2026-09-21T12:00:00.000Z"}],
+                    "cursor":"the-second-page","hasMore":true}"#,
+            ),
+        ])
+        .await;
+        let api = Api::at(stub.base(), "a-test-store", "a-token");
+
+        let blobs = api
+            .list("diffs/v1/")
+            .await
+            .expect("a cursor already followed is the end of the walk");
+
+        let paths: Vec<&str> = blobs.iter().map(|blob| blob.pathname.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "diffs/v1/aaa/meta.json",
+                "diffs/v1/bbb/meta.json",
+                "diffs/v1/ccc/meta.json"
+            ]
+        );
+
+        let targets: Vec<String> = stub
+            .requests()
+            .into_iter()
+            .map(|request| request.target)
+            .collect();
+        assert_eq!(
+            targets,
+            [
+                "/api/blob?prefix=diffs%2Fv1%2F",
+                "/api/blob?prefix=diffs%2Fv1%2F&cursor=the-second-page",
+                "/api/blob?prefix=diffs%2Fv1%2F&cursor=the-third-page",
+            ],
+            "each cursor should have been asked for once"
         );
     }
 

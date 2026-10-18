@@ -11,26 +11,44 @@ pub struct SearchPackages;
 #[schemars(description = "One package the search found.")]
 #[schemars(inline)]
 pub struct Hit {
-    #[schemars(description = "The package name, spelled the way the registry spells it. Pass it\nback verbatim to any tool that takes a package.")]
+    #[schemars(
+        description = "The package name, spelled the way the registry spells it. Pass it\n\
+        back verbatim to any tool that takes a package."
+    )]
     pub name: String,
 
-    #[schemars(description = "The version the registry would install if you named none. Absent\nmeans this registry does not say here, not that the package has\npublished nothing.")]
+    #[schemars(
+        description = "The version the registry would install if you named none. Absent\n\
+        means this registry does not say here, not that the package has\n\
+        published nothing."
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
 
-    #[schemars(description = "What the package says it is, in the registry's own words. Absent on\nregistries that do not carry one here.")]
+    #[schemars(
+        description = "What the package says it is, in the registry's own words. Absent on\n\
+        registries that do not carry one here."
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[schemars(description = "What a caller asks for.\n\nThe doc comments below are read by a model — see [`crate::tools`].")]
+#[schemars(
+    description = "What a caller asks for.\n\
+    \n\
+    The doc comments below are read by a model — see [`crate::tools`]."
+)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
     #[schemars(description = "The registry to search.")]
     pub registry: Registry,
 
-    #[schemars(description = "What to look for: a name, part of one, or a word that would appear in\na package's description. `http client`, `zod`, `yaml`. Blank finds\nnothing — there is no way to ask a registry for everything it has.")]
+    #[schemars(
+        description = "What to look for: a name, part of one, or a word that would appear in\n\
+        a package's description. `http client`, `zod`, `yaml`. Blank finds\n\
+        nothing — there is no way to ask a registry for everything it has."
+    )]
     pub query: String,
 
     #[serde(default)]

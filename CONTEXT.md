@@ -117,7 +117,9 @@ content is text, because extraction decodes it that way: bytes that are not
 valid UTF-8 become replacement characters rather than an error, so a FileMap
 holds a readable rendering of a binary file and not the file. Nothing
 downstream can undo that, which is why a tool returning content says whether
-it happened — and whether it happened is asked of the FileMap. What is at a
+it happened — `get_file_content` of one file, `get_file_diff` of either
+version of one — and whether it happened is asked by the FileMap's rule, of a
+file or of a patch rendered from two. What is at a
 path is one of three answers: a file with its text, a directory, or nothing.
 A directory is not an empty file, even though the extractor gives it empty
 content.
@@ -127,7 +129,9 @@ _Avoid_: tree, file list, contents, extracted archive
 The document a registry publishes naming every package it has — PyPI's,
 today, and nobody else's. It is fetched and *searched*: a query is matched
 against it here rather than sent, because PyPI has no search endpoint to send
-one to. Distinct from a Listing, which is about one version of one package;
+one to. It is the one document held between calls: fetched once per instance,
+and once however many ask at the same moment, then kept for ten minutes.
+Distinct from a Listing, which is about one version of one package;
 from a Catalogue, which is one package's versions and is what "index" is a
 banned synonym for there; and from the DiffStore's Entries, which are this
 server's own.
@@ -221,8 +225,8 @@ has is which way it arrived: one worked out now holds both Versions' files,
 and a remembered one holds the Patches the Entry was written with and none of
 the archives those came from. So one file's Patch is asked of it per file and
 rendered when the Comparison has no Patch for that file, rather than by asking
-which half it was given, after refusing a path the Tree says is a directory in
-either Version — and that rule is one function,
+which half it was given, after refusing a path the Tree says is a directory
+with no file at it in either Version — and that rule is one function,
 `Comparison::file_patch`, which `get_file_diff` and the file-diff resource
 both call. Distinct from an Entry, which is how a
 Comparison is remembered: an Entry is two Blobs in a store and a Comparison is
@@ -274,12 +278,11 @@ and it is arranged by directory where a FileMap is a flat set of paths. Two
 things about it are the engine's and neither is guessable from an answer, so
 both are said out loud wherever one is served: a directory's counts are the
 sum of its children's, and a directory a rename left empty is not in the Tree
-at all. A third is a known limit rather than a rule: the engine keeps one node
-per path, so a path that is a file in one Version and a directory in the other
-loses one of the two (philfreshman/diffpack-engine#7), and such a path is
-refused as a directory whichever way round it is asked (#103). One file or one
-directory in it is a *node* — not an Entry, which is the cache's, and not a
-FileMap's entry either.
+at all. A third is rare: a path that is a file in one Version and a directory
+in the other is two nodes with one path, told apart by their type, and asking
+for one file's Patch at such a path answers for the file, whichever way round
+it is asked (#111). One file or one directory in it is a *node* — not an
+Entry, which is the cache's, and not a FileMap's entry either.
 _Avoid_: file tree, hierarchy, listing, entry (for a node)
 
 **Subtree**:
@@ -302,8 +305,8 @@ whole version pair; a Patch covers one file inside it. Two of the four shapes
 a file can be in are not diffs and say so: a file whose content did not change
 is its own content, and a file in neither version is a sentence — so a reader
 renders a file as a file rather than as a diff of all-context lines. The
-rendering is the engine's, reproduced in `src/engine.rs` because the engine
-keeps it private to its browser binding ([ADR
+rendering is the engine's `build_patch`, the one its browser binding renders
+through too, reached through `src/engine.rs` ([ADR
 0013](docs/adr/0013-the-patch-renderer-lives-in-the-engine-seam.md)).
 _Avoid_: hunk, delta, file diff
 
@@ -408,6 +411,19 @@ what `resources/list` carries and a template is what
 `resources/templates/list` carries, because only the first is a URI a client
 can follow as it stands.
 _Avoid_: document, asset
+
+**Prompt**:
+A message an agent is handed rather than a call it makes: what to do with the
+Tools, in what order, for one task a person names. A Tool does something and a
+Resource says what is there; a Prompt says how to go about a question with
+both. It renders text from its arguments and reaches nothing — no registry,
+no DiffStore — so a package that does not exist is found out by the first Tool
+the Prompt sends an agent to, not by the Prompt. It names Tools and their
+fields, which makes it the one thing on the surface that goes stale when a
+Tool is renamed; `tests/prompts.rs` holds every name in its text to the tool
+list. `review_upgrade` is the one there is.
+_Avoid_: template, script, recipe, workflow, instructions (that is the
+server's own field)
 
 **Failure**:
 Anything that goes wrong, together with which of MCP's two channels it reaches

@@ -456,7 +456,10 @@ fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 #[schemars(
-    description = "The pagination arguments as a tool declares them. Written out here rather\nthan reached for inside `src/tools/` because it is the shape being tested,\nnot any one tool: whatever #11 and #14 call themselves, this is what their\n`Args` has to contain for the numbers to be inherited rather than retyped."
+    description = "The pagination arguments as a tool declares them. Written out here rather\n\
+    than reached for inside `src/tools/` because it is the shape being tested,\n\
+    not any one tool: whatever #11 and #14 call themselves, this is what their\n\
+    `Args` has to contain for the numbers to be inherited rather than retyped."
 )]
 #[serde(deny_unknown_fields)]
 struct PagingArgs {

@@ -12,7 +12,8 @@ use crate::registry::{PackageName, Registry, VersionName};
 use crate::resources;
 use crate::store::Entry;
 use crate::tools::get_file_diff::{self, OneFile};
-use crate::tools::{get_diff_tree, Call, Tool};
+use crate::tools::get_diff_tree::{self, NodeType};
+use crate::tools::{Call, Tool};
 
 pub struct DiffPackageVersions;
 
@@ -21,7 +22,14 @@ fn default_similarity_threshold() -> f64 {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[schemars(description = "What a caller asks for.\n\nNothing is normalised: the package name and both versions go to the\nregistry exactly as they arrive, the rule `docs/cache-key.md` fixes for\nthe cache key. The doc comments below are read by a model — see the\nmodule header.")]
+#[schemars(
+    description = "What a caller asks for.\n\
+    \n\
+    Nothing is normalised: the package name and both versions go to the\n\
+    registry exactly as they arrive, the rule `docs/cache-key.md` fixes for\n\
+    the cache key. The doc comments below are read by a model — see the\n\
+    module header."
+)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
     #[schemars(description = "The registry that publishes the package.")]
@@ -33,12 +41,19 @@ pub struct Args {
 
     pub to_version: VersionName,
 
-    #[schemars(description = "How alike a removed file and an added file must be before the pair is\nreported as one renamed file, from `0` to `1`. Lower it to find\nrenames in files that also changed a lot.")]
+    #[schemars(
+        description = "How alike a removed file and an added file must be before the pair is\n\
+        reported as one renamed file, from `0` to `1`. Lower it to find\n\
+        renames in files that also changed a lot."
+    )]
     #[schemars(range(min = 0.0, max = 1.0))]
     #[serde(default = "default_similarity_threshold")]
     pub similarity_threshold: f64,
 
-    #[schemars(description = "Disregard whitespace when comparing, so that a reformatting is not\nreported as a change. Every space, tab and line ending is ignored.")]
+    #[schemars(
+        description = "Disregard whitespace when comparing, so that a reformatting is not\n\
+        reported as a change. Every space, tab and line ending is ignored."
+    )]
     #[serde(default)]
     pub ignore_whitespace: bool,
 }
@@ -48,7 +63,13 @@ pub struct Args {
 pub struct Output {
     pub handle: DiffHandle,
 
-    #[schemars(description = "The identifier of this comparison, as 64 lowercase hexadecimal\ncharacters. Every argument you passed names it, not the package and\nthe two versions alone: the same pair compared at a different\nsimilarity threshold, or with whitespace ignored, is a different\ncomparison and is given a different identifier.")]
+    #[schemars(
+        description = "The identifier of this comparison, as 64 lowercase hexadecimal\n\
+        characters. Every argument you passed names it, not the package and\n\
+        the two versions alone: the same pair compared at a different\n\
+        similarity threshold, or with whitespace ignored, is a different\n\
+        comparison and is given a different identifier."
+    )]
     pub diff_id: String,
 
     #[schemars(description = "The version compared from.")]
@@ -60,17 +81,29 @@ pub struct Output {
     #[schemars(description = "How much changed, in files and in lines.")]
     pub totals: Totals,
 
-    #[schemars(description = "The files that changed most, most first. Unchanged files are not\nlisted. This is a sample and not the whole comparison: ask for the\nfull tree if you need every file.")]
+    #[schemars(
+        description = "The files that changed most, most first. Unchanged files are not\n\
+        listed. This is a sample and not the whole comparison: ask for the\n\
+        full tree if you need every file."
+    )]
     pub most_changed: Vec<Changed>,
 
-    #[schemars(description = "Whether this comparison was remembered from an earlier call rather\nthan worked out now. A remembered one costs no downloads, so asking\nagain for something you have already asked for is cheap.")]
+    #[schemars(
+        description = "Whether this comparison was remembered from an earlier call rather\n\
+        than worked out now. A remembered one costs no downloads, so asking\n\
+        again for something you have already asked for is cheap."
+    )]
     pub cached: bool,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 #[schemars(description = "One file that changed, as the summary lists it.")]
 pub struct Changed {
-    #[schemars(description = "Where the file is in the second version, with the archive's\ntop-level directory removed. For a removed file, where it was in the\nfirst.")]
+    #[schemars(
+        description = "Where the file is in the second version, with the archive's\n\
+        top-level directory removed. For a removed file, where it was in the\n\
+        first."
+    )]
     pub path: String,
 
     #[schemars(description = "What happened to it.")]
@@ -82,7 +115,10 @@ pub struct Changed {
     #[schemars(description = "Lines removed from this file.")]
     pub lines_removed: u32,
 
-    #[schemars(description = "Where the file was in the first version, when it moved. Absent\nunless the status is `renamed`.")]
+    #[schemars(
+        description = "Where the file was in the first version, when it moved. Absent\n\
+        unless the status is `renamed`."
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub old_path: Option<String>,
 }
@@ -113,7 +149,13 @@ impl From<&DiffStatus> for Status {
 const MOST_CHANGED: usize = 20;
 
 #[derive(Debug, Default, Serialize, schemars::JsonSchema)]
-#[schemars(description = "How much changed between the two versions.\n\nThe five status counts are files, not directories: a directory's status is\na summary of what is under it and counting both would report every change\nmore than once.")]
+#[schemars(
+    description = "How much changed between the two versions.\n\
+    \n\
+    The five status counts are files, not directories: a directory's status is\n\
+    a summary of what is under it and counting both would report every change\n\
+    more than once."
+)]
 pub struct Totals {
     #[schemars(description = "Files present in the second version and not the first.")]
     pub added: u32,
@@ -124,7 +166,10 @@ pub struct Totals {
     #[schemars(description = "Files present in both versions whose content differs.")]
     pub modified: u32,
 
-    #[schemars(description = "Files that moved to a different path. Counted here and not under\nadded or removed.")]
+    #[schemars(
+        description = "Files that moved to a different path. Counted here and not under\n\
+        added or removed."
+    )]
     pub renamed: u32,
 
     #[schemars(description = "Files present in both versions with identical content.")]
@@ -200,10 +245,6 @@ fn collect(
             }
 
             let was = node.old_path.as_deref().unwrap_or(&node.path);
-            if files.directory_at(End::To, &node.path) || files.directory_at(End::From, was) {
-                return;
-            }
-
             patches.insert(
                 node.path.clone(),
                 patch_of(files, &node.path, was, ignore_whitespace),
@@ -218,7 +259,7 @@ fn collect(
 }
 
 fn patch_of(files: &Versions, path: &str, from_path: &str, ignore_whitespace: bool) -> Patch {
-    engine::patch(
+    engine::build_patch(
         path,
         files.from_files.at(from_path).text(),
         files.to_files.at(path).text(),
@@ -255,7 +296,7 @@ impl Comparison {
     ) -> Result<get_file_diff::Patch, Failure> {
         let from_path = asked.old_path.unwrap_or(asked.path);
         refuse_directory(self.handle.inputs(), asked.path, from_path, |end, path| {
-            directory_in_tree(&self.tree, end, path)
+            kind_in_tree(&self.tree, end, path)
         })?;
 
         if let Some(patch) = self.stored(asked.path, asked.old_path) {
@@ -268,7 +309,7 @@ impl Comparison {
     }
 
     fn stored(&self, path: &str, old_path: Option<&str>) -> Option<&Patch> {
-        let node = get_diff_tree::node_at(&self.tree, path)?;
+        let node = get_diff_tree::node_at(&self.tree, path, NodeType::File)?;
 
         (node.old_path.as_deref() == old_path)
             .then(|| self.patches.get(path))
@@ -293,9 +334,7 @@ impl Comparison {
             }
         };
 
-        refuse_directory(inputs, path, from_path, |end, path| {
-            files.directory_at(end, path)
-        })?;
+        refuse_directory(inputs, path, from_path, |end, path| files.kind_at(end, path))?;
 
         Ok(patch_of(files, path, from_path, inputs.ignore_whitespace))
     }
@@ -308,48 +347,48 @@ enum End {
 }
 
 impl Versions {
-    fn directory_at(&self, end: End, path: &str) -> bool {
+    fn kind_at(&self, end: End, path: &str) -> Option<NodeType> {
         let files = match end {
             End::From => &self.from_files,
             End::To => &self.to_files,
         };
 
-        files.at(path) == At::Directory
+        match files.at(path) {
+            At::File(_) => Some(NodeType::File),
+            At::Directory => Some(NodeType::Directory),
+            At::Nothing => None,
+        }
     }
 }
 
-fn directory_in_tree(tree: &DiffFileEntry, end: End, path: &str) -> bool {
-    let Some(node) = get_diff_tree::node_at(tree, path) else {
-        return false;
+fn kind_in_tree(tree: &DiffFileEntry, end: End, path: &str) -> Option<NodeType> {
+    let absent: &[DiffStatus] = match end {
+        End::From => &[DiffStatus::Added, DiffStatus::Renamed],
+        End::To => &[DiffStatus::Removed],
     };
 
-    let absent = match end {
-        End::From => DiffStatus::Added,
-        End::To => DiffStatus::Removed,
-    };
-
-    match node.file_type {
-        FileType::Directory => node.status != absent,
-        FileType::File => {
-            node.status == absent && node.children.as_ref().is_some_and(|children| !children.is_empty())
-        }
-    }
+    [NodeType::File, NodeType::Directory].into_iter().find(|kind| {
+        get_diff_tree::node_at(tree, path, *kind).is_some_and(|node| !absent.contains(&node.status))
+    })
 }
 
 fn refuse_directory(
     inputs: &Inputs,
     path: &str,
     from_path: &str,
-    is_directory: impl Fn(End, &str) -> bool,
+    kind_at: impl Fn(End, &str) -> Option<NodeType>,
 ) -> Result<(), Failure> {
-    let directory = [
+    let ends = [
         (End::To, path, &inputs.to_version),
         (End::From, from_path, &inputs.from_version),
     ]
-    .into_iter()
-    .find(|(end, path, _)| is_directory(*end, path));
+    .map(|(end, path, version)| (kind_at(end, path), path, version));
 
-    match directory {
+    if ends.iter().any(|(kind, ..)| *kind == Some(NodeType::File)) {
+        return Ok(());
+    }
+
+    match ends.into_iter().find(|(kind, ..)| *kind == Some(NodeType::Directory)) {
         Some((_, path, version)) => Err(Failure::PathIsDirectory {
             package: inputs.package.clone(),
             version: version.clone(),

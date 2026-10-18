@@ -8,10 +8,23 @@ use crate::tools::{Call, Tool};
 pub struct ResolveArchiveUrl;
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[schemars(description = "What a caller asks for.\n\nEvery field is required and none is normalised: the package name and the\nversion go to the registry exactly as they arrive, the same rule\n`docs/cache-key.md` fixes for the cache key. `@types/node` keeps its\nscope and `v4.0.0` keeps its `v`.")]
+#[schemars(
+    description = "What a caller asks for.\n\
+    \n\
+    Every field is required and none is normalised: the package name and the\n\
+    version go to the registry exactly as they arrive, the same rule\n\
+    `docs/cache-key.md` fixes for the cache key. `@types/node` keeps its\n\
+    scope and `v4.0.0` keeps its `v`."
+)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
-    #[schemars(description = "The registry that publishes the package: `npm` or `crates`.\n\n`pypi` parses and is a registry this server knows, but this tool\ncannot resolve a URL for it: PyPI lists a version's files in its\nmetadata rather than serving them from a predictable path.")]
+    #[schemars(
+        description = "The registry that publishes the package: `npm` or `crates`.\n\
+        \n\
+        `pypi` parses and is a registry this server knows, but this tool\n\
+        cannot resolve a URL for it: PyPI lists a version's files in its\n\
+        metadata rather than serving them from a predictable path."
+    )]
     pub registry: Registry,
 
     pub package: PackageName,

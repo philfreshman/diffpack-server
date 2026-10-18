@@ -9,7 +9,11 @@ use crate::tools::{diff_package_versions, Call, Tool};
 pub struct GetDiffTree;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[schemars(description = "What a caller asks for.\n\nThe doc comments below are read by a model — see the module header.")]
+#[schemars(
+    description = "What a caller asks for.\n\
+    \n\
+    The doc comments below are read by a model — see the module header."
+)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
     pub handle: DiffHandle,
@@ -17,12 +21,32 @@ pub struct Args {
     #[serde(default)]
     pub path: Option<page::Subtree>,
 
-    #[schemars(description = "How many levels to descend, counting from wherever the answer is\nrooted — the comparison itself, or the directory `path` named: `1` is\nthat directory's own contents and nothing inside them. Omit it to\ndescend the whole way.")]
+    #[schemars(
+        description = "How many levels to descend, counting from wherever the answer is\n\
+        rooted — the comparison itself, or the directory `path` named: `1` is\n\
+        that directory's own contents and nothing inside them. Omit it to\n\
+        descend the whole way."
+    )]
     #[schemars(range(min = 1))]
     #[serde(default)]
     pub depth: Option<u32>,
 
-    #[schemars(description = "Only files and directories with one of these statuses. Omit it for\nall of them.\n\nMost of a comparison is `unchanged`: a version bump moves a handful\nof files in a package that ships thousands, and paging through the\nrest is a call spent on what did not happen. Asking for `added`,\n`removed`, `modified` and `renamed` is how you read what changed.\n\nA directory is kept or dropped on its own status, and a directory's\nstatus is not the union of its children's — one holding a single\nchanged file is `modified` even though the directory itself did not\nmove, and one the second version added is `added` even when the only\nthing inside it is a file that moved there. Asking for `modified`\nalone is not a way to find every directory something happened under.")]
+    #[schemars(
+        description = "Only files and directories with one of these statuses. Omit it for\n\
+        all of them.\n\
+        \n\
+        Most of a comparison is `unchanged`: a version bump moves a handful\n\
+        of files in a package that ships thousands, and paging through the\n\
+        rest is a call spent on what did not happen. Asking for `added`,\n\
+        `removed`, `modified` and `renamed` is how you read what changed.\n\
+        \n\
+        A directory is kept or dropped on its own status, and a directory's\n\
+        status is not the union of its children's — one holding a single\n\
+        changed file is `modified` even though the directory itself did not\n\
+        move, and one the second version added is `added` even when the only\n\
+        thing inside it is a file that moved there. Asking for `modified`\n\
+        alone is not a way to find every directory something happened under."
+    )]
     #[serde(default)]
     pub status: Vec<Status>,
 
@@ -36,14 +60,33 @@ pub struct Args {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[schemars(description = "One file or one directory in the comparison.")]
 pub struct Node {
-    #[schemars(description = "Where it is in the second version, with the archive's top-level\ndirectory removed. For something that was removed, where it was in\nthe first.")]
+    #[schemars(
+        description = "Where it is in the second version, with the archive's top-level\n\
+        directory removed. For something that was removed, where it was in\n\
+        the first."
+    )]
     pub path: String,
 
-    #[schemars(description = "Whether this is a file or a directory.\n\nThe part a path does not carry: `src` and `src/index.js` look alike\nand only one of them has content to ask for.")]
+    #[schemars(
+        description = "Whether this is a file or a directory.\n\
+        \n\
+        The part a path does not carry: `src` and `src/index.js` look alike\n\
+        and only one of them has content to ask for."
+    )]
     #[serde(rename = "type")]
     pub node_type: NodeType,
 
-    #[schemars(description = "What happened to it between the two versions.\n\nA directory's status is about the directory first and what is under\nit second. One the second version does not have is `removed` and one\nthe first version did not have is `added`, whatever happened to the\nfiles inside — a directory that is new is `added` even when the only\nthing in it is a file that moved there. A directory both versions\nhave is `modified` when anything beneath it changed and `unchanged`\nonly when nothing did.")]
+    #[schemars(
+        description = "What happened to it between the two versions.\n\
+        \n\
+        A directory's status is about the directory first and what is under\n\
+        it second. One the second version does not have is `removed` and one\n\
+        the first version did not have is `added`, whatever happened to the\n\
+        files inside — a directory that is new is `added` even when the only\n\
+        thing in it is a file that moved there. A directory both versions\n\
+        have is `modified` when anything beneath it changed and `unchanged`\n\
+        only when nothing did."
+    )]
     pub status: Status,
 
     #[schemars(description = "Lines added. For a directory, the sum of everything under it.")]
@@ -52,7 +95,10 @@ pub struct Node {
     #[schemars(description = "Lines removed. For a directory, the sum of everything under it.")]
     pub lines_removed: u32,
 
-    #[schemars(description = "Where the file was in the first version, when it moved. Absent\nunless the status is `renamed`.")]
+    #[schemars(
+        description = "Where the file was in the first version, when it moved. Absent\n\
+        unless the status is `renamed`."
+    )]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub old_path: Option<String>,
 }
@@ -129,16 +175,26 @@ fn flatten(parent: &DiffFileEntry, left: u32, wanted: &[Status], nodes: &mut Vec
     }
 }
 
-pub fn node_at<'t>(root: &'t DiffFileEntry, path: &str) -> Option<&'t DiffFileEntry> {
+pub fn node_at<'t>(root: &'t DiffFileEntry, path: &str, kind: NodeType) -> Option<&'t DiffFileEntry> {
     if root.path == path {
-        return Some(root);
+        return (NodeType::from(&root.file_type) == kind).then_some(root);
     }
 
     root.children
         .iter()
         .flatten()
-        .find(|child| path == child.path || path.starts_with(&format!("{}/", child.path)))
-        .and_then(|child| node_at(child, path))
+        .find(|child| leads_to(child, path, kind))
+        .and_then(|child| node_at(child, path, kind))
+}
+
+fn leads_to(child: &DiffFileEntry, path: &str, kind: NodeType) -> bool {
+    let child_kind = NodeType::from(&child.file_type);
+
+    if child.path == path {
+        return child_kind == kind;
+    }
+
+    child_kind == NodeType::Directory && path.starts_with(&format!("{}/", child.path))
 }
 
 impl Tool for GetDiffTree {
@@ -151,7 +207,9 @@ impl Tool for GetDiffTree {
         directory's contents, `depth` for how far down to go, and `status` \
         for which kinds of change you want. A directory a rename left empty \
         is not in the comparison at all, even though the first version had \
-        it, so a `path` naming it is an empty page. Ask for `added`, `removed`, \
+        it, so a `path` naming it is an empty page. A path that is a file in \
+        one version and a directory in the other is listed twice, once as \
+        each. Ask for `added`, `removed`, \
         `modified` and `renamed` to read what changed — most of a package is \
         `unchanged` between two versions, and paging through that is a call \
         spent on what did not happen. Each file and directory in the answer \
@@ -174,7 +232,7 @@ impl Tool for GetDiffTree {
         let tree = diff_package_versions::compare(&args.handle, call).await?.tree;
 
         let rooted_at = match args.path.unwrap_or_default().directory() {
-            Some(directory) => node_at(&tree, directory),
+            Some(directory) => node_at(&tree, directory, NodeType::Directory),
             None => Some(&tree),
         };
 

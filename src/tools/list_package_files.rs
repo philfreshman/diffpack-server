@@ -9,7 +9,15 @@ use crate::tools::{Call, Tool};
 pub struct ListPackageFiles;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[schemars(description = "What a caller asks for.\n\nNothing is normalised: the package name and the version go to the\nregistry exactly as they arrive, the rule `docs/cache-key.md` fixes for\nthe cache key and [`super::resolve_archive_url`] follows for the same\nreason. The doc comments below are read by a model — see the module\nheader.")]
+#[schemars(
+    description = "What a caller asks for.\n\
+    \n\
+    Nothing is normalised: the package name and the version go to the\n\
+    registry exactly as they arrive, the rule `docs/cache-key.md` fixes for\n\
+    the cache key and [`super::resolve_archive_url`] follows for the same\n\
+    reason. The doc comments below are read by a model — see the module\n\
+    header."
+)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
     #[schemars(description = "The registry that publishes the package.")]
@@ -35,11 +43,24 @@ pub struct Entry {
     #[schemars(description = "Where it is, with the archive's top-level directory stripped.")]
     pub path: String,
 
-    #[schemars(description = "Whether this is a file or a directory.\n\nThe part a path does not carry: `src` and `src/lib.rs` look alike and\nonly one of them has content to ask for.")]
+    #[schemars(
+        description = "Whether this is a file or a directory.\n\
+        \n\
+        The part a path does not carry: `src` and `src/lib.rs` look alike and\n\
+        only one of them has content to ask for."
+    )]
     #[serde(rename = "type")]
     pub entry_type: EntryType,
 
-    #[schemars(description = "How many bytes the file's extracted text is. Zero for a directory.\n\nThe extracted text, not the bytes the registry served: the archive is\ndecompressed before anything is counted, and a file that is not valid\nUTF-8 is read lossily, so its size here is the readable form's. It is\nwhat deciding whether to ask for the content costs, which is the\nquestion this field is for.")]
+    #[schemars(
+        description = "How many bytes the file's extracted text is. Zero for a directory.\n\
+        \n\
+        The extracted text, not the bytes the registry served: the archive is\n\
+        decompressed before anything is counted, and a file that is not valid\n\
+        UTF-8 is read lossily, so its size here is the readable form's. It is\n\
+        what deciding whether to ask for the content costs, which is the\n\
+        question this field is for."
+    )]
     pub size: usize,
 }
 

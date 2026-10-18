@@ -16,7 +16,7 @@ path = "api/mcp.rs"
 [dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "0.22"
-diffpack-engine = { git = "https://github.com/philfreshman/diffpack-engine.git", tag = "v0.3.0" }
+diffpack-engine = { git = "https://github.com/philfreshman/diffpack-engine.git", tag = "v0.4.1" }
 futures = { version = "0.3.34", default-features = false, features = ["std"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["gzip", "rustls-no-provider"] }
 rmcp = { version = "3.4.0", features = ["server", "transport-streamable-http-server"] }

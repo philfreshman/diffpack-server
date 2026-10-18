@@ -70,8 +70,12 @@ impl<'a> File<'a> {
     }
 
     pub fn decoded_cleanly(self) -> bool {
-        !self.text.contains(char::REPLACEMENT_CHARACTER)
+        decoded_cleanly(self.text)
     }
+}
+
+pub fn decoded_cleanly(text: &str) -> bool {
+    !text.contains(char::REPLACEMENT_CHARACTER)
 }
 
 pub const SIZE_LIMIT: u64 = 128 * 1024 * 1024;
@@ -145,12 +149,17 @@ impl Archive {
         };
 
         let bytes = self.documents.body(&url, &about).await?;
-        extract(&bytes, package, version)
+        extract(registry, &bytes, package, version)
     }
 }
 
-fn extract(bytes: &[u8], package: &str, version: &str) -> Result<FileMap, Failure> {
-    engine::extract_archive_bytes(bytes)
+fn extract(
+    registry: Registry,
+    bytes: &[u8],
+    package: &str,
+    version: &str,
+) -> Result<FileMap, Failure> {
+    engine::unpack_archive(registry.id(), package, version, bytes)
         .map(FileMap::from)
         .map_err(|reason| Failure::MalformedArchive {
             package: package.to_owned(),

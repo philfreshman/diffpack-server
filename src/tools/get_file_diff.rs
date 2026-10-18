@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 use serde::{de, Deserialize, Deserializer, Serialize};
 
+use crate::archive;
 use crate::engine;
 use crate::error::Failure;
 use crate::handle::DiffHandle;
@@ -12,15 +13,28 @@ use crate::tools::{diff_package_versions, Call, Tool};
 pub struct GetFileDiff;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[schemars(description = "What a caller asks for.\n\nThe doc comments below are read by a model — see [`super`].")]
+#[schemars(
+    description = "What a caller asks for.\n\
+    \n\
+    The doc comments below are read by a model — see [`super`]."
+)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
     pub handle: DiffHandle,
 
-    #[schemars(description = "Where the file is in the second version, with the archive's top-level\ndirectory already removed: `src/index.js`, never\n`zod-4.0.0/src/index.js`. For a file the second version does not have,\nwhere it was in the first.")]
+    #[schemars(
+        description = "Where the file is in the second version, with the archive's top-level\n\
+        directory already removed: `src/index.js`, never\n\
+        `zod-4.0.0/src/index.js`. For a file the second version does not have,\n\
+        where it was in the first."
+    )]
     pub path: String,
 
-    #[schemars(description = "Where the file was in the first version, when it moved. Pass the\n`old_path` the comparison gave you for a renamed file; omit it for\neverything else.")]
+    #[schemars(
+        description = "Where the file was in the first version, when it moved. Pass the\n\
+        `old_path` the comparison gave you for a renamed file; omit it for\n\
+        everything else."
+    )]
     #[serde(default)]
     pub old_path: Option<String>,
 
@@ -38,8 +52,25 @@ pub struct Patch {
     #[serde(flatten)]
     pub excerpt: Excerpt,
 
-    #[schemars(description = "True when `text` is a diff — a `--- from` / `+++ to` header and one\nline per change. False when it is not, and then it is the file's own\ncontent: a file both versions have byte for byte has no diff to show,\nand a path neither version has is a sentence saying so. Render a\n`false` as a file rather than trying to parse it as a patch.")]
+    #[schemars(
+        description = "True when `text` is a diff — a `--- from` / `+++ to` header and one\n\
+        line per change. False when it is not, and then it is the file's own\n\
+        content: a file both versions have byte for byte has no diff to show,\n\
+        and a path neither version has is a sentence saying so. Render a\n\
+        `false` as a file rather than trying to parse it as a patch."
+    )]
     pub is_diff: bool,
+
+    #[schemars(
+        description = "False when the text you were given is not what the files hold: a byte\n\
+        in either version of the file was not valid UTF-8, and each one that\n\
+        could not be decoded is shown as the `U+FFFD` replacement character. A\n\
+        binary file therefore reads as mostly replacement characters instead\n\
+        of failing. It describes the whole file in both versions, including\n\
+        lines left out around the changes, so it can be false when the text\n\
+        you see has none. True means every byte decoded."
+    )]
+    pub valid_utf8: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,8 +266,13 @@ impl Tool for GetFileDiff {
         the whole file, added. And `context_lines` is how many unchanged \
         lines come with each change, three by default: a short answer usually \
         means the rest of the file was left out rather than that little \
-        changed, and `full` is how you ask for all of it. A long diff is cut \
-        short, and the answer says so and gives the whole thing's size.";
+        changed, and `full` is how you ask for all of it. A file whose bytes \
+        are not valid UTF-8, such as an image, is decoded anyway, with each \
+        byte that could not be decoded shown as `U+FFFD`; `validUtf8` is \
+        false when either version of the file had one, even if none of the \
+        lines you were shown do, so replacement characters do not mean the \
+        file arrived broken. A long diff is cut short, and the answer says so \
+        and gives the whole thing's size.";
 
     const READ_ONLY: bool = true;
 
@@ -281,5 +317,6 @@ pub fn presented(rendered: &engine::Patch, asked: &OneFile<'_>) -> Patch {
     Patch {
         excerpt: page::truncate(&text, asked.max_bytes),
         is_diff: rendered.is_diff,
+        valid_utf8: archive::decoded_cleanly(&rendered.data),
     }
 }

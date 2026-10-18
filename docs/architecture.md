@@ -19,6 +19,7 @@ src/tools/          one module per tool: definition and handler together,
                     Ctx, the seams that outlive a call, and Call, one call
                     over them with its own tally
 src/resources/      one module per resource: URI and handler together
+src/prompts/        one module per prompt: arguments and messages together
 src/registry.rs     what a registry is: npm, crates, pypi (go later); and the
                     package and version arguments that state its rules
 src/archive/        fetch(registry, package, version) -> FileMap, and what
@@ -52,11 +53,12 @@ new engine release is one file to change and one file to read.
 [`scripts/check-engine-seam.sh`](../scripts/check-engine-seam.sh) fails the
 build otherwise. See [ADR 0007](adr/0007-one-importer-of-the-engine.md).
 
-**A tool or a resource module goes through the seams, not around them.** A
-module under `src/tools/` or `src/resources/` may import the standard library,
-the MCP and serialisation crates, `futures` for the one file under there that
-waits on two fetches at once, and `crate::{archive, cache_key, catalogue,
-engine, error, handle, page, registry, resources, search, store, tools}`. It
+**A tool, resource or prompt module goes through the seams, not around
+them.** A module under `src/tools/`, `src/resources/` or `src/prompts/` may
+import the standard library, the MCP and serialisation crates, `futures` for
+the one file under there that waits on two fetches at once, and
+`crate::{archive, cache_key, catalogue, engine, error, handle, page, prompts,
+registry, resources, search, store, tools}`. It
 may not name an HTTP client or the blob store: those are `fetch`'s and
 `store`'s business, and eight tools that each know how to fetch is eight
 places to fix a timeout. Nor may it name the accessor that hands a FileMap's
@@ -80,10 +82,10 @@ the one line per call is written once by the dispatch rather than nineteen
 times by the tools that remembered. That exact path and no other: a tool is
 free to grow into a directory, and `src/tools/thing/mod.rs` is then a tool
 like any other. The name deny-list still covers the collection, so the
-exemption is from the list and not from the rule. `src/resources/mod.rs` is a
-collection too and deliberately does not get one: it needs nothing a resource
-may not have, and an exemption granted before it is needed is a rule weakened
-for free.
+exemption is from the list and not from the rule. `src/resources/mod.rs` and
+`src/prompts/mod.rs` are collections too and deliberately do not get one: each
+needs nothing the modules beside it may not have, and an exemption granted
+before it is needed is a rule weakened for free.
 
 **`docs/cache-key.md` is normative, not descriptive.** The cache key is a
 contract with a TypeScript implementation (#27) that will never share a line of
@@ -113,12 +115,14 @@ origin list as parameters, which is the seam the transport tests drive.
 ### `src/mcp.rs` — what this server says it is
 
 The `ServerHandler`: identity, capabilities, protocol revisions, the sorted
-tool list, and the two lists a client discovers this server's resources
-through. It collects; it does not describe — a tool's definition lives with
-its handler under `src/tools/` ([ADR 0002](adr/0002-one-module-per-tool.md))
-and a resource's URI lives with its handler under `src/resources/`. Which URI
-resolves to what is `resources::read`'s, the way which name runs what is
-`tools::call`'s. `Guarded` is also here: the wrapper
+tool list, the two lists a client discovers this server's resources through,
+and the sorted prompt list. It collects; it does not describe — a tool's
+definition lives with its handler under `src/tools/` ([ADR
+0002](adr/0002-one-module-per-tool.md)), a resource's URI lives with its
+handler under `src/resources/`, and a prompt's arguments live with its
+messages under `src/prompts/`. Which URI resolves to what is
+`resources::read`'s, the way which name runs what is `tools::call`'s and which
+name renders what is `prompts::get`'s. `Guarded` is also here: the wrapper
 that turns a panic inside a handler into a JSON-RPC error rather than a hung
 request, which has to be inside the handler because `rmcp` runs handlers on a
 task of their own.
@@ -155,15 +159,15 @@ of the archives they came from.
 So one file's patch is one question, and it is asked of the comparison:
 `Comparison::file_patch`, in the same module as `compare`, which
 `get_file_diff` and the file-diff resource each call once. Behind it, in
-order: a path the tree says is a directory in either version, refused
-without a download; the patch the comparison holds for that file; both
-versions' files — two downloads when the comparison was remembered without
-them — only for a file with neither; the file rendered through the same
-lookup the pre-render in `compare` uses; and `get_file_diff::presented` for
-the trim and the cut, which stay that tool's because `context_lines` is its
-argument. It is a method because the comparison keeps its handle private, so
-the files it fetches cannot be paired with another comparison's handle by a
-caller passing one in.
+order: a path the tree says is a directory, with no file at it in either
+version, refused without a download; the patch the comparison holds for that
+file; both versions' files — two downloads when the comparison was remembered
+without them — only for a file with neither; the file rendered through the
+same lookup the pre-render in `compare` uses; and `get_file_diff::presented`
+for the trim and the cut, which stay that tool's because `context_lines` is
+its argument. It is a method because the comparison keeps its handle
+private, so the files it fetches cannot be paired with another comparison's
+handle by a caller passing one in.
 
 Asking per file is the right question whichever way a patch went missing:
 over the per-patch cap, dropped with the rest because the entry was too big,
@@ -173,21 +177,22 @@ what an answer turns on, because an entry missing one file's patch still
 answers for every other — and `DiffStore::get` serving an entry that lost its
 patches rests on `file_patch` keeping it that way.
 
-The directory comes first, before the stored patch, because of one path the
-tree gets wrong: a file in one version and a directory in the other (#103).
-The engine keeps one node per path, so compared from the file it calls the
-path a removed file and hangs the directory's contents beneath it. `compare`
-used to store that file's patch, and a warm call served it where a cold one,
-reading the file maps, refused the directory. The rule now is the one
-`get_file_diff` stated before #93: a directory in either version is
-`PathIsDirectory` ([ADR
-0017](adr/0017-a-failure-carries-the-code-it-earned.md)), warm or cold, both
-ways round. The tree says so without a download — a file node never has
-children unless it is this collision — and `compare` asks the file maps it has
-in hand and renders no patch for such a path, so new entries do not hold one
-and old ones are refused all the same. Serving the patch on both paths was the
-alternative, and it could only ever be consistent one way round: compared from
-the directory, the tree has no file at that path at all.
+The directory comes first, before the stored patch, so a refusal is the
+tree's answer and never turns on what an entry holds. The rule is narrow: a
+path is `PathIsDirectory` ([ADR
+0017](adr/0017-a-failure-carries-the-code-it-earned.md)) only when there is a
+directory at it and no file at it in either version (#111). The tree and the
+file maps are asked the same question, what is at this path in this version,
+so a warm call and a cold one give the same answer.
+
+One path makes the rule matter: a file in one version and a directory in the
+other. The tree lists it twice, a file and a directory side by side with one
+`path`, and an agent that reads the file row asks for that file. So it is
+served the file's patch, its removal or its addition, both ways round, and
+`compare` stores that patch like any other. #103 had refused such a path, a
+directory in either version, while the engine kept one node per path and lost
+one of the two (philfreshman/diffpack-engine#7); `diffpack-engine` 0.3.1 keeps
+both, and #111 moved to serving the file.
 
 A tool writes down types rather than JSON. The `Tool` trait's associated
 `Args` and `Output` generate the input schema, the output schema and the
@@ -326,13 +331,60 @@ resource states its own freshness — the catalogue changes when a build deploys
 and a comparison cannot change at all, because a handle that would be answered
 differently is one this build refuses.
 
+### `src/prompts/` — what an agent is asked to do with the tools
+
+One module per prompt, in the shape `src/tools/` has: its name, title and
+description, the arguments it takes, and the messages it renders, together.
+`mod.rs` is the collection — the `prompts!` list, sorted by name the way the
+tool list is, the `Prompt` trait every prompt implements, and `prompts::get`,
+which parses the arguments and renders the messages. A prompt name that is
+not on the list is `Failure::NoSuchPrompt`, `-32602`, like a tool name that is
+not on its list.
+
+A prompt is the one module that describes an order of operations over the
+tools rather than doing one, so it is the one that goes stale when a tool is
+renamed. Two things keep it from going stale quietly. It names every tool by
+that tool's `NAME` constant rather than by a string of its own, so a renamed
+tool renames itself in the prompt. And `tests/prompts.rs` reads the rendered
+text back over the wire and fails on any backticked field-shaped name —
+`from_version`, `old_path`, `nextCursor` — that is not a tool in `tools/list`
+or a field of one of their schemas. That second check is the one that caught
+`next_cursor` while `review_upgrade` was written: the Rust field is spelt one
+way and the wire another, and only the wire is what an agent reads.
+
+A prompt's arguments are listed by hand rather than generated from its `Args`
+type the way a tool's schema is. `prompts/list` carries a flat list of named
+strings rather than a JSON Schema, and a client that fills them in by position
+— Claude Code turns a prompt into a slash command — fills them in the order
+they are listed, which a generated schema's alphabetical properties would
+scramble. What keeps the list and the type in step is the test that drops
+each listed argument in turn and expects `-32602` naming it, beside the one
+that passes all of them and expects messages. `Args` is
+`deny_unknown_fields`, as a tool's is, so an argument the list does not have is
+refused rather than ignored.
+
+An argument that arrives as an empty string is treated as absent before the
+arguments are parsed. A client filling arguments by position sends what was
+not typed as `""`, and that is no more a package name than a missing one.
+
+It fetches nothing and has no `Call`. Rendering a prompt is pure: the
+arguments in, the text out, with no registry reached to check that the
+package or either version exists. The first tool the prompt sends an agent
+to is the one that finds out, and answers on the channel that can say so. Any
+per-registry fact a prompt states — the file a package declares its
+dependencies in, the runtime it targets — is a `match` in `src/registry.rs`
+like every other one, so a fourth registry is told what it owes the prompt by
+the compiler.
+
 ### `src/registry.rs` — what a registry is
 
 npm, crates.io and PyPI, described once: the identifier used in a parameter and
 in a cache key (`npm`, `crates`, `pypi`), the name the registry calls itself in
 a message to a model (`npm`, `crates.io`, `PyPI`), where a version's archive is,
 where versions and search come from, the hosts it may be reached at, and the
-name rules an agent would otherwise guess at. Every per-registry fact is a
+name rules an agent would otherwise guess at, and the manifest a package
+declares its dependencies in and the runtime it targets, which
+`review_upgrade` sends an agent to. Every per-registry fact is a
 `match` over the three variants in this one file, so the compiler enumerates
 what a fourth registry owes.
 
@@ -382,7 +434,10 @@ questions: `at(path)`, which is a file with its text, a directory, or nothing
 cannot say plainly — a directory's content is the empty string, so emptiness
 cannot tell a directory from an empty file, and a file that was not UTF-8
 holds replacement characters rather than its bytes — so it is said once here
-rather than worked out again by every tool that reads one (#95). The engine is
+rather than worked out again by every tool that reads one (#95). The decoding
+rule is also a free function, `archive::decoded_cleanly`, because
+`get_file_diff` asks it of a patch, and a patch the cache kept has no FileMap
+behind it (#70). The engine is
 the one reader of the map itself, to build a tree, and it gets it through
 `engine::build_diff_tree`, which takes two FileMaps: the map crosses back to
 the engine in the one module that imports it. The accessor that crossing uses
@@ -468,10 +523,11 @@ Where a search is asked, what to ask it for, and how to read the answer are
 `src/document/`'s, along with the other two seams'. What is this module's is
 the size cap's number, the refusals a search fails with, and the one policy a
 search needs that a catalogue does not: PyPI's source is the index of
-everything it publishes rather than a reply to a query, so a warm instance
-holds the document it already fetched for the ten minutes PyPI's own
-`cache-control` gives it — a constant in `src/search/` rather than a header
-read back off each answer, so a `max-age` PyPI changed is a change made here.
+everything it publishes rather than a reply to a query, so it is fetched once
+per instance, and once however many ask at the same moment, then held for the
+ten minutes PyPI's own `cache-control` gives it — a constant in `src/search/`
+rather than a header read back off each answer, so a `max-age` PyPI changed is
+a change made here.
 That is a document, not an answer — every query is matched against it afresh —
 so no search result is cached anywhere and nothing here goes near the blob
 store.
@@ -522,6 +578,21 @@ could only agree. What does reach it is a fixture body and one a warm instance
 was already holding — the paths nothing streamed, which is what keeps the cap
 a rule about what this server will read rather than about where bytes came
 from.
+
+Holding a document once it has arrived is only half of holding it. On a cold
+instance every search that lands before the first fetch completes would find
+nothing held and fetch the whole index itself, and four of them would take
+every download slot, leaving archives to wait and then be refused as `Busy`.
+So a caller that finds nothing held takes a turn before fetching and looks
+again once it has it, by which time the caller ahead has usually left the
+document behind. The turn is one `tokio::sync::Mutex` for the process rather
+than one per URL, for the reason the memo holds one document: a map keyed by
+URL is a cache with an eviction policy to choose, and there is one source in
+this shape. A failed fetch leaves nothing behind, so the next caller tries
+again and the failure it gets is its own. Only a source with `remember_for`
+takes the turn; archives and version lists go straight to `fetch`. The turn is
+always taken before a download slot and never while holding one, so it adds no
+cycle to the slots' waits.
 
 ### `src/fetch.rs` — the registries' HTTP client
 
@@ -978,36 +1049,38 @@ in the cache key rather than a label. The server computes diffs with the same
 code the browser runs; re-implementing any of it would mean two copies of an
 output format that has to stay byte-identical.
 
-Two functions here are written out rather than re-exported. The first is the
-exception that the paragraph above is the reason for. `patch` renders one
-file's Patch — the four cases a file can be in between two versions, and which
-of them is a diff at all. The engine has it, as `build_diff_result`, but
-private to its `wasm_bindgen` layer and so not part of the surface a Cargo
-dependent links against. Two tools need it and they arrived at different
-times — #21 renders every changed file while both archives are extracted, #15
-renders one on demand, by which time it costs two downloads — so it goes in
-the module that names the engine version it is pinned to, where a drift is one
-file to fix. Both call it; the two arrived in parallel each with a copy, and
-collapsing them was the first thing the merge of the two was for. See [ADR
+One function here is written out rather than re-exported. `build_diff_tree` is
+the engine's own, but it takes the map a `FileMap` keeps private, so the
+version here takes two FileMaps and hands the engine the map inside each. That
+is the one place the map leaves `archive`, and it is here because this is the
+module that imports the engine the map is handed to (#95).
+
+There used to be a second. `build_patch` renders one file's Patch — the four
+cases a file can be in between two versions, and which of them is a diff at
+all — and until `diffpack-engine` 0.4.0 it was private to the engine's
+`wasm_bindgen` layer, so this module carried a transcription of it for the two
+tools that render one: #21 every changed file while both archives are
+extracted, #15 one on demand. It is re-exported now, with the `Patch` it
+returns, whose fields serialise as the `data` and `is_diff` a stored
+`patches.json` already has. See [ADR
 0013](adr/0013-the-patch-renderer-lives-in-the-engine-seam.md).
 
-The second is written out for a smaller reason. `build_diff_tree` is the
-engine's own, but it takes the map a `FileMap` keeps private, so the version
-here takes two FileMaps and hands the engine the map inside each. That is the
-one place the map leaves `archive`, and it is here because this is the module
-that imports the engine the map is handed to (#95).
+The archive lookup is the engine's too, and is re-exported whole:
+`archive_source` says where a version's archive is, or which listing names it;
+`choose_archive` reads a listing for it; `unpack_archive` extracts it, with
+whatever wrapper directory that registry's archives have removed. None of them
+fetches. `registry` asks the first two and `archive` asks the last, and every
+download between them is `archive`'s own, under its size cap and its failures.
 
-One known limit comes through this seam unchanged. The engine's tree keeps one
-node per path, so a path that is a file in one version and a directory in the
-other loses one of the two: compared from the file, the directory's contents
-hang beneath a file node with the wrong statuses, and compared from the
-directory, the file is not in the tree at all. That is
-[philfreshman/diffpack-engine#7](https://github.com/philfreshman/diffpack-engine/issues/7).
-Until an engine release fixes it, `get_file_diff` and the file-diff resource
-refuse such a path as a directory both ways round (#103), and the other tools
-serve the tree as the engine built it. The fix is not one to wait on here:
-the engine version is a field in the cache key, so the release that carries it
-is also the one that retires every entry written under this one.
+One thing about the tree comes through this seam that a reader keyed on paths
+has to allow for. A path that is a file in one version and a directory in the
+other is two nodes, siblings with one `path` told apart by their type, the
+first version's first; a file node never has anything under it. Before
+`diffpack-engine` 0.3.1 the engine kept one node per path and lost one of the
+two ([philfreshman/diffpack-engine#7](https://github.com/philfreshman/diffpack-engine/issues/7)).
+So `get_diff_tree::node_at` is asked for a node of a kind, and descends only
+into directories. The engine version is a field in the cache key, so the bump
+that brought the fix also retired every entry written with the old tree.
 
 ### `src/health.rs` — the `/health` body
 

@@ -38,15 +38,11 @@ impl Registry {
     }
 
     pub fn archive(self, package: &str, version: &str) -> Result<ArchiveSource, Failure> {
-        match self {
-            Self::Npm | Self::Crates => engine::build_tarball_url(self.id(), package, version)
-                .map(|url| ArchiveSource::Archive { url })
-                .map_err(|_| Failure::Internal {
-                    doing: "building an archive URL",
-                }),
-
-            Self::PyPi => Ok(ArchiveSource::Listing {
-                url: format!("https://pypi.org/pypi/{package}/{version}/json"),
+        match engine::archive_source(self.id(), package, version) {
+            Ok(engine::ArchiveSource::Archive { url }) => Ok(ArchiveSource::Archive { url }),
+            Ok(engine::ArchiveSource::Listing { url }) => Ok(ArchiveSource::Listing { url }),
+            Err(_) => Err(Failure::Internal {
+                doing: "building an archive URL",
             }),
         }
     }
@@ -66,6 +62,22 @@ impl Registry {
                            normalisation is applied, so `Typing.Extensions` keeps its \
                            case and its dot."
             }
+        }
+    }
+
+    pub fn manifest(self) -> &'static str {
+        match self {
+            Self::Npm => "`package.json`",
+            Self::Crates => "`Cargo.toml`",
+            Self::PyPi => "`PKG-INFO`, `pyproject.toml` or `setup.py`",
+        }
+    }
+
+    pub fn runtime(self) -> &'static str {
+        match self {
+            Self::Npm => "Node.js",
+            Self::Crates => "Rust",
+            Self::PyPi => "Python",
         }
     }
 
@@ -317,14 +329,7 @@ impl Registry {
     }
 
     pub fn choose_archive(self, listing: &str) -> Option<String> {
-        match self {
-            Self::Npm | Self::Crates => None,
-
-            Self::PyPi => {
-                let metadata: engine::PyPiResponse = serde_json::from_str(listing).ok()?;
-                engine::select_pypi_sdist_url(&metadata.urls).ok()
-            }
-        }
+        engine::choose_archive(self.id(), listing).ok()
     }
 }
 

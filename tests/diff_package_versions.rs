@@ -1,6 +1,7 @@
 mod common;
 
 use common::Client;
+use diffpack_server::engine;
 use diffpack_server::handle::{DiffHandle, Inputs};
 use diffpack_server::registry::Registry;
 use serde_json::{json, Value};
@@ -445,7 +446,7 @@ async fn lowering_the_similarity_threshold_finds_more_renames() {
 
 #[tokio::test]
 async fn the_diff_id_is_the_one_the_cache_key_document_fixes() {
-    let vector = golden_vector("npm/zod");
+    let vector = worked_example_at_the_pinned_engine();
     let input = &vector["input"];
 
     let result = call(json!({
@@ -573,20 +574,41 @@ async fn the_handle_carries_the_inputs_it_was_minted_from() {
 }
 
 fn golden_vector(name: &str) -> Value {
+    golden_vectors()
+        .into_iter()
+        .find(|vector| vector["name"] == name)
+        .unwrap_or_else(|| panic!("`{name}` should be one of the golden vectors"))
+}
+
+fn worked_example_at_the_pinned_engine() -> Value {
+    let mut pinned = golden_vector("npm/zod")["input"].clone();
+    pinned["engine"] = json!(engine::VERSION);
+
+    golden_vectors()
+        .into_iter()
+        .find(|vector| vector["input"] == pinned)
+        .unwrap_or_else(|| {
+            panic!(
+                "no vector holds the worked example at engine {}: add one to \
+                 fixtures/cache-key-vectors.json, generated from docs/cache-key.md \
+                 rather than from this crate",
+                engine::VERSION
+            )
+        })
+}
+
+fn golden_vectors() -> Vec<Value> {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/fixtures/cache-key-vectors.json"
     );
     let text = std::fs::read_to_string(path).expect("the golden vectors should read");
-    let file: Value = serde_json::from_str(&text).expect("the golden vectors should parse");
+    let mut file: Value = serde_json::from_str(&text).expect("the golden vectors should parse");
 
-    file["vectors"]
-        .as_array()
-        .expect("the file holds an array of vectors")
-        .iter()
-        .find(|vector| vector["name"] == name)
-        .unwrap_or_else(|| panic!("`{name}` should be one of the golden vectors"))
-        .clone()
+    match file["vectors"].take() {
+        Value::Array(vectors) => vectors,
+        other => panic!("the file holds an array of vectors, not {other}"),
+    }
 }
 
 async fn listed(name: &str) -> Value {

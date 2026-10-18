@@ -166,7 +166,7 @@ fn client() -> Result<&'static Client, Failure> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -176,7 +176,7 @@ mod tests {
     use axum::extract::State;
     use axum::Router;
 
-    static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    pub(crate) static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     const HELD: Duration = Duration::from_millis(100);
 

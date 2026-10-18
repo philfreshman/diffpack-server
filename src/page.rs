@@ -17,7 +17,16 @@ pub const MAX_LIMIT: usize = 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[schemars(
-    description = "As much of a sequence as fits, and how to ask for the rest.\n\n`total` is the length of the whole sequence and not of `items`. That is\nthe field a client needs to know there is more, and the one a tool that\ncounted its own answer would get wrong.\n\n`next_cursor` travels as `nextCursor`, which is how the specification\nspells the field on every other paginated result a client reads. A page\nthat named it otherwise would be this one server's spelling of the one\nthing a client is meant to pass back without looking at it."
+    description = "As much of a sequence as fits, and how to ask for the rest.\n\
+    \n\
+    `total` is the length of the whole sequence and not of `items`. That is\n\
+    the field a client needs to know there is more, and the one a tool that\n\
+    counted its own answer would get wrong.\n\
+    \n\
+    `next_cursor` travels as `nextCursor`, which is how the specification\n\
+    spells the field on every other paginated result a client reads. A page\n\
+    that named it otherwise would be this one server's spelling of the one\n\
+    thing a client is meant to pass back without looking at it."
 )]
 #[serde(rename_all = "camelCase")]
 pub struct Page<T> {
@@ -315,16 +324,24 @@ impl JsonSchema for Subtree {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[schemars(
-    description = "As much of one thing as fits, and the truth about the rest.\n\nThe blob-shaped half of this module. #12 returns a file's content and #15\na file's diff; neither is a sequence, so neither has a next cursor. What\nthey share with a [`Page`] is the ceiling and the rule that a cut is\nstated rather than hidden — a silently cut file is how an agent concludes\na function does not exist."
+    description = "As much of one thing as fits, and the truth about the rest.\n\
+    \n\
+    The blob-shaped half of this module. #12 returns a file's content and #15\n\
+    a file's diff; neither is a sequence, so neither has a next cursor. What\n\
+    they share with a [`Page`] is the ceiling and the rule that a cut is\n\
+    stated rather than hidden — a silently cut file is how an agent concludes\n\
+    a function does not exist."
 )]
 pub struct Excerpt {
     #[schemars(
-        description = "The text. When it was cut, the last line of it says so and says how\nmuch you were given."
+        description = "The text. When it was cut, the last line of it says so and says how\n\
+        much you were given."
     )]
     pub text: String,
 
     #[schemars(
-        description = "False when `text` is the whole thing, true when it was cut and there\nis more you have not been shown."
+        description = "False when `text` is the whole thing, true when it was cut and there\n\
+        is more you have not been shown."
     )]
     pub truncated: bool,
 
