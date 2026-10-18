@@ -469,7 +469,8 @@ impl Tool for DiffPackageVersions {
         pass to the tools that read the comparison in detail, `get_diff_tree` \
         for its files and `get_file_diff` for one file's changes — not with the \
         whole list of changed files, which can be far too large to return at \
-        once.";
+        once. A large count of `unchanged` files is normal and not a finding: \
+        most of a package is `unchanged` between two versions.";
 
     const READ_ONLY: bool = true;
 

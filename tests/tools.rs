@@ -369,6 +369,33 @@ async fn a_comparisons_options_come_with_its_handle_and_are_not_asked_again() {
 }
 
 #[tokio::test]
+async fn every_tool_that_counts_what_did_not_change_says_most_of_a_package_does_not() {
+    let mut asked = 0;
+
+    for tool in Client::fixture().tools().await {
+        let name = named(&tool);
+        if !tool["outputSchema"].to_string().contains("unchanged") {
+            continue;
+        }
+
+        asked += 1;
+        let said = tool["description"].as_str().unwrap_or_default();
+        assert!(
+            said.contains("most of a package is `unchanged`"),
+            "`{name}` reports what did not change, and a large `unchanged` \
+             count reads as a finding to an agent that was not told it is \
+             normal: got {said}"
+        );
+    }
+
+    assert!(
+        asked >= 2,
+        "a comparison's summary and its tree both count what did not \
+         change, so finding {asked} means this walked the wrong field"
+    );
+}
+
+#[tokio::test]
 async fn no_description_an_agent_reads_names_a_rust_path() {
     let mut leaked = Vec::new();
 
