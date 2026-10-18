@@ -25,7 +25,7 @@ endpoint=""
 failures=()
 
 install_tools() {
-  npm ci --prefix "$TOOLS_DIR" --ignore-scripts --no-audit --no-fund --silent
+  npm ci --prefix "$TOOLS_DIR" --engine-strict --ignore-scripts --no-audit --no-fund --loglevel=error
 }
 
 built_server() {
