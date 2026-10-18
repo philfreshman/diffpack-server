@@ -313,8 +313,9 @@ impl JsonSchema for Subtree {
             "type": "string",
             "description": "\
                 Only what is inside this directory, one level or many: `src`, or \
-                `src/util`. A trailing slash is allowed and makes no difference. \
-                It names a directory and is not matched by characters, so `sr` does \
+                `src/util`, with the archive's top-level directory already removed, \
+                so never `zod-4.0.0/src`. A trailing slash is allowed and makes no \
+                difference. It names a directory and is not matched by characters, so `sr` does \
                 not narrow to `src/`, and the directory itself is not in its own \
                 subtree. Omit it, or pass `/` or an empty string, for all of it. \
                 A path with nothing under it is an empty page rather than an \

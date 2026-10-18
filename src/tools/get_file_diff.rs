@@ -32,8 +32,9 @@ pub struct Args {
 
     #[schemars(
         description = "Where the file was in the first version, when it moved. Pass the\n\
-        `old_path` the comparison gave you for a renamed file; omit it for\n\
-        everything else."
+        `old_path` the comparison gave you for a renamed file, which like\n\
+        `path` has the archive's top-level directory already removed; omit it\n\
+        for everything else."
     )]
     #[serde(default)]
     pub old_path: Option<String>,

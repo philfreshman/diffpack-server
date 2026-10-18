@@ -17,6 +17,8 @@ const TOOLS: [&str; 8] = [
 
 const COMPARISON_OPTIONS: [&str; 2] = ["similarity_threshold", "ignore_whitespace"];
 
+const PATH_ARGUMENTS: [&str; 3] = ["path", "prefix", "old_path"];
+
 const NEIGHBOURS: [(&str, &str); 5] = [
     ("get_file_content", "get_file_diff"),
     ("list_package_files", "get_diff_tree"),
@@ -396,6 +398,38 @@ async fn every_tool_that_counts_what_did_not_change_says_most_of_a_package_does_
 }
 
 #[tokio::test]
+async fn every_path_argument_says_the_archives_own_directory_is_not_part_of_it() {
+    let mut asked = 0;
+
+    for tool in Client::fixture().tools().await {
+        let name = named(&tool);
+        let told = tool["description"].as_str().unwrap_or_default();
+        for (field, schema) in arguments(&tool) {
+            if !PATH_ARGUMENTS.contains(&field) {
+                continue;
+            }
+
+            asked += 1;
+            let said = schema["description"].as_str().unwrap_or_default();
+            assert!(
+                [said, told]
+                    .iter()
+                    .any(|text| words(text).contains("top-level directory")),
+                "`{name}`'s `{field}` is a path inside an archive whose every \
+                 entry sits under one directory, and an agent cannot guess \
+                 that it leaves that directory out: got {schema}"
+            );
+        }
+    }
+
+    assert!(
+        asked >= 5,
+        "four tools take a path inside a package, one of them two, so \
+         finding {asked} means this walked the wrong field"
+    );
+}
+
+#[tokio::test]
 async fn no_description_an_agent_reads_names_a_rust_path() {
     let mut leaked = Vec::new();
 
@@ -449,6 +483,10 @@ fn bounds(schema: &Value) -> Vec<String> {
             false => bound.to_string(),
         })
         .collect()
+}
+
+fn words(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn states(text: &str, value: &str) -> bool {
