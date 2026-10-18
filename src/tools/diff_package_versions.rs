@@ -44,7 +44,7 @@ pub struct Args {
     #[schemars(
         description = "How alike a removed file and an added file must be before the pair is\n\
         reported as one renamed file, from `0` to `1`. Lower it to find\n\
-        renames in files that also changed a lot."
+        renames in files that also changed a lot. Omit it for `0.75`."
     )]
     #[schemars(range(min = 0.0, max = 1.0))]
     #[serde(default = "default_similarity_threshold")]
@@ -52,7 +52,8 @@ pub struct Args {
 
     #[schemars(
         description = "Disregard whitespace when comparing, so that a reformatting is not\n\
-        reported as a change. Every space, tab and line ending is ignored."
+        reported as a change. Every space, tab and line ending is ignored.\n\
+        Omit it for `false`, which counts every whitespace change."
     )]
     #[serde(default)]
     pub ignore_whitespace: bool,

@@ -190,6 +190,47 @@ async fn every_package_argument_states_every_registrys_name_rule() {
 }
 
 #[tokio::test]
+async fn every_optional_argument_says_what_leaving_it_out_means() {
+    let mut asked = 0;
+
+    for tool in Client::fixture().tools().await {
+        let name = named(&tool);
+        let required = &tool["inputSchema"]["required"];
+        for (field, schema) in arguments(&tool) {
+            if required
+                .as_array()
+                .is_some_and(|fields| fields.contains(&json!(field)))
+            {
+                continue;
+            }
+
+            asked += 1;
+            let said = schema["description"].as_str().unwrap_or_default();
+            assert!(
+                said.to_lowercase().contains("omit it"),
+                "`{name}`'s `{field}` is optional, and an agent cannot see a \
+                 default it is not told about: got {schema}"
+            );
+
+            let default = &schema["default"];
+            if default.is_number() || default.is_boolean() {
+                assert!(
+                    states(said, &default.to_string()),
+                    "`{name}`'s `{field}` defaults to {default}, which its \
+                     description should say: got {schema}"
+                );
+            }
+        }
+    }
+
+    assert!(
+        asked >= 18,
+        "seven tools take eighteen optional arguments between them, so \
+         finding {asked} means this walked the wrong field"
+    );
+}
+
+#[tokio::test]
 async fn no_description_an_agent_reads_names_a_rust_path() {
     let mut leaked = Vec::new();
 
@@ -226,6 +267,22 @@ fn arguments(tool: &Value) -> Vec<(&str, &Value)> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn states(text: &str, value: &str) -> bool {
+    let continues_it = |c: char| c.is_ascii_alphanumeric() || c == '.';
+
+    text.match_indices(value).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + value.len()..].chars().next();
+        let ends_a_sentence = after == Some('.')
+            && text[at + value.len() + 1..]
+                .chars()
+                .next()
+                .is_none_or(char::is_whitespace);
+
+        !before.is_some_and(continues_it) && (ends_a_sentence || !after.is_some_and(continues_it))
+    })
 }
 
 fn descriptions(value: &Value, found: &mut impl FnMut(&str)) {
