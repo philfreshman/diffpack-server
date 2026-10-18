@@ -67,23 +67,19 @@ impl Document {
         }
 
         match &self.source {
-            Source::Live(live) => match live.held(url, about) {
-                Some(body) => self.weighed(body, about),
+            Source::Live(live) => live.body(url, self.limit, about).await,
 
-                None => live.fetch(url, self.limit, about).await,
-            },
-
-            Source::Fixture(fixture) => self.weighed(fixture.body(url, about)?, about),
+            Source::Fixture(fixture) => weighed(fixture.body(url, about)?, self.limit, about),
         }
     }
+}
 
-    fn weighed(&self, body: Body, about: &About<'_>) -> Result<Body, Failure> {
-        let weight = body.len() as u64;
-        if weight > self.limit {
-            return Err((about.too_large)(weight));
-        }
-        Ok(body)
+fn weighed(body: Body, limit: u64, about: &About<'_>) -> Result<Body, Failure> {
+    let weight = body.len() as u64;
+    if weight > limit {
+        return Err((about.too_large)(weight));
     }
+    Ok(body)
 }
 
 pub enum Body {
