@@ -52,6 +52,7 @@ src/router.rs    Every route this function serves.
 src/mcp.rs       The MCP handler: identity, capabilities, the tool list.
 src/tools/       One module per tool: its definition and its handler.
 src/resources/   One module per resource: its URI and its handler.
+src/prompts/     One module per prompt: its arguments and its messages.
 src/registry.rs  What a registry is: npm, crates.io, PyPI, described once.
 src/archive/     A version's files: fetch, size cap, extract, one interface.
 src/catalogue/   What a package has released, most recently published first.
@@ -90,8 +91,9 @@ add, and what any of them may import is in
 disagreeing, so this one names the files and stops.
 
 Three boundaries there are enforced rather than trusted: `src/engine.rs` is the
-only importer of `diffpack_engine`, a module under `src/tools/` reaches the
-network and the cache only through the seams, and `docs/cache-key.md` is the
+only importer of `diffpack_engine`, a module under `src/tools/`,
+`src/resources/` or `src/prompts/` reaches the network and the cache only
+through the seams, and `docs/cache-key.md` is the
 source of truth for the cache key rather than a description of it. The first
 two are `./scripts/checks.sh seams`; the third is `cargo test`.
 
@@ -344,6 +346,13 @@ too large for one response answers with its totals and a pointer to
 `get_diff_tree` rather than with as much of the tree as fits, and
 `diff_package_versions` carries a link to its own comparison so a client can
 follow the result without building a URI itself.
+
+One prompt sits beside both. `prompts/list` has `review_upgrade`, which takes
+a registry, a package and the versions an upgrade goes from and to, and hands
+an agent the review as one message: compare the two, list what changed, read
+the diffs a consumer would feel, and report what could break — removed
+exports, changed signatures, new required options, dependency changes. In
+Claude Code it is the slash command `/mcp__diffpack__review_upgrade`.
 
 Claude Code:
 
