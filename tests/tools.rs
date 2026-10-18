@@ -19,6 +19,28 @@ const COMPARISON_OPTIONS: [&str; 2] = ["similarity_threshold", "ignore_whitespac
 
 const PATH_ARGUMENTS: [&str; 3] = ["path", "prefix", "old_path"];
 
+const JSON_SCHEMA_FORMATS: [&str; 19] = [
+    "date-time",
+    "date",
+    "time",
+    "duration",
+    "email",
+    "idn-email",
+    "hostname",
+    "idn-hostname",
+    "ipv4",
+    "ipv6",
+    "uri",
+    "uri-reference",
+    "iri",
+    "iri-reference",
+    "uuid",
+    "uri-template",
+    "json-pointer",
+    "relative-json-pointer",
+    "regex",
+];
+
 const NEIGHBOURS: [(&str, &str); 5] = [
     ("get_file_content", "get_file_diff"),
     ("list_package_files", "get_diff_tree"),
@@ -430,6 +452,29 @@ async fn every_path_argument_says_the_archives_own_directory_is_not_part_of_it()
 }
 
 #[tokio::test]
+async fn every_format_a_schema_names_is_one_json_schema_defines() {
+    let mut unknown = Vec::new();
+
+    for tool in Client::fixture().tools().await {
+        let name = named(&tool).to_owned();
+        for side in ["inputSchema", "outputSchema"] {
+            formats(&tool[side], &mut |format| {
+                if !JSON_SCHEMA_FORMATS.contains(&format) {
+                    unknown.push(format!("{name}.{side}: {format}"));
+                }
+            });
+        }
+    }
+
+    assert!(
+        unknown.is_empty(),
+        "a validating client warns about a format it does not know on every \
+         call, and these are formats of the library that wrote the schema \
+         rather than of JSON Schema 2020-12: {unknown:#?}"
+    );
+}
+
+#[tokio::test]
 async fn no_description_an_agent_reads_names_a_rust_path() {
     let mut leaked = Vec::new();
 
@@ -503,6 +548,19 @@ fn states(text: &str, value: &str) -> bool {
 
         !before.is_some_and(continues_it) && (ends_a_sentence || !after.is_some_and(continues_it))
     })
+}
+
+fn formats(schema: &Value, found: &mut impl FnMut(&str)) {
+    match schema {
+        Value::Object(fields) => {
+            if let Some(format) = fields.get("format").and_then(Value::as_str) {
+                found(format);
+            }
+            fields.values().for_each(|child| formats(child, found));
+        }
+        Value::Array(items) => items.iter().for_each(|item| formats(item, found)),
+        _ => {}
+    }
 }
 
 fn descriptions(value: &Value, found: &mut impl FnMut(&str)) {

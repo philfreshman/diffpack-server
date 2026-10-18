@@ -10,6 +10,7 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::archive::{Archive, FileMap};
 use crate::cache_key::DiffKey;
@@ -302,8 +303,30 @@ pub(crate) async fn run<T>(
     answer
 }
 
+const JSON_SCHEMA_FORMATS: [&str; 19] = [
+    "date-time",
+    "date",
+    "time",
+    "duration",
+    "email",
+    "idn-email",
+    "hostname",
+    "idn-hostname",
+    "ipv4",
+    "ipv6",
+    "uri",
+    "uri-reference",
+    "iri",
+    "iri-reference",
+    "uuid",
+    "uri-template",
+    "json-pointer",
+    "relative-json-pointer",
+    "regex",
+];
+
 fn definition<T: Tool>() -> Definition {
-    Definition::new(T::NAME, T::DESCRIPTION, Arc::new(JsonObject::new()))
+    let mut tool = Definition::new(T::NAME, T::DESCRIPTION, Arc::new(JsonObject::new()))
         .with_title(T::TITLE)
         .with_input_schema::<T::Args>()
         .with_output_schema::<T::Output>()
@@ -312,7 +335,38 @@ fn definition<T: Tool>() -> Definition {
                 .read_only(T::READ_ONLY)
                 .idempotent(T::IDEMPOTENT)
                 .open_world(T::OPEN_WORLD),
-        )
+        );
+
+    tool.input_schema = with_standard_formats_only(&tool.input_schema);
+    tool.output_schema = tool
+        .output_schema
+        .map(|schema| with_standard_formats_only(&schema));
+    tool
+}
+
+fn with_standard_formats_only(schema: &JsonObject) -> Arc<JsonObject> {
+    let mut schema = schema.clone();
+    drop_unknown_formats(&mut schema);
+    Arc::new(schema)
+}
+
+fn drop_unknown_formats(schema: &mut JsonObject) {
+    schema.retain(|keyword, value| !(keyword == "format" && is_unknown_format(value)));
+    schema.values_mut().for_each(drop_unknown_formats_within);
+}
+
+fn drop_unknown_formats_within(value: &mut Value) {
+    match value {
+        Value::Object(schema) => drop_unknown_formats(schema),
+        Value::Array(schemas) => schemas.iter_mut().for_each(drop_unknown_formats_within),
+        _ => {}
+    }
+}
+
+fn is_unknown_format(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|format| !JSON_SCHEMA_FORMATS.contains(&format))
 }
 
 async fn invoke<T: Tool>(
