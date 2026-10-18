@@ -23,6 +23,7 @@ use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 
 use crate::error::Failure;
+use crate::prompts;
 use crate::resources;
 use crate::tools::{self, Call, Ctx};
 
@@ -51,6 +52,7 @@ impl ServerHandler for Diffpack {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
+                .enable_prompts()
                 .build(),
         )
         .with_server_info(Implementation::new(NAME, env!("CARGO_PKG_VERSION")))
@@ -61,7 +63,8 @@ impl ServerHandler for Diffpack {
              names the registry the way that registry does. `resources/list` \
              has the registries described in one document, and a comparison \
              you have already made can be read back by URI as well as by \
-             tool.",
+             tool. `prompts/list` has a prompt that walks through reviewing \
+             an upgrade from one version to another.",
         )
     }
 
@@ -124,6 +127,26 @@ impl ServerHandler for Diffpack {
         tools::call(&request.name, request.arguments, &self.ctx)
             .await
             .map(CallToolResponse::from)
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        Ok(ListPromptsResult::with_all_items(prompts::definitions())
+            .with_ttl_ms(TOOL_LIST_TTL_MS)
+            .with_cache_scope(CacheScope::Public))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, ErrorData> {
+        prompts::get(&request.name, request.arguments)
+            .map(GetPromptResponse::from)
+            .map_err(Failure::refuse)
     }
 }
 
