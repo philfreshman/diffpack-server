@@ -3,7 +3,11 @@ all-features = true
 
 [advisories]
 version = 2
-ignore = []
+ignore = [
+  { id = "RUSTSEC-2026-0367", reason = "zip 8 via diffpack-engine; fixed only in zip 9. The engine reads entries into memory with by_index and never calls extract, which these advisories are about." },
+  { id = "RUSTSEC-2026-0368", reason = "zip 8 via diffpack-engine; fixed only in zip 9. The engine reads entries into memory with by_index and never calls extract, which these advisories are about." },
+  { id = "RUSTSEC-2026-0369", reason = "zip 8 via diffpack-engine; fixed only in zip 9. The engine reads entries into memory with by_index and never calls extract, which these advisories are about." },
+]
 
 [licenses]
 version = 2
