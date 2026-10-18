@@ -202,7 +202,9 @@ impl Tool for GetDiffTree {
     const TITLE: &'static str = "Get diff tree";
     const DESCRIPTION: &'static str = "\
         List the files and directories of a comparison you have already made, \
-        a page at a time. Takes the handle `diff_package_versions` gave you, \
+        a page at a time. To list one version's files without comparing it \
+        to anything, call `list_package_files` instead. Takes the handle \
+        `diff_package_versions` gave you, \
         and three ways to ask for less than all of it: `path` for one \
         directory's contents, `depth` for how far down to go, and `status` \
         for which kinds of change you want. A directory a rename left empty \

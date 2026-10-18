@@ -31,6 +31,7 @@ tower-http = { version = "0.7.1", features = ["catch-panic"] }
 vercel_runtime = { version = "2.4", features = ["axum"] }
 
 [dev-dependencies]
+boon = "0.6.1"
 http-body-util = "0.1.5"
 tokio = { version = "1", features = ["test-util", "macros", "rt-multi-thread"] }
 toml = "0.9"

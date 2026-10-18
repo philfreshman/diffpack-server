@@ -96,7 +96,9 @@ impl Tool for ListPackageVersions {
         List the published versions of a package, most recently published \
         first, so you can find the versions to diff without being told them. \
         Takes a registry and a package name spelled the way the registry \
-        spells it. The order is by publish date, not by version number: a \
+        spells it; when you are not sure of the spelling, find it with \
+        `search_packages` first. The order is by publish date, not by \
+        version number: a \
         patch to an older release line published yesterday comes before a \
         major released last month. The release the registry itself installs \
         is a separate answer in the same result, `currentVersion`, and it is \

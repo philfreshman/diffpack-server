@@ -32,8 +32,9 @@ pub struct Args {
 
     #[schemars(
         description = "Where the file was in the first version, when it moved. Pass the\n\
-        `old_path` the comparison gave you for a renamed file; omit it for\n\
-        everything else."
+        `old_path` the comparison gave you for a renamed file, which like\n\
+        `path` has the archive's top-level directory already removed; omit it\n\
+        for everything else."
     )]
     #[serde(default)]
     pub old_path: Option<String>,
@@ -131,8 +132,9 @@ impl JsonSchema for ContextLines {
             ],
             "default": DEFAULT_CONTEXT,
             "description": format!(
-                "How many unchanged lines to keep either side of each change. Omit it \
-                 for {DEFAULT_CONTEXT}, which is what a patch is normally read at. Pass \
+                "How many unchanged lines to keep either side of each change, from 0 \
+                 for the changed lines alone. Omit it for {DEFAULT_CONTEXT}, which is what \
+                 a patch is normally read at. Pass \
                  `{FULL}` for every line of the file, which is what a viewer showing the \
                  whole file in a scrollable pane needs and is almost never what you want \
                  — a package's files run to thousands of lines and the change in one is \
@@ -252,7 +254,9 @@ impl Tool for GetFileDiff {
     const TITLE: &'static str = "Get file diff";
     const DESCRIPTION: &'static str = "\
         Read one file's diff out of a comparison you have already made, so \
-        you can see what actually changed in it. Takes the handle \
+        you can see what actually changed in it. To read a file as one \
+        version ships it, with nothing to compare it to, call \
+        `get_file_content` instead. Takes the handle \
         `diff_package_versions` gave you and a path from that comparison's \
         tree. Answers with a unified diff: a `--- from` / `+++ to` header, \
         `@@` hunks, and one line per change written as a sign, a space and \

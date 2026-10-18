@@ -180,8 +180,9 @@ impl JsonSchema for MaxBytes {
             "minimum": 1,
             "maximum": PAYLOAD_CEILING,
             "description": format!(
-                "The most of this text to return, in bytes. Omit it to get as much as \
-                 fits. It can only ask for less: a value above {PAYLOAD_CEILING} is \
+                "The most of this text to return, in bytes, from 1 to {PAYLOAD_CEILING}. \
+                 Omit it to get as much as fits. It can only ask for less: a value above \
+                 {PAYLOAD_CEILING} is \
                  narrowed to that rather than refused, because a larger response is one \
                  the platform drops instead of shortening. Either way the answer says \
                  whether it was cut and how many bytes the whole thing is, so a short \
@@ -312,9 +313,10 @@ impl JsonSchema for Subtree {
             "type": "string",
             "description": "\
                 Only what is inside this directory, one level or many: `src`, or \
-                `src/util`. A trailing slash is allowed and makes no difference. \
-                It names a directory and is not matched by characters, so `sr` does \
-                not narrow to `src/`, and the directory itself is not in its own \
+                `src/util`, with the archive's top-level directory already removed, \
+                so never `zod-4.0.0/src`. A trailing slash is allowed and makes no \
+                difference. It names a directory and is not matched by characters, \
+                so `sr` does not narrow to `src/`, and the directory itself is not in its own \
                 subtree. Omit it, or pass `/` or an empty string, for all of it. \
                 A path with nothing under it is an empty page rather than an \
                 error: a file, or a directory that is not there.",

@@ -480,7 +480,9 @@ impl JsonSchema for VersionName {
     fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
         json_schema!({
             "type": "string",
-            "description": VERSION_RULE,
+            "description": format!(
+                "{VERSION_RULE} `list_package_versions` lists the versions a package has."
+            ),
         })
     }
 }
