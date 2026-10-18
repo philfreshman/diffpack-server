@@ -19,7 +19,7 @@ build that is serving. A browser-based client is refused until its origin is in
 `DIFFPACK_ALLOWED_ORIGINS`
 ([ADR 0009](docs/adr/0009-origin-validation-on-host-validation-off.md)).
 
-## Tools and resources
+## Tools, resources and prompts
 
 - `search_packages`: find packages from a partial name.
 - `resolve_archive_url`: where a version's archive is served from, without
@@ -36,6 +36,9 @@ build that is serving. A browser-based client is refused until its origin is in
   comes from.
 - `diffpack://diff/{handle}` and `diffpack://diff/{handle}/file/{path}`: a
   comparison, or one file of it, to read rather than call.
+- `review_upgrade`: walks an agent through reviewing an upgrade from one version
+  to another and reporting what could break. In Claude Code it is
+  `/mcp__diffpack__review_upgrade`.
 
 ## Development
 
