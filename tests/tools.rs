@@ -231,6 +231,32 @@ async fn every_optional_argument_says_what_leaving_it_out_means() {
 }
 
 #[tokio::test]
+async fn every_bounded_argument_says_where_its_bounds_are() {
+    let mut asked = 0;
+
+    for tool in Client::fixture().tools().await {
+        let name = named(&tool);
+        for (field, schema) in arguments(&tool) {
+            let said = schema["description"].as_str().unwrap_or_default();
+            for bound in bounds(schema) {
+                asked += 1;
+                assert!(
+                    states(said, &bound),
+                    "`{name}`'s `{field}` stops at {bound}, which its \
+                     description should say: got {schema}"
+                );
+            }
+        }
+    }
+
+    assert!(
+        asked >= 16,
+        "five kinds of argument carry sixteen bounds between them, so \
+         finding {asked} means this walked the wrong field"
+    );
+}
+
+#[tokio::test]
 async fn no_description_an_agent_reads_names_a_rust_path() {
     let mut leaked = Vec::new();
 
@@ -267,6 +293,23 @@ fn arguments(tool: &Value) -> Vec<(&str, &Value)> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn bounds(schema: &Value) -> Vec<String> {
+    let branches = ["oneOf", "anyOf"]
+        .iter()
+        .filter_map(|combinator| schema[combinator].as_array())
+        .flatten();
+
+    std::iter::once(schema)
+        .chain(branches)
+        .flat_map(|branch| [&branch["minimum"], &branch["maximum"]])
+        .filter_map(Value::as_f64)
+        .map(|bound| match bound.fract() == 0.0 {
+            true => format!("{bound:.0}"),
+            false => bound.to_string(),
+        })
+        .collect()
 }
 
 fn states(text: &str, value: &str) -> bool {

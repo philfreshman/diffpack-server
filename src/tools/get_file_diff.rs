@@ -131,8 +131,9 @@ impl JsonSchema for ContextLines {
             ],
             "default": DEFAULT_CONTEXT,
             "description": format!(
-                "How many unchanged lines to keep either side of each change. Omit it \
-                 for {DEFAULT_CONTEXT}, which is what a patch is normally read at. Pass \
+                "How many unchanged lines to keep either side of each change, from 0 \
+                 for the changed lines alone. Omit it for {DEFAULT_CONTEXT}, which is what \
+                 a patch is normally read at. Pass \
                  `{FULL}` for every line of the file, which is what a viewer showing the \
                  whole file in a scrollable pane needs and is almost never what you want \
                  — a package's files run to thousands of lines and the change in one is \
