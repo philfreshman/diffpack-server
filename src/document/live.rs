@@ -245,6 +245,22 @@ mod tests {
         );
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_search_is_not_told_it_waited_for_an_archive() {
+        let _alone = ONE_AT_A_TIME.lock().await;
+        let (urls, _) = serve(Index::Served).await;
+
+        let message = refused_for_want_of_a_turn(&urls.index)
+            .await
+            .refuse()
+            .message;
+
+        assert!(
+            !message.contains("archive"),
+            "a search waited for its turn to fetch the index, not for an archive: {message}"
+        );
+    }
+
     async fn refused_for_want_of_a_turn(url: &str) -> Failure {
         let _held = TURN_TO_FETCH.lock().await;
 

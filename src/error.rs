@@ -260,8 +260,8 @@ impl Failure {
             ),
 
             Self::Busy { waited } => format!(
-                "This server is already downloading as many package archives as it will \
-                 hold at once, and no slot came free within {} seconds. Try again shortly.",
+                "This server is already fetching as much from registries as it will at \
+                 once, and this call's turn did not come within {} seconds. Try again shortly.",
                 waited.as_secs()
             ),
 
