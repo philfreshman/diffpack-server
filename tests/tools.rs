@@ -178,6 +178,11 @@ async fn every_version_argument_states_the_version_rule() {
                 "`{name}`'s `{field}` should say that a `v` is part of a \
                  version, got {schema}"
             );
+            assert!(
+                said.contains("`list_package_versions`"),
+                "`{name}`'s `{field}` takes no ranges, so it should say \
+                 where to find a version that exists: got {schema}"
+            );
         }
     }
 
