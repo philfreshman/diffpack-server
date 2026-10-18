@@ -1,15 +1,5 @@
-//! `src/engine.rs` is the only module in this crate allowed to name
-//! `diffpack_engine`. These tests hold that boundary and hold the version
-//! constant honest.
-
 use diffpack_server::engine;
 
-/// `engine::VERSION` is a field in the cache key (#5): a new engine release
-/// can change rename detection or line counts, and a cache that served the
-/// old tree afterwards would be serving a diff the current engine would not
-/// produce. So the constant is not documentation — a stale one is a
-/// correctness bug, and bumping the dependency without bumping it must fail
-/// here rather than in production.
 #[test]
 fn the_version_constant_matches_the_pinned_dependency() {
     let manifest: toml::Value =
@@ -27,12 +17,6 @@ fn the_version_constant_matches_the_pinned_dependency() {
     );
 }
 
-/// Proves the seam is usable and not merely re-exported: the types line up,
-/// the signature is the one we think it is, and a build against a new engine
-/// tag that moved either fails here.
-///
-/// No network and no archive — `build_diff_tree` takes two FileMaps, so the
-/// smallest honest exercise of it is two maps built by hand.
 #[test]
 fn the_tree_builder_is_reachable_through_the_seam() {
     use diffpack_server::archive::FileMap;
@@ -69,28 +53,12 @@ fn find_path(
         .find_map(|child| find_path(child, path))
 }
 
-/// `extract_archive_bytes` reaches the seam too. Rejecting rubbish is the
-/// cheapest call that proves the signature without shipping a fixture
-/// archive; #10 is where real archives arrive.
 #[test]
 fn the_archive_extractor_is_reachable_through_the_seam() {
     let result = diffpack_server::engine::extract_archive_bytes(b"not an archive");
     assert!(result.is_err(), "rubbish bytes should not extract");
 }
 
-/// The unified-diff format, pinned byte for byte.
-///
-/// This is the one piece of the engine whose *output* is the contract rather
-/// than just its signature. The server renders file views from it and the
-/// tree's counts come from the same lines, so a byte that moves here makes
-/// the two disagree — and the alternative to depending on the engine was
-/// re-implementing this format, which is exactly the drift the seam exists to
-/// prevent.
-///
-/// The expectations below are written from the format the engine documents —
-/// a `--- from/{f}` / `+++ to/{f}` header, then one line per change as sign,
-/// a space, and the line with any trailing newline removed — not by running
-/// the function and recording what it said.
 #[test]
 fn the_unified_diff_format_is_byte_for_byte_what_the_engine_documents() {
     use diffpack_server::engine::get_diff_content;
@@ -128,8 +96,6 @@ fn the_unified_diff_format_is_byte_for_byte_what_the_engine_documents() {
     }
 }
 
-/// `ignore_whitespace` reaches the renderer, and the two modes are the two
-/// `similar` values rather than a local re-spelling of them.
 #[test]
 fn the_whitespace_setting_is_reachable_and_changes_the_diff() {
     use diffpack_server::engine::{get_diff_content, whitespace_mode, WhitespaceMode};
@@ -151,8 +117,6 @@ fn the_whitespace_setting_is_reachable_and_changes_the_diff() {
     );
 }
 
-/// The archive URL builders, which are real logic — scoped npm names and the
-/// sdist-then-wheel preference order — and not worth writing twice.
 #[test]
 fn the_registry_url_builders_are_reachable_through_the_seam() {
     use diffpack_server::engine::{build_tarball_url, select_pypi_sdist_url, PyPiUrl};

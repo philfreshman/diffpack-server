@@ -1,17 +1,5 @@
-//! The response ceiling, and what fits under it.
-//!
-//! Every expectation here comes from the platform's documented cap or from
-//! the issue that owns the fact — #43 for the ceiling and the cursor, #11 and
-//! #14 for stable pagination, #12 and #15 for truncation — and never from
-//! running the code and recording what it said. The whole module is pure, so
-//! nothing here needs a fixture: a generated sequence is a better witness
-//! than a package that happened to be large on the day.
-
 use diffpack_server::page;
 
-/// Vercel caps a function's response body at 4.5 MB. The number is a
-/// platform fact rather than a preference, so it is written here from the
-/// documentation rather than read back out of the module it constrains.
 #[test]
 fn the_response_ceiling_is_vercels_four_and_a_half_megabytes() {
     assert_eq!(
@@ -21,16 +9,8 @@ fn the_response_ceiling_is_vercels_four_and_a_half_megabytes() {
     );
 }
 
-/// The ceiling is on the whole response, and a tool's answer is not the whole
-/// response: `tools::invoke` hands it to `CallToolResult::structured`, which
-/// puts it on the wire twice — once as `structuredContent` and once as the
-/// text block rmcp mirrors it into, JSON-escaped. A payload filled to
-/// [`page::PAYLOAD_CEILING`] with the worst content there is — every byte a
-/// character that escaping doubles — still has to fit, wrapped and framed.
 #[test]
 fn a_payload_filled_to_the_ceiling_still_fits_in_the_response_that_carries_it() {
-    // `"` serialises as `\"`, so a string of them is the most expensive
-    // payload a tool can produce: nothing inflates further.
     let worst = "\"".repeat((page::PAYLOAD_CEILING - 2) / 2);
     let payload = serde_json::json!(worst);
     assert!(
@@ -41,8 +21,6 @@ fn a_payload_filled_to_the_ceiling_still_fits_in_the_response_that_carries_it() 
         "the test's own payload should be the ceiling it claims to test"
     );
 
-    // A Page's envelope around it, with the widest cursor and total it could
-    // carry, and then the JSON-RPC frame the transport writes.
     let answer = serde_json::json!({
         "items": [payload],
         "total": usize::MAX,
@@ -65,10 +43,6 @@ fn a_payload_filled_to_the_ceiling_still_fits_in_the_response_that_carries_it() 
     );
 }
 
-/// A sequence longer than one page comes back cut to the limit, carrying the
-/// real total rather than the returned count and a cursor for the rest. The
-/// total is the honesty requirement: an agent told it received 200 of 200 has
-/// no reason to ask for more.
 #[test]
 fn a_page_holds_the_limit_and_states_the_total_rather_than_the_count() {
     let all: Vec<String> = (0..1_000).map(|n| format!("src/file{n}.rs")).collect();
@@ -90,16 +64,8 @@ fn a_page_holds_the_limit_and_states_the_total_rather_than_the_count() {
     );
 }
 
-/// The property #11 and #14 each asked for in the same words: walking every
-/// page yields each item exactly once, with no duplicates and nothing
-/// skipped. Asserting the concatenation *equals* the sequence proves all
-/// three at once — a duplicate, a gap or a reordering each break the
-/// equality — and proves it here rather than five times against five
-/// fixtures.
 #[test]
 fn walking_every_page_yields_each_item_exactly_once_and_in_order() {
-    // A length that is not a multiple of the limit, so the last page is a
-    // short one rather than an exact fit.
     let all: Vec<String> = (0..1_003).map(|n| format!("src/file{n}.rs")).collect();
 
     let mut seen: Vec<String> = Vec::new();
@@ -139,8 +105,6 @@ fn walking_every_page_yields_each_item_exactly_once_and_in_order() {
     );
 }
 
-/// How many bytes `items` occupy once serialised, which is the only measure
-/// the ceiling is in.
 fn serialised_bytes<T: serde::Serialize>(items: &[T]) -> usize {
     items
         .iter()
@@ -148,11 +112,6 @@ fn serialised_bytes<T: serde::Serialize>(items: &[T]) -> usize {
         .sum()
 }
 
-/// The trap five separate implementations would each have had to notice: the
-/// cap is on serialised bytes, so a `limit` that is safe for a tree entry is
-/// not safe for a file listing. The same limit over the same number of items
-/// returns all of them when they are small and fewer when they are large,
-/// and the module — not the caller — is what noticed.
 #[test]
 fn the_ceiling_is_on_bytes_so_one_limit_is_not_safe_for_every_item() {
     let small: Vec<String> = (0..200).map(|n| format!("src/file{n}.rs")).collect();
@@ -192,11 +151,6 @@ fn the_ceiling_is_on_bytes_so_one_limit_is_not_safe_for_every_item() {
     );
 }
 
-/// Stable pagination has to survive the page being cut by bytes rather than
-/// by the limit, which is the case a fixture of uniform items never reaches.
-/// The sizes here vary by four orders of magnitude inside one sequence, so
-/// no page is the same length as another and the cursor cannot be riding on
-/// the limit by accident.
 #[test]
 fn a_walk_is_stable_when_bytes_rather_than_the_limit_end_each_page() {
     let all: Vec<String> = (0..120)
@@ -247,14 +201,6 @@ fn a_walk_is_stable_when_bytes_rather_than_the_limit_end_each_page() {
     );
 }
 
-/// An item larger than a whole page is the case that has to be loud. Dropping
-/// it would leave a walk that says it covered the sequence and did not, which
-/// is the failure an agent cannot detect and cannot recover from.
-///
-/// So it is refused — and the refusal carries the cursor that continues past
-/// it, which is what keeps "loud" from meaning "stuck": skipping the item
-/// becomes something the agent chose rather than something this module did
-/// behind its back.
 #[test]
 fn an_item_too_large_for_a_page_of_its_own_is_refused_rather_than_dropped() {
     let huge = "x".repeat(page::PAYLOAD_CEILING);
@@ -296,7 +242,6 @@ fn an_item_too_large_for_a_page_of_its_own_is_refused_rather_than_dropped() {
     assert_eq!(past.total, 3, "with the whole sequence still counted");
 }
 
-/// The text a model would read for `failure`, whichever channel it takes.
 fn message_of(failure: diffpack_server::error::Failure) -> String {
     match failure.respond() {
         Ok(result) => result
@@ -309,15 +254,10 @@ fn message_of(failure: diffpack_server::error::Failure) -> String {
     }
 }
 
-/// One cursor format across every paginating tool, and it is this one. A
-/// client is told to treat a cursor as opaque, so a cursor that does not
-/// decode is the client's mistake rather than something a model can fix by
-/// rewording — it takes the protocol channel, where the client reads.
 #[test]
 fn a_cursor_that_is_not_ours_is_refused_on_the_protocol_channel() {
     let all: Vec<u32> = (0..10).collect();
 
-    // A bare offset, a future format's cursor, a truncated one, and junk.
     for wrong in [
         "", "5", "p2:5", "p1:", "p1:five", "p1:-1", "cursor", "p1:5:5",
     ] {
@@ -331,8 +271,6 @@ fn a_cursor_that_is_not_ours_is_refused_on_the_protocol_channel() {
         );
     }
 
-    // And the one that is ours round-trips, which is what makes it a format
-    // rather than an implementation detail two tools could spell differently.
     let page =
         page::paginate(all.clone(), Some(page::Limit::new(4)), None).expect("the first page");
     assert_eq!(page.next_cursor, Some(page::Cursor::at(4)));
@@ -341,14 +279,6 @@ fn a_cursor_that_is_not_ours_is_refused_on_the_protocol_channel() {
     assert_eq!(second.items, [4, 5, 6, 7]);
 }
 
-/// #23 asks that every optional argument document its default and every
-/// constrained one its range. Both live here rather than in each tool's
-/// schema prose, so that the numbers a tool writes down are the numbers that
-/// bind.
-///
-/// A `limit` outside the range is clamped rather than refused: a client that
-/// asked for too much still gets an answer, and the page states the total, so
-/// the clamp is visible rather than silent.
 #[test]
 fn limit_is_clamped_into_the_documented_range() {
     let all: Vec<u32> = (0..5_000).collect();
@@ -379,10 +309,6 @@ fn limit_is_clamped_into_the_documented_range() {
     );
 }
 
-/// A cursor at or past the end is the natural end of a walk, not a failure:
-/// it is what a client holds after reading the last page of a sequence that
-/// has since been recomputed shorter. It answers empty, says the total, and
-/// does not hand out another cursor.
 #[test]
 fn a_cursor_past_the_end_ends_the_walk_rather_than_failing_it() {
     let all: Vec<u32> = (0..10).collect();
@@ -397,17 +323,6 @@ fn a_cursor_past_the_end_ends_the_walk_rather_than_failing_it() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The other half: one blob, cut loudly
-// ---------------------------------------------------------------------------
-//
-// #12 and #15 do not paginate. They return one thing — a file's content, a
-// file's diff — and it is either whole or it is not. The ceiling is shared
-// with the pages above; the next cursor is what a blob does not have.
-
-/// Text that fits comes back untouched, and says it is whole. `bytes` is the
-/// text's own length either way, which is the field that has to be the real
-/// one rather than the returned one.
 #[test]
 fn a_blob_under_the_ceiling_comes_back_whole() {
     let content = "fn main() {\n    println!(\"hello\");\n}\n";
@@ -422,11 +337,6 @@ fn a_blob_under_the_ceiling_comes_back_whole() {
     assert_eq!(excerpt.bytes, content.len());
 }
 
-/// Over the ceiling it is cut, and the cut is loud: an explicit marker in the
-/// text a model reads, a flag beside it, and the real byte count rather than
-/// the returned one. The text is multi-byte throughout, so a cut taken on a
-/// byte offset rather than a character boundary would not survive being a
-/// `String` at all.
 #[test]
 fn a_blob_over_the_ceiling_is_cut_and_says_so_in_the_text() {
     let content = "日本語のコード\n".repeat(80_000);
@@ -466,14 +376,6 @@ fn a_blob_over_the_ceiling_is_cut_and_says_so_in_the_text() {
     );
 }
 
-/// The cut is on serialised bytes here too, which is the same trap in its
-/// other shape: a file of quotes and backslashes costs twice its own length
-/// once it is a JSON string, so a cut taken on raw length would produce an
-/// excerpt that measures under the ceiling and a response that is over it.
-///
-/// Two blobs of identical length, one of them the worst content there is.
-/// Half as much of it survives — and the answer, framed the way
-/// `tools::invoke` frames one, fits.
 #[test]
 fn a_cut_blob_is_cut_on_what_it_costs_encoded_not_on_its_own_length() {
     let worst = page::truncate(&"\"".repeat(4_000_000), None);
@@ -515,10 +417,6 @@ fn a_cut_blob_is_cut_on_what_it_costs_encoded_not_on_its_own_length() {
     );
 }
 
-/// `max_bytes` is a tool's own cap — #12 takes one — and it narrows the cut
-/// rather than replacing it. A caller asking for less gets less; a caller
-/// asking for more than the response can carry still gets what fits, because
-/// the ceiling is not a caller's to raise.
 #[test]
 fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
     let content = "abcdefghij".repeat(1_000);
@@ -556,25 +454,10 @@ fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The two arguments that carry the ceiling into a tool's schema
-// ---------------------------------------------------------------------------
-//
-// #43 says one module owns the ceiling and no tool names the number. Enforcing
-// it is half of that: the other half is the schema a tool declares, because
-// `limit` and `cursor` are the only part of this module an agent ever sees.
-// A tool that wrote `limit: Option<u32>` with a sentence about the default
-// would be naming the number again — in the one place #23 says an agent reads
-// it, and in the copy no test compares against `MAX_LIMIT`.
-//
-// So the types are this module's, the way `Registry` is `src/registry.rs`'s
-// and `DiffHandle` is `src/handle.rs`'s.
-
-/// The pagination arguments as a tool declares them. Written out here rather
-/// than reached for inside `src/tools/` because it is the shape being tested,
-/// not any one tool: whatever #11 and #14 call themselves, this is what their
-/// `Args` has to contain for the numbers to be inherited rather than retyped.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[schemars(
+    description = "The pagination arguments as a tool declares them. Written out here rather\nthan reached for inside `src/tools/` because it is the shape being tested,\nnot any one tool: whatever #11 and #14 call themselves, this is what their\n`Args` has to contain for the numbers to be inherited rather than retyped."
+)]
 #[serde(deny_unknown_fields)]
 struct PagingArgs {
     #[serde(default)]
@@ -583,10 +466,6 @@ struct PagingArgs {
     cursor: Option<page::Cursor>,
 }
 
-/// The numbers reach an agent through the schema or they do not reach it at
-/// all. A tool naming `page::Limit` gets the default and the maximum without
-/// writing either, which is what makes "no tool names the number" true of the
-/// schema and not only of the enforcement.
 #[test]
 fn a_paginating_tools_schema_inherits_the_default_and_the_maximum() {
     let schema = serde_json::to_value(schemars::schema_for!(PagingArgs)).expect("a schema");
@@ -615,17 +494,11 @@ fn a_paginating_tools_schema_inherits_the_default_and_the_maximum() {
     );
 }
 
-/// A cursor is opaque to a client, which is a rule only the schema can state.
-/// An agent told nothing will eventually build one out of a number, and a
-/// cursor a client wrote for itself is the one case this format refuses.
 #[test]
 fn the_cursor_a_tool_declares_says_to_pass_it_back_unchanged() {
     let schema = serde_json::to_value(schemars::schema_for!(PagingArgs)).expect("a schema");
     let cursor = &schema["properties"]["cursor"];
 
-    // `["string", "null"]` rather than `"string"`: the field is optional, and
-    // that is how schemars spells an optional field. What matters is that the
-    // one thing a client may put there is the string this module wrote.
     assert_eq!(
         cursor["type"],
         serde_json::json!(["string", "null"]),
@@ -642,9 +515,6 @@ fn the_cursor_a_tool_declares_says_to_pass_it_back_unchanged() {
         "the rule is that it is passed back as it arrived, got {cursor}"
     );
 
-    // And it has to name the field a client will actually find in the answer.
-    // "Pass back `next_cursor`" sends an agent looking for a key that is not
-    // there, which is a wrong instruction rather than a missing one.
     assert!(
         cursor["description"]
             .as_str()
@@ -653,11 +523,6 @@ fn the_cursor_a_tool_declares_says_to_pass_it_back_unchanged() {
     );
 }
 
-/// The same refusal as `Cursor::decode`, arriving one step earlier: a tool's
-/// arguments are deserialized before its handler runs, so a cursor that is
-/// not ours never reaches one. That is what makes a tool's `-32602` automatic
-/// rather than something each handler remembers — the property `DiffHandle`
-/// has for the same reason.
 #[test]
 fn a_cursor_that_is_not_ours_is_refused_before_a_handler_runs() {
     let refused = serde_json::from_value::<PagingArgs>(serde_json::json!({ "cursor": "5" }))
@@ -674,10 +539,6 @@ fn a_cursor_that_is_not_ours_is_refused_before_a_handler_runs() {
     assert_eq!(accepted.cursor, Some(page::Cursor::at(4)));
 }
 
-/// A limit arrives as a number and is clamped by the module, not by the tool.
-/// The schema says 1 to `MAX_LIMIT`; a client that ignores it still gets an
-/// answer, because refusing a page nobody can be harmed by is worse than
-/// trimming it.
 #[test]
 fn a_limit_is_a_number_on_the_wire_and_the_module_clamps_it() {
     let args = serde_json::from_value::<PagingArgs>(serde_json::json!({ "limit": 99_999 }))
