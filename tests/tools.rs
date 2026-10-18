@@ -1,5 +1,6 @@
 mod common;
 
+use boon::{Compiler, Draft, Schemas};
 use common::Client;
 use diffpack_server::registry::{self, Registry};
 use serde_json::{json, Value};
@@ -475,6 +476,48 @@ async fn every_format_a_schema_names_is_one_json_schema_defines() {
 }
 
 #[tokio::test]
+async fn every_answer_is_the_shape_its_tool_declares() {
+    let client = Client::fixture();
+    let made = client.call("diff_package_versions", comparison()).await;
+    let handle = made["structuredContent"]["handle"].clone();
+    let examples = examples(handle);
+
+    for tool in client.tools().await {
+        let name = named(&tool);
+        let arguments = examples
+            .iter()
+            .find_map(|(example, arguments)| (*example == name).then_some(arguments))
+            .unwrap_or_else(|| {
+                panic!("`{name}` needs an example call here, or its answers go unchecked")
+            });
+
+        let result = client.call(name, arguments.clone()).await;
+        assert_ne!(
+            result["isError"], true,
+            "`{name}` should answer {arguments}, got {result}"
+        );
+
+        let mut schemas = Schemas::new();
+        let mut compiler = Compiler::new();
+        compiler.set_default_draft(Draft::V2020_12);
+        compiler.enable_format_assertions();
+        compiler
+            .add_resource("urn:output", tool["outputSchema"].clone())
+            .unwrap_or_else(|error| panic!("`{name}`'s output schema: {error}"));
+        let schema = compiler
+            .compile("urn:output", &mut schemas)
+            .unwrap_or_else(|error| panic!("`{name}`'s output schema does not compile: {error}"));
+
+        if let Err(error) = schemas.validate(&result["structuredContent"], schema) {
+            panic!(
+                "a client checks `{name}`'s structured content against the \
+                 schema it declared, and this answer fails it: {error:#}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn no_description_an_agent_reads_names_a_rust_path() {
     let mut leaked = Vec::new();
 
@@ -491,6 +534,45 @@ async fn no_description_an_agent_reads_names_a_rust_path() {
         leaked.is_empty(),
         "these reach a model and are written for us: {leaked:#?}"
     );
+}
+
+fn comparison() -> Value {
+    json!({
+        "registry": "npm",
+        "package": "diffable",
+        "from_version": "1.0.0",
+        "to_version": "2.0.0",
+    })
+}
+
+fn examples(handle: Value) -> Vec<(&'static str, Value)> {
+    let version = json!({ "registry": "npm", "package": "diffable", "version": "1.0.0" });
+    let file = json!({
+        "registry": "npm",
+        "package": "diffable",
+        "version": "1.0.0",
+        "path": "src/index.js",
+    });
+
+    vec![
+        ("diff_package_versions", comparison()),
+        ("get_diff_tree", json!({ "handle": handle })),
+        ("get_file_content", file),
+        (
+            "get_file_diff",
+            json!({ "handle": handle, "path": "src/index.js" }),
+        ),
+        ("list_package_files", version.clone()),
+        (
+            "list_package_versions",
+            json!({ "registry": "npm", "package": "zod" }),
+        ),
+        ("resolve_archive_url", version),
+        (
+            "search_packages",
+            json!({ "registry": "npm", "query": "zod" }),
+        ),
+    ]
 }
 
 fn names(tools: &[Value]) -> Vec<&str> {
