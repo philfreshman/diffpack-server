@@ -1,6 +1,8 @@
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
+use tokio::sync::Mutex;
+
 use crate::error::Failure;
 use crate::fetch::{self, About as Fetching};
 
@@ -19,14 +21,30 @@ impl Live {
             return download(url, limit, about).await.map(Body::Owned);
         };
 
-        if let Some(body) = remembered(url, fresh_for) {
-            return weighed(Body::Shared(body), limit, about);
+        match remembered(url, fresh_for) {
+            Some(body) => weighed(Body::Shared(body), limit, about),
+            None => fetched_once(url, limit, fresh_for, about).await,
         }
-
-        let body: Arc<[u8]> = Arc::from(download(url, limit, about).await?);
-        remember(url, &body);
-        Ok(Body::Shared(body))
     }
+}
+
+static TURN_TO_FETCH: Mutex<()> = Mutex::const_new(());
+
+async fn fetched_once(
+    url: &str,
+    limit: u64,
+    fresh_for: Duration,
+    about: &About<'_>,
+) -> Result<Body, Failure> {
+    let _turn = TURN_TO_FETCH.lock().await;
+
+    if let Some(body) = remembered(url, fresh_for) {
+        return weighed(Body::Shared(body), limit, about);
+    }
+
+    let body: Arc<[u8]> = Arc::from(download(url, limit, about).await?);
+    remember(url, &body);
+    Ok(Body::Shared(body))
 }
 
 async fn download(url: &str, limit: u64, about: &About<'_>) -> Result<Vec<u8>, Failure> {
