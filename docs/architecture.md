@@ -135,6 +135,16 @@ a tool module does is: ask `registry`, `archive`, `catalogue`, `search` or
 `store` for what it needs, shape an answer through `page`, and fail through
 `error`. What it does not do is fetch, cache or paginate by hand.
 
+`src/tools/mod.rs` builds every definition the same way: `rmcp` writes the
+input and output schemas from the tool's `Args` and `Output` types, and
+`definition` then removes any `format` that JSON Schema 2020-12 does not
+define, such as the `uint32` schemars puts on a `u32`. A validating client
+warns about an unknown format on every call, and an unsigned integer already
+carries `minimum: 0`, so nothing is lost. `tests/tools.rs` holds every tool to
+the rest of what an agent reads: a description that names the neighbouring
+tool it could be mistaken for, every default and bound stated in words, and an
+answer that validates against the declared `outputSchema`.
+
 One thing under here is not a tool, and it is in a tool module rather than
 beside one. `diff_package_versions::compare` is the walk from a handle to a
 compared tree — the store lookup, the pair of downloads, the tree build, the
