@@ -2,7 +2,7 @@
 
 set -uo pipefail
 
-readonly ALL_CHECKS=(fmt seams clippy deny audit test)
+readonly ALL_CHECKS=(fmt seams clippy deny audit test conformance)
 
 require() {
   local tool=$1 install=$2
@@ -13,6 +13,18 @@ error: cargo-${tool} is not installed, so the ${tool} check cannot run.
   cargo install ${install} --locked
 
 EOF
+    return 1
+  fi
+}
+
+require_commands() {
+  local missing=()
+  local command
+  for command in "$@"; do
+    command -v "$command" >/dev/null 2>&1 || missing+=("$command")
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "error: the conformance check needs ${missing[*]} on PATH (Node 22.19 or later)." >&2
     return 1
   fi
 }
@@ -46,6 +58,11 @@ run_test() {
   cargo test
 }
 
+run_conformance() {
+  require_commands node npm jq curl || return 1
+  ./scripts/conformance.sh
+}
+
 main() {
   local checks=("$@")
   if [[ ${#checks[@]} -eq 0 ]]; then
@@ -56,7 +73,7 @@ main() {
   local check
   for check in "${checks[@]}"; do
     case "$check" in
-      fmt | seams | clippy | deny | audit | test) ;;
+      fmt | seams | clippy | deny | audit | test | conformance) ;;
       *)
         echo "error: unknown check '${check}' (expected one of: ${ALL_CHECKS[*]})" >&2
         exit 2
