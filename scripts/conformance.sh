@@ -7,7 +7,6 @@ readonly INSPECTOR="${TOOLS_DIR}/node_modules/.bin/mcp-inspector"
 readonly CALLS="${TOOLS_DIR}/calls.json"
 readonly HANDLE_PLACEHOLDER="<handle>"
 readonly FIXTURES="fixtures"
-readonly SERVER="${CARGO_TARGET_DIR:-target}/debug/examples/serve"
 readonly STARTUP_SECONDS=30
 
 readonly ERAS=(modern legacy)
@@ -19,6 +18,7 @@ readonly PROMPT="review_upgrade"
 readonly INVALID_PARAMS=-32602
 readonly FOREIGN_ORIGIN="https://not-an-allowed-origin.example"
 
+server=""
 server_pid=""
 server_log=""
 endpoint=""
@@ -28,13 +28,14 @@ install_tools() {
   npm ci --prefix "$TOOLS_DIR" --ignore-scripts --no-audit --no-fund --silent
 }
 
-build_server() {
-  cargo build --quiet --example serve
+built_server() {
+  cargo build --quiet --example serve --message-format=json-render-diagnostics |
+    jq -er 'select(.reason == "compiler-artifact" and .target.name == "serve") | .executable'
 }
 
 start_server() {
   server_log=$(mktemp)
-  "$SERVER" "$FIXTURES" >"$server_log" 2>&1 &
+  "$server" "$FIXTURES" >"$server_log" 2>&1 &
   server_pid=$!
 
   local waited=0
@@ -292,7 +293,7 @@ check_era() {
 
 main() {
   install_tools || exit 1
-  build_server || exit 1
+  server=$(built_server) || exit 1
   trap stop_server EXIT
   start_server || exit 1
   echo "conformance against ${endpoint}"
