@@ -12,6 +12,8 @@ pub const DOWNLOADS_AT_ONCE: usize = 4;
 
 const SLOT_WAIT: Duration = error::UPSTREAM_TIMEOUT;
 
+pub const LONGEST_FETCH: Duration = SLOT_WAIT.saturating_add(error::UPSTREAM_TIMEOUT);
+
 static DOWNLOADS: Semaphore = Semaphore::const_new(DOWNLOADS_AT_ONCE);
 
 const USER_AGENT: &str = concat!(

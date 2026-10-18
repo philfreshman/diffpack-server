@@ -191,8 +191,9 @@ _Avoid_: permit, semaphore, concurrency limit, connection
 
 **Busy**:
 This instance having no Download slot to give inside the time one call waits
-for one. It is about this server's own capacity and is the only Failure that
-is — every other one is a registry's doing, a caller's, or a package's — so
+for one, or a search finding the turn to fetch PyPI's index still taken after
+one whole fetch's worth of waiting. It is about this server's own capacity
+and is the only Failure that is — every other one is a registry's doing, a caller's, or a package's — so
 it names no registry: nothing was asked of one. Distinct from a Cause of
 `timed_out`, which is a registry that was asked and did not answer, and from
 `rate_limited`, which is a registry refusing this server rather than this

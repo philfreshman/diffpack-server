@@ -594,6 +594,18 @@ takes the turn; archives and version lists go straight to `fetch`. The turn is
 always taken before a download slot and never while holding one, so it adds no
 cycle to the slots' waits.
 
+A caller waits for the turn for as long as the caller ahead can hold it and no
+longer: `fetch::LONGEST_FETCH`, the bound on one whole `bytes()` call. Still
+waiting after that, it is behind a line rather than a turn, and is refused as
+`Busy` without asking the registry anything. Any shorter, and a caller right
+behind a fetch that waited for a slot and then succeeded would be refused just
+before the index landed. Without the bound, a registry that hangs drains the
+line one slow failure at a time, and the caller at depth `n` waits `n` turns,
+past the 300 seconds `vercel.json` gives the function. With it, no caller waits
+longer than one turn plus its own fetch, however long the line. A fast failure
+still gives every caller its own fetch and its own failure; the bound only
+matters when the line ahead is made of slow ones.
+
 ### `src/fetch.rs` — the registries' HTTP client
 
 Every request this server makes to a registry. It was `archive`'s until
@@ -651,7 +663,11 @@ about how many turns are queued ahead of a caller: at depth `n` the wait is
 turn is behind a queue rather than a turn, and is refused as `Busy` — this
 server being full, which is what it is, rather than a `TimedOut` naming a
 registry nothing asked. The two budgets added are what bounds the whole of
-`bytes()`. The wait counts towards the call's fetch phase, because it is the
+`bytes()`, and that sum is exported as `LONGEST_FETCH` because it is a budget
+of its own one level up: PyPI's index is fetched behind a turn in
+`src/document/`, a second queue in front of a fetch, and a caller waits for
+that turn no longer than one whole fetch, then is refused as `Busy` the same
+way. The wait counts towards the call's fetch phase, because it is the
 same thing to whoever is waiting for the answer.
 
 A caller passes the refusals that differ between seams rather than this module

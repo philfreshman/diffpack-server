@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::error::Failure;
 use crate::fetch::{self, About as Fetching};
@@ -30,13 +30,15 @@ impl Live {
 
 static TURN_TO_FETCH: Mutex<()> = Mutex::const_new(());
 
+const ONE_TURN: Duration = fetch::LONGEST_FETCH;
+
 async fn fetched_once(
     url: &str,
     limit: u64,
     fresh_for: Duration,
     about: &About<'_>,
 ) -> Result<Body, Failure> {
-    let _turn = TURN_TO_FETCH.lock().await;
+    let _turn = turn_to_fetch().await?;
 
     if let Some(body) = remembered(url, fresh_for) {
         return weighed(Body::Shared(body), limit, about);
@@ -45,6 +47,12 @@ async fn fetched_once(
     let body: Arc<[u8]> = Arc::from(download(url, limit, about).await?);
     remember(url, &body);
     Ok(Body::Shared(body))
+}
+
+async fn turn_to_fetch() -> Result<MutexGuard<'static, ()>, Failure> {
+    tokio::time::timeout(ONE_TURN, TURN_TO_FETCH.lock())
+        .await
+        .map_err(|_| Failure::Busy { waited: ONE_TURN })
 }
 
 async fn download(url: &str, limit: u64, about: &About<'_>) -> Result<Vec<u8>, Failure> {
@@ -104,7 +112,7 @@ mod tests {
     use tokio::sync::watch;
 
     use crate::fetch::tests::ONE_AT_A_TIME;
-    use crate::fetch::DOWNLOADS_AT_ONCE;
+    use crate::fetch::{DOWNLOADS_AT_ONCE, LONGEST_FETCH};
     use crate::registry::Registry;
 
     const BURST: usize = DOWNLOADS_AT_ONCE * 2;
@@ -217,6 +225,82 @@ mod tests {
              the index's turn leaves both waiting, got {index:?} and {archive:?}"
         );
     }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_caller_that_waits_out_a_full_turn_is_refused_as_busy() {
+        let _alone = ONE_AT_A_TIME.lock().await;
+        let (urls, stub) = serve(Index::Served).await;
+
+        let refused = refused_for_want_of_a_turn(&urls.index).await;
+
+        assert_eq!(
+            refused.kind(),
+            "busy",
+            "the wait was for this server's own turn and not a registry's answer, got {refused:?}"
+        );
+        assert_eq!(
+            stub.asked(),
+            0,
+            "a caller refused for want of a turn should never reach the registry"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_search_is_not_told_it_waited_for_an_archive() {
+        let _alone = ONE_AT_A_TIME.lock().await;
+        let (urls, _) = serve(Index::Served).await;
+
+        let message = refused_for_want_of_a_turn(&urls.index)
+            .await
+            .refuse()
+            .message;
+
+        assert!(
+            !message.contains("archive"),
+            "a search waited for its turn to fetch the index, not for an archive: {message}"
+        );
+    }
+
+    async fn refused_for_want_of_a_turn(url: &str) -> Failure {
+        let _held = TURN_TO_FETCH.lock().await;
+
+        tokio::time::timeout(
+            LONGEST_FETCH * 2,
+            Live::new().body(url, LIMIT, &the_index()),
+        )
+        .await
+        .expect("a caller that cannot get the turn should be refused, not queued")
+        .expect_err("the turn is held for longer than anyone waits for it")
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_caller_behind_a_fetch_that_lands_just_in_time_gets_the_index() {
+        let _alone = ONE_AT_A_TIME.lock().await;
+        let (urls, stub) = serve(Index::Served).await;
+        let live = Live::new();
+        let the_index = the_index();
+        let held = TURN_TO_FETCH.lock().await;
+
+        let the_fetch_ahead_lands = async {
+            tokio::time::sleep(LONGEST_FETCH - JUST_SHORT).await;
+            remember(&urls.index, &Arc::from(INDEX.as_bytes()));
+            drop(held);
+        };
+        let (answer, ()) = futures::join!(
+            live.body(&urls.index, LIMIT, &the_index),
+            the_fetch_ahead_lands
+        );
+
+        let body = answer.expect("the caller ahead left the index behind inside one turn");
+        assert_eq!(&*body, INDEX.as_bytes());
+        assert_eq!(
+            stub.asked(),
+            0,
+            "the index was already held when the turn came, so nothing should be fetched"
+        );
+    }
+
+    const JUST_SHORT: Duration = Duration::from_millis(1);
 
     async fn burst(url: &str) -> Vec<Result<Body, Failure>> {
         let live = Live::new();
