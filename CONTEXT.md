@@ -129,7 +129,9 @@ _Avoid_: tree, file list, contents, extracted archive
 The document a registry publishes naming every package it has — PyPI's,
 today, and nobody else's. It is fetched and *searched*: a query is matched
 against it here rather than sent, because PyPI has no search endpoint to send
-one to. Distinct from a Listing, which is about one version of one package;
+one to. It is the one document held between calls: fetched once per instance,
+and once however many ask at the same moment, then kept for ten minutes.
+Distinct from a Listing, which is about one version of one package;
 from a Catalogue, which is one package's versions and is what "index" is a
 banned synonym for there; and from the DiffStore's Entries, which are this
 server's own.

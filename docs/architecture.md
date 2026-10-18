@@ -472,10 +472,11 @@ Where a search is asked, what to ask it for, and how to read the answer are
 `src/document/`'s, along with the other two seams'. What is this module's is
 the size cap's number, the refusals a search fails with, and the one policy a
 search needs that a catalogue does not: PyPI's source is the index of
-everything it publishes rather than a reply to a query, so a warm instance
-holds the document it already fetched for the ten minutes PyPI's own
-`cache-control` gives it — a constant in `src/search/` rather than a header
-read back off each answer, so a `max-age` PyPI changed is a change made here.
+everything it publishes rather than a reply to a query, so it is fetched once
+per instance, and once however many ask at the same moment, then held for the
+ten minutes PyPI's own `cache-control` gives it — a constant in `src/search/`
+rather than a header read back off each answer, so a `max-age` PyPI changed is
+a change made here.
 That is a document, not an answer — every query is matched against it afresh —
 so no search result is cached anywhere and nothing here goes near the blob
 store.
@@ -526,6 +527,21 @@ could only agree. What does reach it is a fixture body and one a warm instance
 was already holding — the paths nothing streamed, which is what keeps the cap
 a rule about what this server will read rather than about where bytes came
 from.
+
+Holding a document once it has arrived is only half of holding it. On a cold
+instance every search that lands before the first fetch completes would find
+nothing held and fetch the whole index itself, and four of them would take
+every download slot, leaving archives to wait and then be refused as `Busy`.
+So a caller that finds nothing held takes a turn before fetching and looks
+again once it has it, by which time the caller ahead has usually left the
+document behind. The turn is one `tokio::sync::Mutex` for the process rather
+than one per URL, for the reason the memo holds one document: a map keyed by
+URL is a cache with an eviction policy to choose, and there is one source in
+this shape. A failed fetch leaves nothing behind, so the next caller tries
+again and the failure it gets is its own. Only a source with `remember_for`
+takes the turn; archives and version lists go straight to `fetch`. The turn is
+always taken before a download slot and never while holding one, so it adds no
+cycle to the slots' waits.
 
 ### `src/fetch.rs` — the registries' HTTP client
 
