@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use reqwest::header::HeaderMap;
 use reqwest::{Client, Method, RequestBuilder, Response, Url};
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +13,10 @@ const API_VERSION: &str = "12";
 const API_BASE: &str = "https://vercel.com/api/blob";
 
 const STORE_ACCESS: &str = "private";
+
+const OIDC_TOKEN: &str = "VERCEL_OIDC_TOKEN";
+
+const PRESENTED_OIDC_TOKEN: &str = "x-vercel-oidc-token";
 
 const ATTEMPTS: u32 = 3;
 
@@ -53,7 +58,7 @@ pub(crate) struct Credentials {
 
 impl Credentials {
     pub(crate) fn resolve(read: impl Fn(&str) -> Option<String>) -> Result<Self, Failure> {
-        if let Some(token) = read("VERCEL_OIDC_TOKEN") {
+        if let Some(token) = read(OIDC_TOKEN) {
             let store_id = read("BLOB_STORE_ID").ok_or(Failure::Internal {
                 doing: "reading the blob store's credentials: \
                         an OIDC token is set but BLOB_STORE_ID is not",
@@ -81,8 +86,27 @@ impl Credentials {
         })
     }
 
+    pub(crate) fn for_request(
+        headers: &HeaderMap,
+        read: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, Failure> {
+        let presented = headers
+            .get(PRESENTED_OIDC_TOKEN)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+
+        Self::resolve(|name| match (name, &presented) {
+            (OIDC_TOKEN, Some(token)) => Some(token.clone()),
+            _ => read(name),
+        })
+    }
+
+    pub(crate) fn from_request(headers: &HeaderMap) -> Result<Self, Failure> {
+        Self::for_request(headers, |name| std::env::var(name).ok())
+    }
+
     pub(crate) fn from_env() -> Result<Self, Failure> {
-        Self::resolve(|name| std::env::var(name).ok())
+        Self::from_request(&HeaderMap::new())
     }
 }
 
@@ -912,6 +936,47 @@ mod tests {
 
         assert_eq!(credentials.store_id, "store_a-test-store");
         assert_eq!(credentials.token, "an-oidc-token");
+    }
+
+    #[test]
+    fn a_token_presented_with_the_request_is_the_one_the_store_is_asked_with() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-vercel-oidc-token",
+            "a-request-token"
+                .parse()
+                .expect("a test token is a header value"),
+        );
+
+        let credentials = Credentials::for_request(
+            &headers,
+            env(&[
+                ("BLOB_STORE_ID", "store_a-test-store"),
+                ("VERCEL_OIDC_TOKEN", "a-build-time-token"),
+            ]),
+        )
+        .expect("a presented token with the store id is credentials");
+
+        assert_eq!(
+            credentials.token, "a-request-token",
+            "a deployed function is given its token with each request, and the \
+             environment only has one at build time"
+        );
+        assert_eq!(credentials.store_id, "store_a-test-store");
+    }
+
+    #[test]
+    fn a_request_that_presents_no_token_falls_back_to_the_environment() {
+        let credentials = Credentials::for_request(
+            &HeaderMap::new(),
+            env(&[
+                ("BLOB_STORE_ID", "store_a-test-store"),
+                ("VERCEL_OIDC_TOKEN", "a-local-token"),
+            ]),
+        )
+        .expect("the environment's pair is credentials on its own");
+
+        assert_eq!(credentials.token, "a-local-token");
     }
 
     #[test]
