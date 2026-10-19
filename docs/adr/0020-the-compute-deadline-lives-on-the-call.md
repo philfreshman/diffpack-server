@@ -22,13 +22,20 @@ archives was a request Vercel killed, not one this server answered.
 
 ## Why 240 seconds
 
-The longest a call can wait on registries is a PyPI listing and then its
-archive. Each is a slot and a request, so 4 × `UPSTREAM_TIMEOUT` = 120 s, and
-the two versions are fetched at once. 240 s outlasts that, so a slow registry
-is still answered as `timed_out` or `busy`, which names it, rather than as
+The longest a call can wait is a cache lookup followed by a PyPI listing and
+then its archive.
+- The lookup, `store::LONGEST_LOOKUP`, is two blob reads (the tree, then its
+  patches). Each read is two requests, and each request is up to three
+  attempts with backoff: 62.4 s.
+- Each fetch is a slot and a request, `fetch::LONGEST_FETCH`, 60 s, so a
+  listing and then its archive is 120 s. The two versions are fetched at once.
+
+That is 182.4 s. 240 s outlasts it, so a slow registry or blob store is still
+answered as `timed_out` or `busy`, which names it, rather than as
 `out_of_time`. 240 s also leaves 60 s of the function's 300 s to answer in.
-`tests/errors.rs` holds both against `vercel.json`, so moving either number
-fails a test rather than a request.
+`tests/errors.rs` builds the 182.4 s from the code's own constants and holds
+both claims against `vercel.json`, so moving any of the numbers fails a test
+rather than a request.
 
 ## What it does not do
 
@@ -47,8 +54,9 @@ so no tool can skip that. The tree build and a patch go through
 `Call::compute` only because the code that calls them asks it to. A tool that
 calls the engine inline escapes the deadline and nothing fails to compile. The
 argument for the line ("a tool that forgot would not fail to compile") applies
-here too, and is not met. It is accepted because the engine has three callers
-of that kind, all in `diff_package_versions`. Making the engine's functions
+here too, and is not met. It is accepted because two engine functions do
+that kind of work, `build_diff_tree` and `build_patch`, and their only callers
+are two call sites in `diff_package_versions`. Making the engine's functions
 reachable only through `Call` would turn a pure module into a seam (ADR 0007),
 for a guarantee review already gives.
 
@@ -64,18 +72,21 @@ at a size no cap would refuse. A size cap may still be worth having as a
 
 ## Rejected: a deadline without the blocking pool
 
-A timer fires only when the future it races yields, and extraction and the
-tree build are long synchronous stretches that never do. On an instance with
-one vCPU, tokio's runtime has one worker thread, and the work would hold it, so
-the timer could not run at all. `vercel.json` does not choose the instance
-size, so this crate cannot count on having more than one.
+A timeout wraps the work in the same task, and a task stuck in synchronous
+code is not polled again until that code returns. Extraction and the tree
+build are long synchronous stretches. So the timer may fire on another worker
+thread, but the timeout that races it is not polled, and the answer waits for
+the work however many threads there are. With one vCPU it is worse: tokio's
+runtime then has one worker thread, the work holds it, and every other call on
+the instance waits too. `vercel.json` does not choose the instance size, so
+this crate cannot count on having more than one.
 
 ## Rejected: spawn the whole call and time out the task
 
 `tokio::spawn` the dispatch and race its `JoinHandle` against the deadline.
-On one worker thread this has the same problem, because the spawned task holds
-that thread. It also needs the call's borrowed `Ctx` and arguments to be
-`'static`.
+With more than one worker thread this would answer on time. With one it has
+the same problem, because the spawned task holds the only thread. The blocking
+pool answers on time on any number of threads.
 
 ## Rejected: a timeout per step
 
