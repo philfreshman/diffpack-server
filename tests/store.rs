@@ -388,7 +388,7 @@ async fn the_entry_is_written_before_the_answer_is_given() {
 #[tokio::test]
 async fn a_write_that_outlasts_its_deadline_is_dropped_and_says_so() {
     let log = Capture::new();
-    let slow = Memory::new().stalling(Duration::from_millis(400));
+    let slow = Memory::new().stalling(Duration::from_secs(2));
     let hurried = || {
         slow.store()
             .writing_within(Duration::from_millis(50))
@@ -405,16 +405,51 @@ async fn a_write_that_outlasts_its_deadline_is_dropped_and_says_so() {
         "a write the store could not finish in time is not a failed diff, got {answer}"
     );
     assert!(
-        answered < Duration::from_millis(350),
+        answered < Duration::from_secs(1),
         "the answer waited {answered:?} on a write given 50ms"
     );
-    let notes = log.lines();
     assert!(
-        notes
-            .iter()
-            .any(|line| line.contains(r#""seam":"store""#) && line.contains("dropped")),
-        "a write that was cut short leaves a line saying the entry was dropped, got {notes:?}"
+        slow.written().is_empty(),
+        "a dropped write leaves nothing behind, got {:?}",
+        slow.written()
     );
+    assert!(
+        dropped(&log),
+        "a write that was cut short leaves a line saying the entry was dropped, got {:?}",
+        log.lines()
+    );
+}
+
+#[tokio::test]
+async fn a_write_never_outlasts_the_call_it_is_part_of() {
+    let log = Capture::new();
+    let slow = Memory::new().stalling(Duration::from_secs(2));
+
+    let answer = Client::over(
+        Ctx::fixture(FIXTURES)
+            .storing_in(slow.store().logging_to(log.sink()))
+            .answering_within(Duration::from_millis(500)),
+    )
+    .call(TOOL, diffable())
+    .await;
+
+    assert_eq!(
+        answer["isError"],
+        json!(false),
+        "the comparison was computed in time, so a cache write cannot be what \
+         turns it into a call out of time, got {answer}"
+    );
+    assert!(
+        dropped(&log),
+        "the write gave way to the call's deadline and says so, got {:?}",
+        log.lines()
+    );
+}
+
+fn dropped(log: &Capture) -> bool {
+    log.lines()
+        .iter()
+        .any(|line| line.contains(r#""seam":"store""#) && line.contains("dropped"))
 }
 
 #[tokio::test]
@@ -1606,7 +1641,8 @@ async fn the_sweep_is_done_before_the_answer_is_given() {
     let second = call(|| store.store(), at(1)).await;
     lands(&store, &second).await;
 
-    let budgeted = || store.store().budgeting(entry + entry / 16, entry);
+    let slow = store.clone().stalling(Duration::from_millis(100));
+    let budgeted = || slow.store().budgeting(entry + entry / 16, entry);
     let third = call(budgeted, at(2)).await;
 
     assert_eq!(

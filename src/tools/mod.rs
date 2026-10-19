@@ -149,6 +149,8 @@ pub struct Call {
     spent: Spent,
 
     lookup: Lookup,
+
+    answer_due: Instant,
 }
 
 impl Call {
@@ -157,6 +159,7 @@ impl Call {
             ctx: ctx.clone(),
             spent: Spent::new(),
             lookup: Lookup::default(),
+            answer_due: Instant::now() + ctx.deadline,
         }
     }
 
@@ -164,6 +167,7 @@ impl Call {
         Recorded {
             store: &self.ctx.store,
             lookup: &self.lookup,
+            answer_due: self.answer_due,
         }
     }
 
@@ -211,8 +215,9 @@ impl<S> Copy for Timed<'_, S> {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Recorded<'a> {
-    store: &'a Arc<DiffStore>,
+    store: &'a DiffStore,
     lookup: &'a Lookup,
+    answer_due: Instant,
 }
 
 impl Recorded<'_> {
@@ -240,7 +245,12 @@ impl Recorded<'_> {
     }
 
     pub async fn put(self, entry: Entry) {
-        self.store.put(entry).await;
+        let left_to_write = self
+            .answer_due
+            .saturating_duration_since(Instant::now())
+            .saturating_sub(TIME_TO_ANSWER_AFTER_A_WRITE);
+
+        self.store.put(entry, left_to_write).await;
     }
 }
 
@@ -339,6 +349,8 @@ fn with_handle_decoded(arguments: Option<&JsonObject>) -> JsonObject {
 }
 
 const HANDLE_ARGUMENT: &str = "handle";
+
+const TIME_TO_ANSWER_AFTER_A_WRITE: Duration = Duration::from_secs(1);
 
 pub async fn run<T>(
     ctx: &Ctx,

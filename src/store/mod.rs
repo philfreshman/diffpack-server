@@ -235,8 +235,10 @@ impl DiffStore {
         })
     }
 
-    pub async fn put(&self, entry: Entry) {
-        if tokio::time::timeout(self.write_deadline, self.writing(entry))
+    pub async fn put(&self, entry: Entry, left_to_write: Duration) {
+        let deadline = self.write_deadline.min(left_to_write);
+
+        if tokio::time::timeout(deadline, self.writing(entry))
             .await
             .is_err()
         {
