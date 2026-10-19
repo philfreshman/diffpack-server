@@ -3,6 +3,7 @@ pub mod cache_key;
 pub mod catalogue;
 pub mod document;
 pub mod engine;
+pub mod entries;
 pub mod error;
 pub mod fetch;
 pub mod handle;

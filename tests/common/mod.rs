@@ -192,6 +192,10 @@ impl Answer {
         body["result"].clone()
     }
 
+    pub fn body_len(&self) -> usize {
+        self.body.len()
+    }
+
     pub fn frame(&self) -> String {
         String::from_utf8_lossy(&self.body).into_owned()
     }

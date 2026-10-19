@@ -33,6 +33,10 @@ impl Line {
         Self::naming(Subject::Resource(shorten(resource)))
     }
 
+    pub fn serving(route: &str) -> Self {
+        Self::naming(Subject::Route(shorten(route)))
+    }
+
     fn naming(subject: Subject) -> Self {
         Self {
             subject,
@@ -84,6 +88,8 @@ pub enum Subject {
     Tool(String),
 
     Resource(String),
+
+    Route(String),
 }
 
 impl Subject {
@@ -91,6 +97,7 @@ impl Subject {
         match self {
             Self::Tool(_) => "calling a tool",
             Self::Resource(_) => "reading a resource",
+            Self::Route(_) => "serving a route",
         }
     }
 }

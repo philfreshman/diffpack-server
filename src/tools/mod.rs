@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::archive::{Archive, FileMap};
-use crate::cache_key::DiffKey;
+use crate::cache_key::{DiffId, DiffKey};
 use crate::catalogue::Catalogue;
 use crate::error::Failure;
 use crate::log::{Line, Lookup, Sink, Spent};
@@ -200,13 +200,25 @@ pub struct Recorded<'a> {
 impl Recorded<'_> {
     pub async fn get(self, key: &DiffKey) -> Option<Entry> {
         let entry = self.store.get(key).await;
+        self.record(entry.is_some());
+        entry
+    }
 
+    pub async fn answer_by_id<T>(
+        self,
+        diff_id: &DiffId,
+        answer: impl FnOnce(Entry) -> Option<T>,
+    ) -> Option<T> {
+        let answered = self.store.get_by_id(diff_id).await.and_then(answer);
+        self.record(answered.is_some());
+        answered
+    }
+
+    fn record(self, found: bool) {
         match self.store.is_available() {
-            true => self.lookup.looked(entry.is_some()),
+            true => self.lookup.looked(found),
             false => self.lookup.found_no_store(),
         }
-
-        entry
     }
 
     pub fn put(self, entry: Entry) {

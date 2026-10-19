@@ -529,13 +529,14 @@ _Avoid_: response limit, size cap
 ### Running it
 
 **Line**:
-What one tool call or one resource read leaves behind: a single JSON object
-naming the tool or the resource, a summary of what it was asked for, where its
-time went and how it ended. One per call or read, written by the dispatch
-rather than by a tool or a resource and written whether the work answered,
-failed or panicked, so a count of lines is a count of calls and reads. A Line
-names a `tool` or a `resource` and never both, so a count of one key is a
-count of that one population. A read names the resource its URI addresses and
+What one tool call, one resource read or one request for an Entry leaves
+behind: a single JSON object naming the tool, the resource or the route, a
+summary of what it was asked for, where its time went and how it ended. One per
+call, read or request, written by the dispatch rather than by a tool, a
+resource or the route, and written whether the work answered, failed or
+panicked, so a count of lines is a count of calls, reads and requests. A Line
+names one of `tool`, `resource` and `route`, never two, so a count of one key
+is a count of that one population. A read names the resource its URI addresses and
 summarises a diff handle by the inputs it carries, under the names
 `diff_package_versions` takes them by, so the two group together on the
 package and the versions. Distinct from a Failure's message, which is written for a
