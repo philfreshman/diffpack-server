@@ -597,8 +597,8 @@ What a seam leaves behind when it could not do its job and that is not a
 Failure. The DiffStore is the only one there is and is one by design: a cache
 failure must never fail a Diff, so the failure reaches neither the model nor
 the caller. Distinct from a Line, which is the dispatch's — one per call, so
-that counting Lines counts calls — and which is already written by the time a
-Note about a backgrounded write could exist.
+that counting Lines counts calls — and which says how the call ended, which a
+failed cache write does not change.
 _Avoid_: warning, log line, error, event
 
 **Cause**:

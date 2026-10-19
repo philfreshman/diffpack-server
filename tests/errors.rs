@@ -447,7 +447,9 @@ fn the_call_deadline_leaves_the_function_time_to_answer() {
 #[test]
 fn the_call_deadline_outlasts_the_longest_a_call_can_wait() {
     let a_listing_then_its_archive = 2;
-    let longest_wait = store::LONGEST_LOOKUP + fetch::LONGEST_FETCH * a_listing_then_its_archive;
+    let longest_wait = store::LONGEST_LOOKUP
+        + fetch::LONGEST_FETCH * a_listing_then_its_archive
+        + store::WRITE_DEADLINE;
 
     assert!(
         error::CALL_DEADLINE > longest_wait,

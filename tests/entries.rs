@@ -1,5 +1,4 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 mod common;
 
@@ -364,7 +363,7 @@ async fn compare(store: &Memory, arguments: Value) -> Value {
     let answer = Client::over(Ctx::fixture(FIXTURES).storing_in(store.store()))
         .call("diff_package_versions", arguments)
         .await;
-    settles(store, 2).await;
+    written_at_least(store, 2);
     answer
 }
 
@@ -436,16 +435,10 @@ fn diff_id_of(answer: &Value) -> &str {
         .unwrap_or_else(|| panic!("the answer names its diff_id, got {answer}"))
 }
 
-async fn settles(store: &Memory, blobs: usize) {
-    for _ in 0..400 {
-        if store.written().len() >= blobs {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-
-    panic!(
-        "the store should hold {blobs} blobs by now, it holds {:?}",
+fn written_at_least(store: &Memory, blobs: usize) {
+    assert!(
+        store.written().len() >= blobs,
+        "the store holds {blobs} blobs once the answer is in, it holds {:?}",
         store.written()
     );
 }

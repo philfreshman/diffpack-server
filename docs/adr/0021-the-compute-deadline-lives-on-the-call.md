@@ -30,12 +30,13 @@ then its archive.
 - Each fetch is a slot and a request, `fetch::LONGEST_FETCH`, 60 s, so a
   listing and then its archive is 120 s. The two versions are fetched at once.
 
-That is 182.4 s. 240 s outlasts it, so a slow registry or blob store is still
-answered as `timed_out` or `busy`, which names it, rather than as
+That is 182.4 s, and 192.4 s since ADR 0022 adds the cache write's
+`WRITE_DEADLINE` to it. 240 s outlasts it, so a slow registry or blob store is
+still answered as `timed_out` or `busy`, which names it, rather than as
 `out_of_time`. 240 s also leaves 60 s of the function's 300 s to answer in.
-`tests/errors.rs` builds the 182.4 s from the code's own constants and holds
-both claims against `vercel.json`, so moving any of the numbers fails a test
-rather than a request.
+`tests/errors.rs` builds the sum from the code's own constants and holds both
+claims against `vercel.json`, so moving any of the numbers fails a test rather
+than a request.
 
 ## What it does not do
 
