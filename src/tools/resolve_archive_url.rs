@@ -55,7 +55,7 @@ impl Tool for ResolveArchiveUrl {
 
     const IDEMPOTENT: bool = true;
 
-    const OPEN_WORLD: bool = true;
+    const OPEN_WORLD: bool = false;
 
     type Args = Args;
     type Output = Output;

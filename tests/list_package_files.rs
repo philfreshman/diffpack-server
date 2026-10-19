@@ -378,6 +378,34 @@ async fn a_cursor_a_client_invented_never_reaches_the_handler() {
 }
 
 #[tokio::test]
+async fn a_cursor_in_the_shape_the_server_writes_is_followed_wherever_it_came_from() {
+    let serde = json!({ "registry": "crates", "package": "serde", "version": "1.0.0" });
+    let whole = paths(&call(serde.clone()).await)
+        .iter()
+        .map(|path| path.to_string())
+        .collect::<Vec<_>>();
+
+    let mut from_the_second = serde;
+    from_the_second["cursor"] = json!("p1:1");
+    let resumed = call(from_the_second).await;
+
+    assert_eq!(
+        paths(&resumed),
+        &whole[1..],
+        "a cursor is only checked for its shape, so one written by hand \
+         resumes where it says: got {resumed}"
+    );
+
+    let cursor = &listed(TOOL).await["inputSchema"]["properties"]["cursor"];
+    let description = cursor["description"].as_str().unwrap_or_default();
+    assert!(
+        !description.contains("by hand is refused"),
+        "the description must not promise a refusal the server does not \
+         make, got {cursor}"
+    );
+}
+
+#[tokio::test]
 async fn a_package_with_thousands_of_files_answers_with_a_page_that_fits() {
     let result = call(json!({
         "registry": "npm",

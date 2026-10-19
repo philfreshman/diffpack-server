@@ -286,7 +286,7 @@ fn the_schema_says_a_handle_is_minted_rather_than_written() {
         "the description should name where a handle comes from: {description}"
     );
     assert!(
-        description.contains("not"),
+        description.contains("not written by hand"),
         "and say it is not written by hand: {description}"
     );
 }
