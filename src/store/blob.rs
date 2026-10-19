@@ -171,7 +171,8 @@ impl Api {
 
         let contents = client()?
             .request(Method::GET, self.url(&at.download_url)?)
-            .timeout(self.timeout);
+            .timeout(self.timeout)
+            .bearer_auth(&self.token);
 
         let body = succeeded(self.send(contents, DOING).await?, DOING)?
             .bytes()
@@ -743,6 +744,30 @@ mod tests {
         api.put("diffs/v1/abc/meta.json", b"{}".to_vec())
             .await
             .expect_err("a write the store refused is not a write");
+    }
+
+    #[tokio::test]
+    async fn a_read_presents_the_token_where_the_private_blob_is_served() {
+        let blobs = Stub::answering(vec![Reply::ok(r#"{"cached":true}"#)]).await;
+        let served_at = format!("{}/diffs/v1/abc/meta.json?download=1", blobs.base());
+        let api_stub = Stub::answering(vec![Reply::ok(&format!(
+            r#"{{"downloadUrl":"{served_at}"}}"#
+        ))])
+        .await;
+        let api = Api::at(api_stub.base(), "a-test-store", "a-token");
+
+        let body = api
+            .read("diffs/v1/abc/meta.json")
+            .await
+            .expect("both stubs answer the way the store does")
+            .expect("the store said where the blob is");
+
+        assert_eq!(body, br#"{"cached":true}"#);
+        assert_eq!(
+            blobs.received().header("authorization"),
+            "Bearer a-token",
+            "a private blob is served only to a request that carries the store's token"
+        );
     }
 
     #[tokio::test]
