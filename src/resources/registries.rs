@@ -12,7 +12,7 @@ pub fn resource() -> Resource {
     Resource::new(URI, RESOURCE_NAME)
         .with_title("Package registries")
         .with_description(
-            "The registries this server knows — npm, crates.io and PyPI — with the \
+            "The registries this server knows — npm, crates.io, PyPI and Go — with the \
              identifier each is named by in a tool argument, where a version's archive, \
              a package's versions and a search come from, and how each registry spells a \
              package name. Read this once instead of guessing at a scoped npm name or at \

@@ -74,6 +74,16 @@ async fn the_registry_catalogue_is_listed() {
         catalogue["name"].is_string(),
         "a listed resource carries the name a client shows, got {catalogue}"
     );
+
+    let description = catalogue["description"].as_str().unwrap_or_default();
+    for registry in Registry::ALL {
+        assert!(
+            description.contains(registry.name()),
+            "the description says which registries the catalogue holds, so it \
+             should name {}: got {description}",
+            registry.name()
+        );
+    }
 }
 
 #[tokio::test]

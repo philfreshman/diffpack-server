@@ -3,6 +3,7 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::{Client, CURRENT, PREVIOUS};
+use diffpack_server::registry::Registry;
 use diffpack_server::router;
 use serde_json::{json, Value};
 
@@ -71,6 +72,26 @@ async fn discover_returns_versions_capabilities_and_identity() {
         env!("CARGO_PKG_VERSION"),
         "the identity should name the build that answered, as /health does"
     );
+}
+
+#[tokio::test]
+async fn the_instructions_name_every_registry_this_server_has() {
+    let result = client(CURRENT)
+        .respond(body(1, "server/discover", json!({})))
+        .await
+        .result();
+    let instructions = result["instructions"]
+        .as_str()
+        .unwrap_or_else(|| panic!("discover carries the server's instructions, got {result}"));
+
+    for registry in Registry::ALL {
+        assert!(
+            instructions.contains(registry.name()),
+            "a client deciding whether this server can help reads the \
+             instructions first, so they should name {}: got {instructions}",
+            registry.name()
+        );
+    }
 }
 
 #[tokio::test]
