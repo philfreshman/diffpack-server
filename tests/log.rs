@@ -281,6 +281,24 @@ fn concurrent_fetches_cost_the_window_they_span_and_not_their_sum() {
     );
 }
 
+#[tokio::test]
+async fn a_fetch_cut_short_by_the_deadline_still_counts_the_time_it_waited() {
+    let spent = Spent::new();
+    let waited = Duration::from_millis(50);
+
+    let cut_short =
+        tokio::time::timeout(waited, spent.while_fetching(std::future::pending::<()>())).await;
+    assert!(cut_short.is_err(), "the fetch never finishes on its own");
+
+    let fetch = spent
+        .fetch()
+        .expect("a call that ran out of time while fetching was still waiting on a registry");
+    assert!(
+        fetch >= waited,
+        "the wait lasted until the fetch was abandoned, got {fetch:?}"
+    );
+}
+
 #[test]
 fn a_request_that_fetched_nothing_reports_no_fetch() {
     assert_eq!(Spent::starting_at(Instant::now()).fetch(), None);
