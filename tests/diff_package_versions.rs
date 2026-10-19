@@ -347,6 +347,29 @@ async fn a_version_that_does_not_exist_is_an_error_the_model_sees() {
 }
 
 #[tokio::test]
+async fn a_missing_version_tells_the_model_where_to_find_one_that_exists() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "diffable",
+        "from_version": "1.0.0",
+        "to_version": "9.9.9",
+    }))
+    .await;
+
+    assert_eq!(result["isError"], json!(true), "got {result}");
+
+    let said = result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a tool error carries text a model reads, got {result}"));
+
+    assert!(
+        said.contains("`list_package_versions`"),
+        "a refusal the model can only guess its way past is not one it recovers \
+         from, so it names the tool that lists the versions there are: got {said}"
+    );
+}
+
+#[tokio::test]
 async fn the_refusal_names_whichever_of_the_two_versions_is_missing() {
     let result = call(json!({
         "registry": "npm",

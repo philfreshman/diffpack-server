@@ -126,7 +126,14 @@ fn a_missing_version_names_the_package_the_version_and_a_way_forward() {
     assert_eq!(result.is_error, Some(true));
 
     let text = text_of(&result);
-    for expected in ["zod", "9.9.9", "npm", "4.0.0", "3.25.76"] {
+    for expected in [
+        "zod",
+        "9.9.9",
+        "npm",
+        "4.0.0",
+        "3.25.76",
+        "`list_package_versions`",
+    ] {
         assert!(
             text.contains(expected),
             "the message should name {expected}, got: {text}"
