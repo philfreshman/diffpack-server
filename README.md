@@ -12,13 +12,12 @@ sign-in and no API key.
 
 ### Claude Code
 
-Verified against production with Claude Code 2.1.299.
-
 ```bash
 claude mcp add --transport http diffpack https://mcp.diffpack.io/mcp
 ```
 
-To share it with a project instead, put this in the project's `.mcp.json`:
+To share it with a project instead, add `--scope project`, which writes this
+entry to the project's `.mcp.json`:
 
 ```json
 {
@@ -31,13 +30,18 @@ To share it with a project instead, put this in the project's `.mcp.json`:
 }
 ```
 
+Verified against production with Claude Code 2.1.299, using this entry as an
+`--mcp-config` file.
+
 ### Claude Desktop
 
 Documented, not yet verified.
 
-Add it as a custom connector: **Settings → Connectors → Add custom
-connector**, with the name `diffpack` and the URL
-`https://mcp.diffpack.io/mcp`. Leave the OAuth fields empty.
+Add it as a custom connector: **Customize → Connectors → + Add → Add custom
+connector**. Use the name `diffpack` and the URL
+`https://mcp.diffpack.io/mcp`, then choose **No sign in**. On a Team or
+Enterprise plan, an Owner adds it under **Organization settings →
+Connectors**, and members connect from **Customize → Connectors**.
 
 ### Codex
 
@@ -47,7 +51,8 @@ Documented, not yet verified.
 codex mcp add diffpack --url https://mcp.diffpack.io/mcp
 ```
 
-Or add it to `~/.codex/config.toml` by hand:
+No login is needed, so skip `codex mcp login`. Or add it to
+`~/.codex/config.toml` by hand:
 
 ```toml
 [mcp_servers.diffpack]
