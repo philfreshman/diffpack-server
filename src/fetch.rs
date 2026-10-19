@@ -207,7 +207,12 @@ pub(crate) mod tests {
     async fn stub() -> (String, InFlight) {
         let in_flight = InFlight::default();
         let app = Router::new().fallback(hold).with_state(in_flight.clone());
+        let addr = listening(app).await;
 
+        (format!("http://{addr}/archive"), in_flight)
+    }
+
+    async fn listening(app: Router) -> std::net::SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("a test can bind a loopback port");
@@ -218,7 +223,7 @@ pub(crate) mod tests {
             let _ = axum::serve(listener, app).await;
         });
 
-        (format!("http://{addr}/archive"), in_flight)
+        addr
     }
 
     async fn hold(State(in_flight): State<InFlight>) -> &'static str {
@@ -313,18 +318,9 @@ pub(crate) mod tests {
         );
     }
 
-    async fn answering(status: axum::http::StatusCode) -> String {
+    async fn npm_refusing_a_slashed_name_with(status: StatusCode) -> String {
         let app = Router::new().fallback(move || async move { status });
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("a test can bind a loopback port");
-        let addr = listener
-            .local_addr()
-            .expect("a bound listener has an address");
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
+        let addr = listening(app).await;
 
         format!("http://{addr}/types%2Fnode")
     }
@@ -332,7 +328,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_url_the_registry_will_not_serve_a_get_at_names_nothing() {
         let _turn = ONE_AT_A_TIME.lock().await;
-        let url = answering(axum::http::StatusCode::METHOD_NOT_ALLOWED).await;
+        let url = npm_refusing_a_slashed_name_with(StatusCode::METHOD_NOT_ALLOWED).await;
         let about = About {
             missing: &|_| Failure::NoSuchPackage {
                 registry: "npm".to_owned(),
