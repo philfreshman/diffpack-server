@@ -260,8 +260,9 @@ impl JsonSchema for Cursor {
             "description": "\
                 Where to resume a walk of this sequence: the `nextCursor` from the \
                 previous page, passed back unchanged. Omit it to start from the \
-                beginning. It is opaque and it is not an index — a cursor written by \
-                hand is refused.",
+                beginning. Treat it as opaque rather than writing or editing one: \
+                what it holds is this server's to change, and a value that is not in \
+                the shape this server writes is refused.",
         })
     }
 }
