@@ -3,9 +3,10 @@ use std::time::{Duration, Instant};
 mod common;
 
 use common::{Client, FIXTURES};
-use diffpack_server::log::{Capture, Spent};
+use diffpack_server::error::Failure;
+use diffpack_server::log::{Capture, Line, Spent};
 use diffpack_server::store::{DiffStore, Memory};
-use diffpack_server::tools::Ctx;
+use diffpack_server::tools::{self, Ctx};
 use serde_json::{json, Value};
 
 #[tokio::test]
@@ -422,39 +423,198 @@ async fn each_call_through_one_context_times_only_its_own_fetches() {
 }
 
 #[tokio::test]
-async fn a_resource_read_leaves_no_line_until_26_says_what_it_holds() {
+async fn a_resource_read_leaves_a_line_naming_the_comparison_it_read() {
     let log = Capture::new();
-    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    let store = Memory::new();
+    let client = Client::over(
+        Ctx::fixture(FIXTURES)
+            .logging_to(log.sink())
+            .storing_in(store.store()),
+    );
 
     let summary = client.call("diff_package_versions", diffable()).await;
-    let handle = summary["structuredContent"]["handle"]
-        .as_str()
-        .unwrap_or_else(|| panic!("the summary carries a handle, got {summary}"));
-
-    let read = client
-        .post(json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "resources/read",
-            "params": { "uri": format!("diffpack://diff/{handle}") },
-        }))
-        .await;
-    assert!(
-        read["result"]["contents"][0]["text"].is_string(),
-        "the read should have answered, got {read}"
-    );
+    settles(&store).await;
+    read(&client, &format!("diffpack://diff/{}", handle_in(&summary))).await;
 
     let lines = log.lines();
     assert_eq!(
         lines.len(),
-        1,
-        "only the tool call should have left a line, got {lines:?}"
+        2,
+        "a tool call and a resource read are two calls, so two lines: {lines:?}"
+    );
+
+    let line = parse(&lines[1]);
+    assert_eq!(
+        line["resource"], "diff",
+        "the line names the resource the URI addresses: {line}"
     );
     assert_eq!(
-        parse(&lines[0])["tool"],
-        "diff_package_versions",
-        "the one line is the tool call's: {}",
-        lines[0]
+        line.get("tool"),
+        None,
+        "a read is not a tool call, and counting tools should not count it: {line}"
+    );
+    for (name, sent) in diffable().as_object().expect("the arguments are an object") {
+        assert_eq!(
+            &line["args"][name], sent,
+            "the handle's inputs go under the names the tool took them by, so a \
+             comparison read by URI counts with one asked for by tool: {line}"
+        );
+    }
+    assert_eq!(
+        line["cache"], "hit",
+        "the read asked the store for what the tool call had just put there: {line}"
+    );
+}
+
+#[tokio::test]
+async fn a_file_diff_read_names_the_file_as_well_as_the_comparison() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+
+    let summary = client.call("diff_package_versions", diffable()).await;
+    let uri = format!("diffpack://diff/{}/file/src/index.js", handle_in(&summary));
+    read(&client, &uri).await;
+
+    let lines = log.lines();
+    let line = parse(lines.last().expect("the read left a line"));
+    assert_eq!(
+        line["resource"], "file-diff",
+        "a file's diff is the other template, and its own line: {line}"
+    );
+    assert_eq!(
+        line["args"]["path"], "src/index.js",
+        "which file was read is what tells one file-diff read from the next: {line}"
+    );
+    assert_eq!(
+        line["args"]["package"], "diffable",
+        "the file is still read out of one comparison: {line}"
+    );
+}
+
+#[tokio::test]
+async fn a_file_diff_path_is_written_decoded_so_redaction_sees_it() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    let handle = handle_in(&client.call("diff_package_versions", diffable()).await).to_owned();
+
+    for path in [
+        "src%2Findex.js",
+        "https%3A%2F%2Fblob.vercel-storage.com%2Fdiffs%2Fabc%3Ftoken%3Ds3cr3t",
+    ] {
+        read(&client, &format!("diffpack://diff/{handle}/file/{path}")).await;
+    }
+
+    let lines = log.lines();
+    let encoded = parse(&lines[1]);
+    assert_eq!(
+        encoded["args"]["path"], "src/index.js",
+        "one file is one path however the caller spelled it: {encoded}"
+    );
+    assert!(
+        !lines[2].contains("s3cr3t"),
+        "a signed URL percent-encoded into a path is still a signed URL: {}",
+        lines[2]
+    );
+}
+
+#[tokio::test]
+async fn a_uri_that_addresses_nothing_is_written_as_itself_and_redacted() {
+    let unknown = "diffpack://nothing-here";
+    let signed = "https://blob.vercel-storage.com/diffs/abc?token=s3cr3t&expires=1";
+
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    read(&client, unknown).await;
+    read(&client, signed).await;
+
+    let lines = log.lines();
+    assert_eq!(
+        lines.len(),
+        2,
+        "a read nothing answers is still a read: {lines:?}"
+    );
+
+    let line = parse(&lines[0]);
+    assert_eq!(
+        line["resource"], unknown,
+        "with no resource to name, the URI is what the caller asked for: {line}"
+    );
+    assert_eq!(
+        line["result"], "no_such_resource",
+        "and the line says nothing answered it: {line}"
+    );
+
+    let line = parse(&lines[1]);
+    assert_eq!(
+        line["resource"], "https://blob.vercel-storage.com/diffs/abc?[redacted]",
+        "a URI is the caller's text and goes through the same redaction: {line}"
+    );
+}
+
+#[tokio::test]
+async fn a_read_that_needs_no_handle_or_cannot_decode_one_has_no_arguments() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    read(&client, "diffpack://registries").await;
+    read(&client, "diffpack://diff/not-a-handle").await;
+
+    let lines = log.lines();
+    let expected = [
+        ("registries", "ok", "the registries document takes nothing"),
+        (
+            "diff",
+            "invalid_params",
+            "a handle that does not decode carries no inputs to name",
+        ),
+    ];
+    assert_eq!(lines.len(), 2, "two reads, two lines: {lines:?}");
+    for (line, (resource, result, why)) in lines.iter().map(|line| parse(line)).zip(expected) {
+        assert_eq!(line["resource"], resource, "{why}: {line}");
+        assert_eq!(line["args"], json!({}), "{why}: {line}");
+        assert_eq!(line["result"], result, "{why}: {line}");
+        assert_eq!(
+            line.get("cache"),
+            None,
+            "neither read asked the store: {line}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_call_that_panics_still_leaves_its_line() {
+    let log = Capture::new();
+    let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
+
+    let answer = tools::run(
+        &ctx,
+        Line::calling("get_diff_tree"),
+        async |_| -> Result<(), Failure> {
+            panic!("deliberately panicking, so that the dispatch has something to catch")
+        },
+    )
+    .await;
+
+    let line = one(&log);
+    assert_eq!(
+        line["tool"], "get_diff_tree",
+        "the call that crashed is the one an incident asks about: {line}"
+    );
+    assert_eq!(
+        line["result"], "panicked",
+        "a panic is its own cause, not an internal failure a handler returned: {line}"
+    );
+
+    let refused = answer
+        .expect_err("a call that panicked has no answer to give")
+        .respond()
+        .expect_err("a panic reaches the protocol channel, not the model");
+    assert_eq!(
+        refused.code.0, -32603,
+        "a panic is JSON-RPC's own internal error, as it was before the dispatch caught it"
+    );
+    assert_eq!(
+        refused.message, "diffpack failed while calling a tool.",
+        "the client is told what `Guarded` told it before the dispatch caught the panic"
     );
 }
 
@@ -571,6 +731,23 @@ async fn calling(log: &Capture, store: Store, tool: &str, arguments: Value) -> V
             "params": { "name": tool, "arguments": arguments },
         }))
         .await
+}
+
+async fn read(client: &Client, uri: &str) -> Value {
+    client
+        .post(json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "resources/read",
+            "params": { "uri": uri },
+        }))
+        .await
+}
+
+fn handle_in(summary: &Value) -> &str {
+    summary["structuredContent"]["handle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the summary carries a handle, got {summary}"))
 }
 
 fn diffable() -> Value {

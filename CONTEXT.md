@@ -379,9 +379,9 @@ shares no Phase and no Cache outcome.
 _Avoid_: state, globals, services, dependencies
 
 **Call**:
-One tool call while it runs, and what a handler is handed: a Ctx's seams,
-and the call's own tally — where its Phases add up and what its lookup in
-the DiffStore found. The tally is made when the call starts and read once,
+One tool call or resource read while it runs, and what a handler is handed: a
+Ctx's seams, and the call's own tally — where its Phases add up and what its
+lookup in the DiffStore found. The tally is made when the call starts and read once,
 when its Line is written, so a Line describes its own call and no other. In
 production a Call and a request last exactly as long, because there are no
 sessions ([ADR 0008](docs/adr/0008-no-sessions.md)); what the distinction
@@ -511,12 +511,18 @@ _Avoid_: response limit, size cap
 ### Running it
 
 **Line**:
-What one tool call leaves behind: a single JSON object naming the tool, a
-summary of what it was asked for, where its time went and how it ended. One
-per call and written by the dispatch rather than by a tool, so a count of
-lines is a count of calls. Distinct from a Failure's message, which is
-written for a model and reaches a client — a Line is written for an operator
-and goes no further than the platform's logs.
+What one tool call or one resource read leaves behind: a single JSON object
+naming the tool or the resource, a summary of what it was asked for, where its
+time went and how it ended. One per call or read, written by the dispatch
+rather than by a tool or a resource and written whether the work answered,
+failed or panicked, so a count of lines is a count of calls and reads. A Line
+names a `tool` or a `resource` and never both, so a count of one key is a
+count of that one population. A read names the resource its URI addresses and
+summarises a diff handle by the inputs it carries, under the names
+`diff_package_versions` takes them by, so the two group together on the
+package and the versions. Distinct from a Failure's message, which is written for a
+model and reaches a client — a Line is written for an operator and goes no
+further than the platform's logs.
 _Avoid_: log, log entry, event, trace, record
 
 **Phase**:
@@ -564,7 +570,8 @@ _Avoid_: warning, log line, error, event
 
 **Cause**:
 Which Failure a call ended in, in one word, as a Line carries it —
-`no_such_version`, `rate_limited`, `too_large`. It is the Failure's kind and
-not its message: a message is a sentence carrying the package name a caller
-sent, so counting by it would give one bucket per call.
+`no_such_version`, `rate_limited`, `too_large`, or `panicked` for a handler
+that never returned. It is the Failure's kind and not its message: a message
+is a sentence carrying the package name a caller sent, so counting by it would
+give one bucket per call.
 _Avoid_: error, reason, status, code

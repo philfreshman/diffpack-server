@@ -11,7 +11,8 @@ use crate::error::Failure;
 
 #[derive(Debug, Serialize)]
 pub struct Line {
-    pub tool: String,
+    #[serde(flatten)]
+    pub subject: Subject,
 
     pub args: Arguments,
 
@@ -24,9 +25,17 @@ pub struct Line {
 }
 
 impl Line {
-    pub fn new(tool: &str) -> Self {
+    pub fn calling(tool: &str) -> Self {
+        Self::naming(Subject::Tool(shorten(tool)))
+    }
+
+    pub fn reading(resource: &str) -> Self {
+        Self::naming(Subject::Resource(shorten(resource)))
+    }
+
+    fn naming(subject: Subject) -> Self {
         Self {
-            tool: shorten(tool),
+            subject,
             args: Arguments::default(),
             result: "ok",
             cache: None,
@@ -65,6 +74,23 @@ impl Line {
                 Err(failure) => failure.kind(),
             },
             ..self
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Subject {
+    Tool(String),
+
+    Resource(String),
+}
+
+impl Subject {
+    pub fn doing(&self) -> &'static str {
+        match self {
+            Self::Tool(_) => "calling a tool",
+            Self::Resource(_) => "reading a resource",
         }
     }
 }
