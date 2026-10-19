@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
@@ -12,16 +13,23 @@ pub enum Registry {
     Npm,
     Crates,
     PyPi,
+    Go,
 }
 
 impl Registry {
-    pub const ALL: [Registry; 3] = [Registry::Npm, Registry::Crates, Registry::PyPi];
+    pub const ALL: [Registry; 4] = [
+        Registry::Npm,
+        Registry::Crates,
+        Registry::PyPi,
+        Registry::Go,
+    ];
 
     pub fn id(self) -> &'static str {
         match self {
             Self::Npm => "npm",
             Self::Crates => "crates",
             Self::PyPi => "pypi",
+            Self::Go => "go",
         }
     }
 
@@ -34,6 +42,7 @@ impl Registry {
             Self::Npm => "npm",
             Self::Crates => "crates.io",
             Self::PyPi => "PyPI",
+            Self::Go => "Go",
         }
     }
 
@@ -62,6 +71,11 @@ impl Registry {
                            normalisation is applied, so `Typing.Extensions` keeps its \
                            case and its dot."
             }
+            Self::Go => {
+                "A module path is spelled in full, its major-version suffix \
+                           included: `github.com/go-chi/chi/v5`, not `github.com/go-chi/chi` \
+                           and not `chi`. Case is kept: `github.com/Masterminds/semver/v3`."
+            }
         }
     }
 
@@ -70,6 +84,7 @@ impl Registry {
             Self::Npm => "`package.json`",
             Self::Crates => "`Cargo.toml`",
             Self::PyPi => "`PKG-INFO`, `pyproject.toml` or `setup.py`",
+            Self::Go => "`go.mod`",
         }
     }
 
@@ -78,21 +93,29 @@ impl Registry {
             Self::Npm => "Node.js",
             Self::Crates => "Rust",
             Self::PyPi => "Python",
+            Self::Go => "Go",
         }
     }
 
     pub fn versions(self, package: &str) -> VersionSource {
         let escaped = escape(package);
         match self {
-            Self::Npm => VersionSource {
-                url: format!("https://registry.npmjs.org/{escaped}"),
-            },
-            Self::Crates => VersionSource {
-                url: format!("https://crates.io/api/v1/crates/{escaped}"),
-            },
-            Self::PyPi => VersionSource {
-                url: format!("https://api.deps.dev/v3/systems/pypi/packages/{escaped}"),
-            },
+            Self::Npm => {
+                VersionSource::one_document(format!("https://registry.npmjs.org/{escaped}"))
+            }
+            Self::Crates => {
+                VersionSource::one_document(format!("https://crates.io/api/v1/crates/{escaped}"))
+            }
+            Self::PyPi => VersionSource::one_document(format!(
+                "https://api.deps.dev/v3/systems/pypi/packages/{escaped}"
+            )),
+            Self::Go => {
+                let module = go_module_path(package);
+                VersionSource {
+                    url: format!("{GO_PROXY}/{module}/@v/list"),
+                    current: Some(format!("{GO_PROXY}/{module}/@latest")),
+                }
+            }
         }
     }
 
@@ -193,44 +216,86 @@ impl Registry {
                     .collect::<Vec<_>>();
                 (listed, current)
             }
+
+            Self::Go => {
+                let listed = document
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(|version| {
+                        version.starts_with('v').then(|| Version {
+                            prerelease: self.is_prerelease(version),
+                            version: version.to_owned(),
+                            published_at: None,
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                (listed, None)
+            }
         };
 
-        versions.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+        versions.sort_by(|a, b| {
+            b.published_at
+                .cmp(&a.published_at)
+                .then_with(|| self.undated_order(&b.version, &a.version))
+        });
         Some(Versions {
             all: versions,
             current,
         })
     }
 
+    pub fn read_current(self, document: &str) -> Option<Version> {
+        match self {
+            Self::Npm | Self::Crates | Self::PyPi => None,
+            Self::Go => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "PascalCase")]
+                struct Latest {
+                    version: String,
+                    time: Option<String>,
+                }
+
+                let latest: Latest = serde_json::from_str(document).ok()?;
+                Some(Version {
+                    prerelease: self.is_prerelease(&latest.version),
+                    version: latest.version,
+                    published_at: latest.time,
+                })
+            }
+        }
+    }
+
     pub fn search(self, query: &str, limit: u32) -> SearchSource {
         let escaped = escape(query);
-        let (url, accept, whole_index) = match self {
+        match self {
             Self::Npm => {
                 let size = limit.min(250);
-                (
-                    format!("https://registry.npmjs.org/-/v1/search?text={escaped}&size={size}"),
-                    "application/json",
-                    false,
-                )
+                SearchSource::asking(format!(
+                    "https://registry.npmjs.org/-/v1/search?text={escaped}&size={size}"
+                ))
             }
             Self::Crates => {
                 let per_page = limit.min(100);
-                (
-                    format!("https://crates.io/api/v1/crates?q={escaped}&per_page={per_page}"),
-                    "application/json",
-                    false,
-                )
+                SearchSource::asking(format!(
+                    "https://crates.io/api/v1/crates?q={escaped}&per_page={per_page}"
+                ))
             }
-            Self::PyPi => (
-                "https://pypi.org/simple/".to_owned(),
-                "application/vnd.pypi.simple.v1+json",
-                true,
-            ),
-        };
-        SearchSource {
-            url,
-            accept,
-            whole_index,
+            Self::PyPi => SearchSource {
+                url: "https://pypi.org/simple/".to_owned(),
+                accept: "application/vnd.pypi.simple.v1+json",
+                whole_index: true,
+                names_a_package: false,
+            },
+            Self::Go => SearchSource {
+                url: format!(
+                    "{GO_PROXY}/{}/@latest",
+                    go_module_path(module_path_in(query))
+                ),
+                accept: "application/json",
+                whole_index: false,
+                names_a_package: true,
+            },
         }
     }
 
@@ -289,6 +354,15 @@ impl Registry {
                     })
                     .collect()
             }
+
+            Self::Go => {
+                let module = self.read_current(body)?;
+                vec![Hit {
+                    name: module_path_in(query).to_owned(),
+                    version: Some(module.version),
+                    description: None,
+                }]
+            }
         };
 
         Some(hits.into_iter().take(limit as usize).collect())
@@ -314,8 +388,15 @@ impl Registry {
 
     fn listed_hosts(self) -> &'static [&'static str] {
         match self {
-            Self::Npm | Self::Crates => &[],
+            Self::Npm | Self::Crates | Self::Go => &[],
             Self::PyPi => &["files.pythonhosted.org"],
+        }
+    }
+
+    fn undated_order(self, left: &str, right: &str) -> Ordering {
+        match self {
+            Self::Npm | Self::Crates | Self::PyPi => Ordering::Equal,
+            Self::Go => GoVersion::parse(left).cmp(&GoVersion::parse(right)),
         }
     }
 
@@ -323,7 +404,7 @@ impl Registry {
         let version = version.split('+').next().unwrap_or_default();
 
         match self {
-            Self::Npm | Self::Crates => version.contains('-'),
+            Self::Npm | Self::Crates | Self::Go => version.contains('-'),
             Self::PyPi => pep440_prerelease(version),
         }
     }
@@ -480,7 +561,9 @@ impl JsonSchema for VersionName {
     fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
         json_schema!({
             "type": "string",
-            "description": VERSION_RULE,
+            "description": format!(
+                "{VERSION_RULE} `list_package_versions` lists the versions a package has."
+            ),
         })
     }
 }
@@ -488,6 +571,14 @@ impl JsonSchema for VersionName {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionSource {
     pub url: String,
+
+    pub current: Option<String>,
+}
+
+impl VersionSource {
+    fn one_document(url: String) -> Self {
+        Self { url, current: None }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -495,6 +586,22 @@ pub struct Versions {
     pub all: Vec<Version>,
 
     pub current: Option<String>,
+}
+
+impl Versions {
+    pub fn only(version: Version) -> Self {
+        Self {
+            current: Some(version.version.clone()),
+            all: vec![version],
+        }
+    }
+
+    pub fn pointing_at(self, current: String) -> Self {
+        Self {
+            current: Some(current),
+            ..self
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -509,6 +616,18 @@ pub struct SearchSource {
     pub url: String,
     pub accept: &'static str,
     pub whole_index: bool,
+    pub names_a_package: bool,
+}
+
+impl SearchSource {
+    fn asking(url: String) -> Self {
+        Self {
+            url,
+            accept: "application/json",
+            whole_index: false,
+            names_a_package: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -579,6 +698,57 @@ fn rank(name: &str, query: &str) -> Option<Rank> {
     }
 }
 
+#[derive(PartialEq, Eq)]
+struct GoVersion<'a> {
+    numbers: [u64; 3],
+    prerelease: Option<&'a str>,
+}
+
+impl<'a> GoVersion<'a> {
+    fn parse(version: &'a str) -> Self {
+        let version = version.strip_prefix('v').unwrap_or(version);
+        let without_build = version.split('+').next().unwrap_or_default();
+        let (core, prerelease) = match without_build.split_once('-') {
+            Some((core, prerelease)) => (core, Some(prerelease)),
+            None => (without_build, None),
+        };
+
+        let mut numbers = [0; 3];
+        for (slot, part) in numbers.iter_mut().zip(core.split('.')) {
+            *slot = leading_number(part);
+        }
+
+        Self {
+            numbers,
+            prerelease,
+        }
+    }
+}
+
+impl Ord for GoVersion<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.numbers
+            .cmp(&other.numbers)
+            .then_with(|| match (self.prerelease, other.prerelease) {
+                (None, None) => Ordering::Equal,
+                (None, Some(_)) => Ordering::Greater,
+                (Some(_), None) => Ordering::Less,
+                (Some(left), Some(right)) => left.cmp(right),
+            })
+    }
+}
+
+impl PartialOrd for GoVersion<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn leading_number(part: &str) -> u64 {
+    let digits = part.len() - part.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    part[..digits].parse().unwrap_or_default()
+}
+
 fn pep440_prerelease(version: &str) -> bool {
     const MARKERS: [&str; 8] = ["a", "b", "c", "rc", "alpha", "beta", "pre", "preview"];
 
@@ -600,13 +770,39 @@ fn pep440_prerelease(version: &str) -> bool {
     })
 }
 
+const GO_PROXY: &str = "https://proxy.golang.org";
+
+fn module_path_in(query: &str) -> &str {
+    const SCHEMES: [&str; 2] = ["https://", "http://"];
+
+    let without_scheme = SCHEMES
+        .iter()
+        .find_map(|scheme| query.strip_prefix(scheme))
+        .unwrap_or(query);
+    without_scheme.trim_end_matches('/')
+}
+
+fn go_module_path(module: &str) -> String {
+    const PATH_SEPARATOR_AND_CASE_MARK: &[u8] = b"/!";
+
+    escape_keeping(
+        &engine::escape_go_module_path(module),
+        PATH_SEPARATOR_AND_CASE_MARK,
+    )
+}
+
 fn escape(text: &str) -> String {
+    escape_keeping(text, &[])
+}
+
+fn escape_keeping(text: &str, kept: &[u8]) -> String {
     let mut escaped = String::with_capacity(text.len());
     for byte in text.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
                 escaped.push(char::from(byte))
             }
+            kept_byte if kept.contains(&kept_byte) => escaped.push(char::from(kept_byte)),
             other => escaped.push_str(&format!("%{other:02X}")),
         }
     }

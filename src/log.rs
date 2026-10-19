@@ -11,7 +11,8 @@ use crate::error::Failure;
 
 #[derive(Debug, Serialize)]
 pub struct Line {
-    pub tool: String,
+    #[serde(flatten)]
+    pub subject: Subject,
 
     pub args: Arguments,
 
@@ -24,9 +25,21 @@ pub struct Line {
 }
 
 impl Line {
-    pub fn new(tool: &str) -> Self {
+    pub fn calling(tool: &str) -> Self {
+        Self::naming(Subject::Tool(shorten(tool)))
+    }
+
+    pub fn reading(resource: &str) -> Self {
+        Self::naming(Subject::Resource(shorten(resource)))
+    }
+
+    pub fn serving(route: &str) -> Self {
+        Self::naming(Subject::Route(shorten(route)))
+    }
+
+    fn naming(subject: Subject) -> Self {
         Self {
-            tool: shorten(tool),
+            subject,
             args: Arguments::default(),
             result: "ok",
             cache: None,
@@ -65,6 +78,26 @@ impl Line {
                 Err(failure) => failure.kind(),
             },
             ..self
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Subject {
+    Tool(String),
+
+    Resource(String),
+
+    Route(String),
+}
+
+impl Subject {
+    pub fn doing(&self) -> &'static str {
+        match self {
+            Self::Tool(_) => "calling a tool",
+            Self::Resource(_) => "reading a resource",
+            Self::Route(_) => "serving a route",
         }
     }
 }
@@ -109,11 +142,12 @@ impl Spent {
     }
 
     pub async fn while_fetching<T>(&self, work: impl Future<Output = T>) -> T {
-        let began = Instant::now();
-        let done = work.await;
+        let _window = FetchWindow {
+            spent: self,
+            began: Instant::now(),
+        };
 
-        self.fetching(began, Instant::now());
-        done
+        work.await
     }
 
     pub fn fetch(&self) -> Option<Duration> {
@@ -126,6 +160,18 @@ impl Spent {
 
     fn offset(&self, at: Instant) -> u64 {
         u64::try_from(at.saturating_duration_since(self.started).as_micros()).unwrap_or(u64::MAX)
+    }
+}
+
+struct FetchWindow<'a> {
+    spent: &'a Spent,
+
+    began: Instant,
+}
+
+impl Drop for FetchWindow<'_> {
+    fn drop(&mut self) {
+        self.spent.fetching(self.began, Instant::now());
     }
 }
 

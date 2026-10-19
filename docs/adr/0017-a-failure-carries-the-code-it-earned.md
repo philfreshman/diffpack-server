@@ -15,7 +15,7 @@ Five codes. Two were already here and three are new:
 | `-32602` | Invalid params: the caller can fix this from what it was already told | `InvalidParams`, `NoSuchTool`, `NoSuchResource` |
 | `-32000` | A fault of this server's | `Internal` |
 | `-32001` | Ask for something else: the request was understood and there is no answer to it | `NoSuchPackage`, `NoSuchVersion`, `MalformedArchive`, `UnreadableVersions`, `VersionsTooLarge`, `UnreadableSearch`, `NoSuchFile`, `PathIsDirectory`, `UnresolvableArchiveUrl` |
-| `-32003` | Try again: nothing was served, and another attempt might be | `RateLimited`, `TimedOut`, `Busy`, `Unreachable`, `Unavailable` |
+| `-32003` | Try again: nothing was served, and another attempt might be | `RateLimited`, `TimedOut`, `Busy`, `Unreachable`, `Unavailable`; `OutOfTime` since #26 (ADR 0021) |
 | `-32004` | Ask for less: the answer is there, is over a limit, and has a narrower form | `TooLarge`, `SearchTooLarge`, `ItemTooLarge` |
 
 The three new ones are the three remedies `Failure::message` already writes
@@ -54,7 +54,9 @@ implementation-defined server errors. Of the six:
   exists. A URI is a parameter of it.
 * **`-32603` internal error** is JSON-RPC's own, for a fault in the JSON-RPC
   machinery rather than in what the request asked for. `src/mcp.rs`'s panic
-  guard uses it, which is exactly that case; a registry that timed out is not.
+  guard uses it, which is exactly that case, and so does `Failure::Panicked`,
+  from a second guard that #26 put in `tools::run` so that a crashed call
+  still leaves its line; a registry that timed out is not.
 * **`-32700` parse error** and **`-32600` invalid request** are about the
   frame, which was fine in every case here.
 

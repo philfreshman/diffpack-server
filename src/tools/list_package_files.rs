@@ -93,7 +93,12 @@ impl Tool for ListPackageFiles {
     const TITLE: &'static str = "List package files";
     const DESCRIPTION: &'static str = "\
         List the files inside one published version of a package, so you can \
-        see what it actually ships. Takes a registry, a package name and one \
+        see what it actually ships. To see which files changed between two \
+        versions, compare them with `diff_package_versions` and walk the \
+        result with `get_diff_tree` instead: this lists one version as it \
+        stands. For the address a version's archive is served from rather \
+        than what is in it, call `resolve_archive_url`. Takes a registry, a \
+        package name and one \
         exact version, all spelled the way the registry spells them. Paths \
         have the archive's top-level directory removed: a file is \
         `src/index.js`, never `zod-4.0.0/src/index.js`.";

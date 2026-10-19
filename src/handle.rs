@@ -4,6 +4,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::{Map, Value};
 
 use crate::cache_key::{DiffKey, SCHEMA};
 use crate::engine;
@@ -60,6 +61,15 @@ impl DiffHandle {
 
     pub fn decode(text: &str) -> Result<Self, Failure> {
         parse(text).map_err(|message| Failure::InvalidParams { message })
+    }
+
+    pub fn inputs_named_in(text: &str) -> Option<Map<String, Value>> {
+        let handle = Self::decode(text).ok()?;
+
+        match serde_json::to_value(handle.inputs()).ok()? {
+            Value::Object(inputs) => Some(inputs),
+            _ => None,
+        }
     }
 }
 
@@ -177,8 +187,11 @@ impl JsonSchema for DiffHandle {
                 exactly as it arrived. It carries the diff's inputs as well as its \
                 `diff_id`, which is what lets this server recompute the diff when its \
                 cached result has been evicted rather than asking you to start again. It \
-                is not a `diff_id` and it is not written by hand: a handle whose contents \
-                do not agree with each other is refused.",
+                also fixes how the comparison was made, `similarity_threshold` and \
+                `ignore_whitespace` included, so neither is accepted beside it: to compare \
+                with different ones, call `diff_package_versions` again for a new handle. \
+                It is not a `diff_id` and it is not written by hand: a handle whose \
+                contents do not agree with each other is refused.",
         })
     }
 }

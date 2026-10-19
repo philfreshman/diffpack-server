@@ -1,8 +1,9 @@
 use crate::archive::FileMap;
 
 pub use diffpack_engine::{
-    archive_source, build_patch, choose_archive, get_diff_content, unpack_archive, whitespace_mode,
-    ArchiveSource, DiffFileEntry, DiffStatus, FileMapEntry, FileType, Patch, WhitespaceMode,
+    archive_source, build_patch, choose_archive, escape_go_module_path, get_diff_content,
+    unpack_archive, whitespace_mode, ArchiveSource, DiffFileEntry, DiffStatus, FileMapEntry,
+    FileType, Patch, WhitespaceMode,
 };
 
 pub fn build_diff_tree(

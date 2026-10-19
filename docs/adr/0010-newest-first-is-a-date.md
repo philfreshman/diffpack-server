@@ -70,3 +70,11 @@ It answers a different question from the one asked, it needs two parsers and
 two dependencies for a tool that reads one document, and it has no answer at
 all for a version that parses under neither — which, given deps.dev serves
 `2.23.0-py2.7` for `requests`, is not hypothetical.
+
+## Since: #28
+
+Go's module proxy lists versions with no date at all, so for Go this record's
+order has nothing to work from. A Go module's versions are in diffpack.io's
+order instead, highest version first, and the date stays the order for the
+other three registries. Why that answers 0010's objections only in part is
+[ADR 0019](0019-a-go-module-is-ordered-by-version-and-found-by-path.md).

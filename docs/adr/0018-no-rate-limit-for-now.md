@@ -77,17 +77,20 @@ single call can do is a known number.
   several callers shares those four. A caller that waits out `SLOT_WAIT` for
   one is refused as `Busy` rather than left queued — the guard #26 asks for.
 * **The time limits.** `UPSTREAM_TIMEOUT` in `src/error.rs`, 30 s per request,
-  so `fetch::bytes` is bounded at twice that; and `maxDuration: 300` in
+  so `fetch::bytes` is bounded at twice that; `CALL_DEADLINE`, 240 s, after
+  which a call is answered as out of time even if its work is still running
+  (ADR 0021, added after this record); and `maxDuration: 300` in
   `vercel.json` over the whole invocation.
 * **The budget.** `CACHE_MAX_BYTES` in `src/store/mod.rs`: 256 MB over the
   whole blob store, swept oldest first (#22): a loop can churn it, not grow it.
-* **The line.** `src/log.rs` writes one structured line per tool call — tool,
-  arguments, result, cache outcome, phase timings — to Vercel's runtime logs.
-  A loop shows there as the same tool and arguments over and over, or as a
-  miss rate no review makes. It records no caller address, so one source
-  dominating is for Vercel's request logs or the firewall's traffic view to
-  show; and a `resources/read` writes no line yet (`read_resource` in
-  `src/mcp.rs`), though one that misses the cache works out a whole comparison.
+* **The line.** `src/log.rs` writes one structured line per tool call and
+  per resource read — tool or resource, arguments, result, cache outcome,
+  phase timings — to Vercel's runtime logs. A loop shows there as the same
+  tool and arguments over and over, or as a miss rate no review makes. It
+  records no caller address, so one source dominating is for Vercel's request
+  logs or the firewall's traffic view to show. A `resources/read` wrote no
+  line when this was decided; #26 added one, so a cold read that works out a
+  whole comparison shows as a `miss` on a `diff` or `file-diff` line.
 
 ## When to revisit
 

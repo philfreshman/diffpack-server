@@ -15,17 +15,22 @@ distinguishes them rather than restating the name.
 ### Packages and their contents
 
 **Registry**:
-One of the three package hosts this server knows: npm, crates.io, PyPI. The
-identifier in a key or a parameter is `npm`, `crates`, `pypi`; the name in a
-message to a model is the one the registry uses for itself — `npm`,
-`crates.io`, `PyPI`.
+One of the four package hosts this server knows: npm, crates.io, PyPI and the
+Go module proxy. The identifier in a key or a parameter is `npm`, `crates`,
+`pypi`, `go`; the name in a message to a model is the one the registry uses
+for itself — `npm`, `crates.io`, `PyPI` — and `Go` for the proxy, whose own
+name is its host.
 _Avoid_: package manager, source, ecosystem, repository
 
 **Package**:
 One named thing on a registry, across all of its versions. The name is taken
 verbatim — `@types/node` keeps the `@` and the `/`, `Typing.Extensions` keeps
-its case. A tool takes the name as `registry::PackageName`, which checks
-nothing and whose schema states every registry's Name rule.
+its case, and a Go module path keeps its capitals and its major-version suffix:
+`github.com/go-chi/chi/v5` is one package, and `/v5` is not a version. On Go a
+package is a *module* and its name a *module path*, and those are the words Go's
+own text uses — the one place the word below is not avoided. A tool takes the
+name as `registry::PackageName`, which checks nothing and whose schema states
+every registry's Name rule.
 _Avoid_: library, crate, module, dependency
 
 **Version**:
@@ -35,9 +40,9 @@ different versions here, because nothing is normalised. A tool takes one as
 _Avoid_: release, tag, revision
 
 **Archive**:
-The single compressed file a registry serves for one version: a `.tgz` from
-npm, a `.crate` from crates.io, an sdist from PyPI. It is bytes in flight —
-what was downloaded, before anything was read out of it.
+The single compressed file a registry serves for one version: a `.tgz` from npm,
+a `.crate` from crates.io, an sdist from PyPI, a module `.zip` from Go. It is
+bytes in flight — what was downloaded, before anything was read out of it.
 _Avoid_: tarball, bundle, download
 
 **Listing**:
@@ -66,7 +71,9 @@ rather than something it fetches
 **Catalogue**:
 What a registry says a package's versions are: every published version, with
 the date the registry says it was published and whether it is a preview, and
-the Current version. It is about a Package where a FileMap is about one
+the Current version. Go's is two documents rather than one: the proxy's list
+names versions and nothing else, so its Current version is asked of `@latest`
+beside it. It is about a Package where a FileMap is about one
 Version of one, it is read rather than extracted, and it is never cached —
 registry metadata goes stale when somebody publishes, and the Budget belongs
 to Diffs.
@@ -76,14 +83,15 @@ _Avoid_: version list, releases, index, metadata
 The one release a registry itself points at: what it installs for somebody who
 names no version. Every registry carries one and each spells it its own way —
 npm's `dist-tags.latest`, crates.io's `default_version`, the `isDefault` flag
-deps.dev puts on a PyPI version. It is a third answer and not either of the
-other two: on `@types/node` the Newest first entry is a 24.x patch, 26.6.2 is
-the Current version, and neither is a Preview. It is read out of the Catalogue
-document and never looked up in the versions beside it, so a registry pointing
-at a version this server did not receive is reported as the registry spelled
-it rather than as no current version at all. It is the same fact a Hit's
-version is, read out of a different document: a Search answer carries it for
-npm and crates.io, and PyPI's Index carries no version at all.
+deps.dev puts on a PyPI version, the version the Go proxy's `@latest` resolves.
+It is a third answer and not either of the other two: on `@types/node` the
+Newest first entry is a 24.x patch, 26.6.2 is the Current version, and neither
+is a Preview. It is read out of the Catalogue document and never looked up in
+the versions beside it, so a registry pointing at a version this server did not
+receive is reported as the registry spelled it rather than as no current version
+at all. It is the same fact a Hit's version is, read out of a different
+document: a Search answer carries it for npm, crates.io and Go, and PyPI's Index
+carries no version at all.
 _Avoid_: latest as a name for it — the word is ambiguous between this and
 Newest first, so it appears here only in quotes, as the question an agent
 arrives with; default, stable, `dist-tag`
@@ -95,22 +103,28 @@ highest version number — npm's `@types/node` publishes a 22.x patch after a
 top. Not a direction to read a source's document in either: deps.dev sorts
 PyPI's versions lexically, and npm's own order does not survive parsing. The
 date is the only thing that produces it, and a version the source gives no
-date for is listed last rather than dropped or guessed at.
+date for is listed last rather than dropped or guessed at. Go is the one
+exception: its proxy dates none of the versions it lists, so a Go module's are
+highest version first, in the order diffpack.io shows them ([ADR
+0019](docs/adr/0019-a-go-module-is-ordered-by-version-and-found-by-path.md)).
 _Avoid_: latest, sorted, descending, semver order
 
 **Preview**:
 A version that is an alpha, a beta, a release candidate or a development
 build, flagged so that an agent asked for "the last two versions" does not
 diff against one without knowing. Which spellings count is the registry's:
-npm and crates.io are semver, so it is what follows the first `-`; PyPI is PEP
-440, where `1.0rc1` is one and there is no separator at all. Build metadata
+npm, crates.io and Go are semver, so it is what follows the first `-`; PyPI is
+PEP 440, where `1.0rc1` is one and there is no separator at all. A Go
+pseudo-version is a preview by that rule, as Go itself counts it. Build metadata
 and a post-release are neither.
 _Avoid_: prerelease (as a concept — the field is `prerelease`), unstable,
 beta, draft
 
 **FileMap**:
 An Archive after extraction: every path in that version, file or directory,
-and what is at it, with the archive's top-level directory already stripped.
+and what is at it, with the archive's top-level directory already stripped —
+for Go, the `{module}@{version}/` prefix every entry of a module zip carries,
+several directories deep.
 It is what a diff is computed from, and it is the boundary the rest of the
 crate sees — a tool asks for a FileMap, never for an Archive. Every file's
 content is text, because extraction decodes it that way: bytes that are not
@@ -142,8 +156,10 @@ One package a Search found: the name to pass to any other tool, and beside
 it the Version the Registry would install for a caller that named none, and
 the package's own description — *where that registry carries them*. npm and
 crates.io carry all three; PyPI's Index carries a name and nothing else, so
-a PyPI hit has a name and nothing else. An absent version is a registry that
-does not say here, never a package that has published nothing.
+a PyPI hit has a name and nothing else. A Go hit has a name and a version and
+no description, because the proxy says nothing about what a module is. An
+absent version is a registry that does not say here, never a package that has
+published nothing.
 _Avoid_: result, match, search result, package (unqualified)
 
 **Search**:
@@ -152,19 +168,20 @@ rest of the crate has to that question: a query and a Limit in, Hits out. It
 is the Catalogue's sibling and not the Catalogue — that one is asked about a
 package a caller can already name, and this is what a caller uses when it
 cannot — and neither downloads anything. A tool asks it a question rather
-than learning that one registry answers with a ranked reply and another with
-its whole Index.
+than learning that one registry answers with a ranked reply, another with
+its whole Index, and Go with nothing at all: there is no Go search, so a Go
+query has to be the whole module path and finds that module or nothing.
 _Avoid_: lookup, find, query (that is the argument), catalogue, index
 
 **Name rule**:
 What one registry's spelling of a package name costs a caller, in a sentence
 that can be shown to it: npm's scopes, crates.io's `-` against `_`, PyPI's
-absent normalisation. A rule is told, not enforced — nothing here refuses a
-name for breaking one, because the registry decides what exists. The version
-rule is the same kind of sentence, and is one sentence for all three. Every
-package argument's schema states all three name rules, not the one that
-applies: the registry is a separate argument, so the schema cannot know which
-one a caller will pick, and an agent reads a tool's schema without reading
+absent normalisation, Go's whole module path. A rule is told, not enforced —
+nothing here refuses a name for breaking one, because the registry decides what
+exists. The version rule is the same kind of sentence, and is one sentence for
+all four. Every package argument's schema states all four name rules, not the
+one that applies: the registry is a separate argument, so the schema cannot know
+which one a caller will pick, and an agent reads a tool's schema without reading
 `diffpack://registries`.
 _Avoid_: validation, name format, constraint, schema
 
@@ -191,8 +208,9 @@ _Avoid_: permit, semaphore, concurrency limit, connection
 
 **Busy**:
 This instance having no Download slot to give inside the time one call waits
-for one. It is about this server's own capacity and is the only Failure that
-is — every other one is a registry's doing, a caller's, or a package's — so
+for one, or a search finding the turn to fetch PyPI's index still taken after
+one whole fetch's worth of waiting. It is about this server's own capacity
+and is the only Failure that is — every other one is a registry's doing, a caller's, or a package's — so
 it names no registry: nothing was asked of one. Distinct from a Cause of
 `timed_out`, which is a registry that was asked and did not answer, and from
 `rate_limited`, which is a registry refusing this server rather than this
@@ -365,28 +383,29 @@ definition a client sees.
 _Avoid_: command, endpoint, action, handler (alone)
 
 **Ctx**:
-What a Tool's handler is allowed to reach: the seams that carry state a
-handler should not build — `archive`, `catalogue`, `search`, the DiffStore —
-built once per request, and reached by a handler through a Call made from
-it. A pure module is not in it and does not need to be: a handler names
-`registry`, `page` and `handle` directly. Anything a handler needs that is
-neither in Ctx nor a pure module is a seam it has gone around. It is built
-whole or not at all: every seam live, or every seam reading from the fixture
-sets. There is no half of one, because the half that was not asked for would
-have to be live. It holds nothing that belongs to one call, so cloning it
+What a Tool's handler is allowed to reach: the seams that carry state a handler
+should not build — `archive`, `catalogue`, `search`, the DiffStore — a live one
+built for each Call from the headers of the request it came in, since the
+DiffStore's token arrives with the request, and reached by a handler through a
+Call made from it. A pure module is not in it and does not need to be: a
+handler names `registry`, `page` and `handle` directly. Anything a handler
+needs that is neither in Ctx nor a pure module is a seam it has gone around. It
+is built whole or not at all: every seam live, or every seam reading from the
+fixture sets. There is no half of one, because the half that was not asked for
+would have to be live. It holds nothing that belongs to one call, so cloning it
 shares no Phase and no Cache outcome.
 _Avoid_: state, globals, services, dependencies
 
 **Call**:
-One tool call while it runs, and what a handler is handed: a Ctx's seams,
-and the call's own tally — where its Phases add up and what its lookup in
-the DiffStore found. The tally is made when the call starts and read once,
-when its Line is written, so a Line describes its own call and no other. In
-production a Call and a request last exactly as long, because there are no
-sessions ([ADR 0008](docs/adr/0008-no-sessions.md)); what the distinction
-buys is that a Ctx cloned across two calls cannot carry one call's Cache
-outcome into the next. Distinct from a Ctx, which outlives it, and from a
-Line, which is what it leaves behind.
+One tool call or resource read while it runs, and what a handler is handed: a
+Ctx's seams, and the call's own tally — where its Phases add up and what its
+lookup in the DiffStore found. The tally is made when the call starts and read
+once, when its Line is written, so a Line describes its own call and no other.
+In production a Call and a request last exactly as long, because there are no
+sessions ([ADR 0008](docs/adr/0008-no-sessions.md)); what the distinction buys
+is that a Ctx cloned across two calls cannot carry one call's Cache outcome
+into the next. Distinct from a Ctx, which is what it is made over and can be
+shared between Calls, and from a Line, which is what it leaves behind.
 _Avoid_: request (in production the same length, but not the same thing),
 session, context, invocation
 
@@ -510,20 +529,41 @@ _Avoid_: response limit, size cap
 ### Running it
 
 **Line**:
-What one tool call leaves behind: a single JSON object naming the tool, a
-summary of what it was asked for, where its time went and how it ended. One
-per call and written by the dispatch rather than by a tool, so a count of
-lines is a count of calls. Distinct from a Failure's message, which is
-written for a model and reaches a client — a Line is written for an operator
-and goes no further than the platform's logs.
+What one tool call, one resource read or one request for an Entry leaves
+behind: a single JSON object naming the tool, the resource or the route, a
+summary of what it was asked for, where its time went and how it ended. One per
+call, read or request, written by the dispatch rather than by a tool, a
+resource or the route, and written whether the work answered, failed, panicked
+or ran past its Deadline, so a count of lines is a count of calls, reads and
+requests. A Line names one of `tool`, `resource` and `route`, never two, so a
+count of one key is a count of that one population. A read names the resource
+its URI addresses. Wherever a diff handle is summarised, by a read or by a
+tool that takes one, it is replaced by the inputs it carries, under the names
+`diff_package_versions` takes them by, so every line about one comparison
+groups together on the package and the versions. Distinct from a Failure's
+message, which is written for a model and reaches a client — a Line is
+written for an operator and goes no further than the platform's logs.
 _Avoid_: log, log entry, event, trace, record
+
+**Deadline**:
+How long one tool call or one resource read has, from when the dispatch
+starts it, before it is answered as out of time: 240 s, inside the function's
+300 s. It bounds when the caller hears back and not the work. A step that runs
+on the blocking pool — extraction, a tree build, a patch — keeps running past
+it, and its result is dropped. Distinct from the Budget, which is the blob
+store's bytes, and from the upstream timeout, which is one request to a
+registry and is shorter, so that a slow registry is answered as slow rather
+than as out of time ([ADR 0021](docs/adr/0021-the-compute-deadline-lives-on-the-call.md)).
+_Avoid_: budget (that is the blob store's), timeout (that is one request's),
+time limit
 
 **Phase**:
 One part of a call that is timed by itself. Two of them today: the whole
 call, and the part of it spent waiting for a Registry. Every seam that leaves
 this process counts towards the second — an Archive, a Catalogue and a Search
 alike — because the question is the wait and not which document was waited
-for. A Phase that did not happen is absent from a Line rather than zero,
+for. An Archive's extraction is inside that seam (ADR 0001), so the time it
+takes is counted in the wait too. A Phase that did not happen is absent from a Line rather than zero,
 because zero is a measurement and a percentile taken over one describes
 neither population.
 
@@ -563,7 +603,8 @@ _Avoid_: warning, log line, error, event
 
 **Cause**:
 Which Failure a call ended in, in one word, as a Line carries it —
-`no_such_version`, `rate_limited`, `too_large`. It is the Failure's kind and
-not its message: a message is a sentence carrying the package name a caller
-sent, so counting by it would give one bucket per call.
+`no_such_version`, `rate_limited`, `too_large`; `panicked` for a handler that
+never returned, and `out_of_time` for one still working at its Deadline. It is
+the Failure's kind and not its message: a message is a sentence carrying the
+package name a caller sent, so counting by it would give one bucket per call.
 _Avoid_: error, reason, status, code

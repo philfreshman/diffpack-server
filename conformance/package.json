@@ -1,0 +1,10 @@
+{
+  "name": "diffpack-server-conformance",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@modelcontextprotocol/inspector": "2.9.0",
+    "ajv": "8.18.0",
+    "ajv-formats": "3.0.1"
+  }
+}

@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use reqwest::header::HeaderMap;
 use reqwest::{Client, Method, RequestBuilder, Response, Url};
 use serde::{Deserialize, Serialize};
 
@@ -11,11 +12,30 @@ const API_VERSION: &str = "12";
 
 const API_BASE: &str = "https://vercel.com/api/blob";
 
+const STORE_ACCESS: &str = "private";
+
+const OIDC_TOKEN: &str = "VERCEL_OIDC_TOKEN";
+
+const STORE_ID: &str = "BLOB_STORE_ID";
+
+const READ_WRITE_TOKEN: &str = "BLOB_READ_WRITE_TOKEN";
+
+const PRESENTED_OIDC_TOKEN: &str = "x-vercel-oidc-token";
+
 const ATTEMPTS: u32 = 3;
 
 const BACKOFF: Duration = Duration::from_millis(200);
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+
+const LONGEST_REQUEST: Duration = TIMEOUT
+    .saturating_mul(ATTEMPTS)
+    .saturating_add(BACKOFF.saturating_mul((1 << (ATTEMPTS - 1)) - 1));
+
+const WHERE_IT_IS_THEN_THE_DOWNLOAD: u32 = 2;
+
+pub(crate) const LONGEST_READ: Duration =
+    LONGEST_REQUEST.saturating_mul(WHERE_IT_IS_THEN_THE_DOWNLOAD);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,36 +71,69 @@ pub(crate) struct Credentials {
 
 impl Credentials {
     pub(crate) fn resolve(read: impl Fn(&str) -> Option<String>) -> Result<Self, Failure> {
-        if let Some(token) = read("VERCEL_OIDC_TOKEN") {
-            let store_id = read("BLOB_STORE_ID").ok_or(Failure::Internal {
-                doing: "reading the blob store's credentials: \
-                        an OIDC token is set but BLOB_STORE_ID is not",
-            })?;
+        let oidc_token = read(OIDC_TOKEN);
+
+        if let (Some(token), Some(store_id)) = (oidc_token.clone(), read(STORE_ID)) {
             return Ok(Self { store_id, token });
         }
 
-        if let Some(token) = read("BLOB_READ_WRITE_TOKEN") {
-            let store_id =
-                token
-                    .split('_')
-                    .nth(3)
-                    .filter(|id| !id.is_empty())
-                    .ok_or(Failure::Internal {
-                        doing: "reading the blob store's credentials: \
-                            BLOB_READ_WRITE_TOKEN is not in the shape a store id can be read from",
-                    })?;
-            let store_id = store_id.to_owned();
-            return Ok(Self { store_id, token });
+        if let Some(token) = read(READ_WRITE_TOKEN) {
+            return Self::from_read_write_token(token);
         }
 
         Err(Failure::Internal {
-            doing: "reading the blob store's credentials: \
-                    neither VERCEL_OIDC_TOKEN nor BLOB_READ_WRITE_TOKEN is set",
+            doing: match oidc_token {
+                Some(_) => {
+                    "reading the blob store's credentials: \
+                     an OIDC token is set but BLOB_STORE_ID is not"
+                }
+                None => {
+                    "reading the blob store's credentials: \
+                     neither VERCEL_OIDC_TOKEN, an x-vercel-oidc-token header \
+                     nor BLOB_READ_WRITE_TOKEN is set"
+                }
+            },
         })
     }
 
+    fn from_read_write_token(token: String) -> Result<Self, Failure> {
+        let store_id = token
+            .split('_')
+            .nth(3)
+            .filter(|id| !id.is_empty())
+            .ok_or(Failure::Internal {
+                doing: "reading the blob store's credentials: \
+                        BLOB_READ_WRITE_TOKEN is not in the shape a store id can be read from",
+            })?
+            .to_owned();
+
+        Ok(Self { store_id, token })
+    }
+
+    pub(crate) fn resolve_for(
+        headers: &HeaderMap,
+        read: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, Failure> {
+        let presented = headers
+            .get(PRESENTED_OIDC_TOKEN)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(str::to_owned);
+
+        Self::resolve(|name| match (name, &presented) {
+            (OIDC_TOKEN, Some(token)) => Some(token.clone()),
+            _ => read(name),
+        })
+    }
+
+    pub(crate) fn from_request(headers: &HeaderMap) -> Result<Self, Failure> {
+        Self::resolve_for(headers, |name| std::env::var(name).ok())
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_env() -> Result<Self, Failure> {
-        Self::resolve(|name| std::env::var(name).ok())
+        Self::from_request(&HeaderMap::new())
     }
 }
 
@@ -130,7 +183,7 @@ impl Api {
             .request(Method::PUT, url)?
             .header("x-add-random-suffix", "0")
             .header("x-allow-overwrite", "0")
-            .header("x-vercel-blob-access", "public")
+            .header("x-vercel-blob-access", STORE_ACCESS)
             .body(body);
 
         let response = self.send(request, DOING).await?;
@@ -169,7 +222,8 @@ impl Api {
 
         let contents = client()?
             .request(Method::GET, self.url(&at.download_url)?)
-            .timeout(self.timeout);
+            .timeout(self.timeout)
+            .bearer_auth(&self.token);
 
         let body = succeeded(self.send(contents, DOING).await?, DOING)?
             .bytes()
@@ -536,7 +590,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_write_declares_the_access_the_api_will_not_assume() {
+    async fn a_write_declares_the_private_access_the_store_is_provisioned_with() {
         let stub = Stub::start().await;
         let api = Api::at(stub.base(), "a-test-store", "a-token");
 
@@ -544,7 +598,11 @@ mod tests {
             .await
             .expect("the stub answers the way the API does");
 
-        assert_eq!(stub.received().header("x-vercel-blob-access"), "public");
+        assert_eq!(
+            stub.received().header("x-vercel-blob-access"),
+            "private",
+            "the store is private, and it refuses a write that asks for public access"
+        );
     }
 
     #[tokio::test]
@@ -740,6 +798,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_read_presents_the_token_where_the_private_blob_is_served() {
+        let blobs = Stub::answering(vec![Reply::ok(r#"{"cached":true}"#)]).await;
+        let served_at = format!("{}/diffs/v1/abc/meta.json?download=1", blobs.base());
+        let api_stub = Stub::answering(vec![Reply::ok(&format!(
+            r#"{{"downloadUrl":"{served_at}"}}"#
+        ))])
+        .await;
+        let api = Api::at(api_stub.base(), "a-test-store", "a-token");
+
+        let body = api
+            .read("diffs/v1/abc/meta.json")
+            .await
+            .expect("both stubs answer the way the store does")
+            .expect("the store said where the blob is");
+
+        assert_eq!(body, br#"{"cached":true}"#);
+        assert_eq!(
+            blobs.received().header("authorization"),
+            "Bearer a-token",
+            "a private blob is served only to a request that carries the store's token"
+        );
+    }
+
+    #[tokio::test]
     async fn a_read_the_store_refuses_is_a_failure_and_not_a_miss() {
         let stub = Stub::answering(vec![Reply::refusing(StatusCode::FORBIDDEN, "forbidden")]).await;
         let api = Api::at(stub.base(), "a-test-store", "a-token");
@@ -881,6 +963,94 @@ mod tests {
 
         assert_eq!(credentials.store_id, "store_a-test-store");
         assert_eq!(credentials.token, "an-oidc-token");
+    }
+
+    #[test]
+    fn a_token_presented_with_the_request_is_the_one_the_store_is_asked_with() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-vercel-oidc-token",
+            "a-request-token"
+                .parse()
+                .expect("a test token is a header value"),
+        );
+
+        let credentials = Credentials::resolve_for(
+            &headers,
+            env(&[
+                ("BLOB_STORE_ID", "store_a-test-store"),
+                ("VERCEL_OIDC_TOKEN", "a-build-time-token"),
+            ]),
+        )
+        .expect("a presented token with the store id is credentials");
+
+        assert_eq!(
+            credentials.token, "a-request-token",
+            "a deployed function is given its token with each request, and the \
+             environment only has one at build time"
+        );
+        assert_eq!(credentials.store_id, "store_a-test-store");
+    }
+
+    #[test]
+    fn a_request_that_presents_no_token_falls_back_to_the_environment() {
+        let credentials = Credentials::resolve_for(
+            &HeaderMap::new(),
+            env(&[
+                ("BLOB_STORE_ID", "store_a-test-store"),
+                ("VERCEL_OIDC_TOKEN", "a-local-token"),
+            ]),
+        )
+        .expect("the environment's pair is credentials on its own");
+
+        assert_eq!(credentials.token, "a-local-token");
+    }
+
+    #[test]
+    fn a_presented_token_without_a_store_id_leaves_the_read_write_token_to_answer() {
+        let read_write = [
+            "vercel",
+            "blob",
+            "rw",
+            "a-test-store",
+            "A1b2C3d4E5f6G7h8i9J0kL",
+        ]
+        .join("_");
+
+        let credentials = Credentials::resolve_for(
+            &presenting("a-request-token"),
+            env(&[("BLOB_READ_WRITE_TOKEN", read_write.as_str())]),
+        )
+        .expect("a deployment given only a read-write token still has a store");
+
+        assert_eq!(
+            credentials.token, read_write,
+            "Vercel presents a token on every request once OIDC is on, and a \
+             deployment that never set BLOB_STORE_ID did not mean to use it"
+        );
+    }
+
+    #[test]
+    fn a_blank_presented_token_is_no_token() {
+        let credentials = Credentials::resolve_for(
+            &presenting("  "),
+            env(&[
+                ("BLOB_STORE_ID", "store_a-test-store"),
+                ("VERCEL_OIDC_TOKEN", "a-local-token"),
+            ]),
+        )
+        .expect("the environment's pair is credentials on its own");
+
+        assert_eq!(credentials.token, "a-local-token");
+    }
+
+    fn presenting(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-vercel-oidc-token",
+            token.parse().expect("a test token is a header value"),
+        );
+        headers
     }
 
     #[test]

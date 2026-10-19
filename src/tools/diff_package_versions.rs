@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use futures::try_join;
 use rmcp::model::Resource;
@@ -44,7 +45,7 @@ pub struct Args {
     #[schemars(
         description = "How alike a removed file and an added file must be before the pair is\n\
         reported as one renamed file, from `0` to `1`. Lower it to find\n\
-        renames in files that also changed a lot."
+        renames in files that also changed a lot. Omit it for `0.75`."
     )]
     #[schemars(range(min = 0.0, max = 1.0))]
     #[serde(default = "default_similarity_threshold")]
@@ -52,7 +53,8 @@ pub struct Args {
 
     #[schemars(
         description = "Disregard whitespace when comparing, so that a reformatting is not\n\
-        reported as a change. Every space, tab and line ending is ignored."
+        reported as a change. Every space, tab and line ending is ignored.\n\
+        Omit it for `false`, which counts every whitespace change."
     )]
     #[serde(default)]
     pub ignore_whitespace: bool,
@@ -226,6 +228,22 @@ fn walk(node: &DiffFileEntry, totals: &mut Totals, changed: &mut Vec<Changed>) {
     }
 }
 
+fn compared(
+    files: &Versions,
+    similarity_threshold: f64,
+    ignore_whitespace: bool,
+) -> (DiffFileEntry, BTreeMap<String, Patch>) {
+    let tree = engine::build_diff_tree(
+        &files.from_files,
+        &files.to_files,
+        similarity_threshold,
+        ignore_whitespace,
+    );
+    let patches = rendered(&tree, files, ignore_whitespace);
+
+    (tree, patches)
+}
+
 fn rendered(node: &DiffFileEntry, files: &Versions, ignore_whitespace: bool) -> BTreeMap<String, Patch> {
     let mut patches = BTreeMap::new();
     collect(node, files, ignore_whitespace, &mut patches);
@@ -271,9 +289,10 @@ fn churn(file: &Changed) -> u32 {
     file.lines_added + file.lines_removed
 }
 
+#[derive(Clone)]
 struct Versions {
-    from_files: FileMap,
-    to_files: FileMap,
+    from_files: Arc<FileMap>,
+    to_files: Arc<FileMap>,
 }
 
 pub struct Comparison {
@@ -336,7 +355,14 @@ impl Comparison {
 
         refuse_directory(inputs, path, from_path, |end, path| files.kind_at(end, path))?;
 
-        Ok(patch_of(files, path, from_path, inputs.ignore_whitespace))
+        let to_render = files.clone();
+        let (path, from_path) = (path.to_owned(), from_path.to_owned());
+        let ignore_whitespace = inputs.ignore_whitespace;
+
+        call.compute("rendering one file's diff", move || {
+            patch_of(&to_render, &path, &from_path, ignore_whitespace)
+        })
+        .await
     }
 }
 
@@ -409,8 +435,8 @@ async fn versions(handle: &DiffHandle, call: &Call) -> Result<Versions, Failure>
     )?;
 
     Ok(Versions {
-        from_files,
-        to_files,
+        from_files: Arc::new(from_files),
+        to_files: Arc::new(to_files),
     })
 }
 
@@ -427,17 +453,18 @@ pub async fn compare(handle: &DiffHandle, call: &Call) -> Result<Comparison, Fai
         });
     }
 
-    let inputs = handle.inputs();
     let files = versions(handle, call).await?;
 
-    let tree = engine::build_diff_tree(
-        &files.from_files,
-        &files.to_files,
-        inputs.similarity_threshold,
-        inputs.ignore_whitespace,
-    );
+    let to_compare = files.clone();
+    let inputs = handle.inputs();
+    let (similarity_threshold, ignore_whitespace) =
+        (inputs.similarity_threshold, inputs.ignore_whitespace);
 
-    let patches = rendered(&tree, &files, inputs.ignore_whitespace);
+    let (tree, patches) = call
+        .compute("comparing two versions", move || {
+            compared(&to_compare, similarity_threshold, ignore_whitespace)
+        })
+        .await?;
 
     call.store().put(Entry {
         key,
@@ -465,9 +492,11 @@ impl Tool for DiffPackageVersions {
         normally the older to the newer, and swapping the two is a different \
         comparison with a different handle — what one reports as added, the \
         other reports as removed. Answers with a summary and a handle you \
-        pass to the tools that read the comparison in detail — not with the \
+        pass to the tools that read the comparison in detail, `get_diff_tree` \
+        for its files and `get_file_diff` for one file's changes — not with the \
         whole list of changed files, which can be far too large to return at \
-        once.";
+        once. A large count of `unchanged` files is normal and not a finding: \
+        most of a package is `unchanged` between two versions.";
 
     const READ_ONLY: bool = true;
 

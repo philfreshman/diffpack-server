@@ -29,6 +29,36 @@ uses fat LTO. Expect slow deploys; the measured cold build time is in
 compiles against it. Renaming the `[[bin]]` or moving `api/mcp.rs` would
 otherwise only show up as a 404 after a deploy.
 
+## The cache's credentials
+
+The diff cache is a private Vercel Blob store, `store_MckmSOFEWm4x66fo`,
+connected to the project. The project holds `BLOB_STORE_ID` and no
+`BLOB_READ_WRITE_TOKEN`: the store is reached with the OIDC token Vercel issues
+the deployment, so no long-lived secret is stored.
+
+That token is in the environment as `VERCEL_OIDC_TOKEN` only at build time. A
+running function is given it with every request, as the `x-vercel-oidc-token`
+header, so `src/store/blob.rs` takes the header first and the environment
+second, the way `@vercel/oidc` does. A locally run server has no such header,
+and uses `VERCEL_OIDC_TOKEN` from `vercel env pull`, or a
+`BLOB_READ_WRITE_TOKEN`.
+
+The store is built for each tool call and resource read from that request's
+headers, and keeps the token for its write after the response. Vercel's
+documentation does not say whether a header of that name sent by a client
+survives to the function. Either way, a forged one can only fail: the Blob API
+verifies the token and scopes it to this project, the store is built per
+request so the token reaches no other caller's cache access, and a store
+failure never fails a call. It is a miss.
+
+Because the store is private, every write declares `private` access, and a read
+presents the token on both of its requests, including the download.
+
+A deployment with neither credential has no store, and every call recomputes.
+The function's log line says so as `"cache":"no_store"`. Before
+[#130](https://github.com/philfreshman/diffpack-server/issues/130), every
+production request was that.
+
 ## Who can reach it
 
 The Vercel project has Vercel Authentication on Standard Protection, which
@@ -41,6 +71,24 @@ That makes two hostnames public: `mcp.diffpack.io` and the production alias
 redirect to the Vercel login. Two public hostnames are fine for an
 unauthenticated server of public package content, but a rate limit added later
 has to cover both ([ADR 0018](adr/0018-no-rate-limit-for-now.md)).
+
+## Protocol conformance
+
+The `MCP conformance` job runs
+[`scripts/conformance.sh`](../scripts/conformance.sh): it starts
+[`examples/serve.rs`](../examples/serve.rs), the real router over the fixture
+archives on a loopback port, and drives it with the
+[MCP Inspector](https://github.com/modelcontextprotocol/inspector) CLI as a
+`2026-07-28` and as a `2025-11-25` client, with `curl` for what the Inspector
+cannot send. The Inspector and ajv are pinned with a lockfile in
+[`conformance/`](../conformance), and `npm ci` installs them without running
+install scripts. Every tool the server lists needs an example call in
+`conformance/calls.json`, or the job fails.
+
+The `cargo test` suite asserts most of the same things in-process. This job
+asks them again over a real socket, through the TypeScript SDK and the schema
+validator a JavaScript client actually uses, rather than through this crate's
+own test client.
 
 ## Dependency updates
 
@@ -61,6 +109,9 @@ required checks pass. These wait for a person:
 - A major. Passing checks prove it compiles, not that it is the version we want.
 - `rust-toolchain.toml`. A new toolchain brings new clippy lints, which
   `-D warnings` turns into failures, and it changes what Vercel builds with.
+- The conformance tools in `conformance/package.json`. The MCP Inspector is the
+  client the `MCP conformance` job judges this server by, so a new release can
+  start failing a server that has not changed. Read what it now checks first.
 - `diffpack-engine`. The pull request fails on purpose until `engine::VERSION`
   in `src/engine.rs` is moved to the new tag in the same branch. Every `diff_id`
   changes with it, so the cache starts cold. Read the engine's release notes for

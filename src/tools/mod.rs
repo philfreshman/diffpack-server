@@ -1,8 +1,10 @@
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use futures::FutureExt as _;
 use rmcp::model::{
     CallToolResult, ContentBlock, JsonObject, Resource, Tool as Definition, ToolAnnotations,
 };
@@ -10,15 +12,18 @@ use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::archive::{Archive, FileMap};
-use crate::cache_key::DiffKey;
+use crate::cache_key::{DiffId, DiffKey};
 use crate::catalogue::Catalogue;
-use crate::error::Failure;
+use crate::compute;
+use crate::error::{Failure, CALL_DEADLINE};
+use crate::handle::DiffHandle;
 use crate::log::{Line, Lookup, Sink, Spent};
 use crate::registry::{Hit, Registry, Versions};
 use crate::search::Search;
-use crate::store::{DiffStore, Entry, Memory};
+use crate::store::{DiffStore, Entry, Memory, RequestHeaders};
 
 macro_rules! tools {
     ($($module:ident::$tool:ident),+ $(,)?) => {
@@ -71,16 +76,22 @@ pub struct Ctx {
     search: Arc<Search>,
     store: Arc<DiffStore>,
     log: Sink,
+    deadline: Duration,
 }
 
 impl Ctx {
     pub fn new() -> Self {
+        Self::for_request(&RequestHeaders::new())
+    }
+
+    pub fn for_request(request: &RequestHeaders) -> Self {
         Self {
             archive: Arc::new(Archive::live()),
             catalogue: Arc::new(Catalogue::live()),
             search: Arc::new(Search::live()),
-            store: Arc::new(DiffStore::live()),
+            store: Arc::new(DiffStore::live_for(request)),
             log: Sink::default(),
+            deadline: CALL_DEADLINE,
         }
     }
 
@@ -92,11 +103,16 @@ impl Ctx {
             search: Arc::new(Search::fixture(fixtures.join("searches"))),
             store: Arc::new(Memory::new().store()),
             log: Sink::default(),
+            deadline: CALL_DEADLINE,
         }
     }
 
     pub fn logging_to(self, log: Sink) -> Self {
         Self { log, ..self }
+    }
+
+    pub fn answering_within(self, deadline: Duration) -> Self {
+        Self { deadline, ..self }
     }
 
     pub fn storing_in(self, store: DiffStore) -> Self {
@@ -113,6 +129,7 @@ impl Ctx {
             search: _,
             store: _,
             log: _,
+            deadline: _,
         } = self;
 
         &["archive", "catalogue", "search", "store"]
@@ -162,6 +179,14 @@ impl Call {
         self.timed(&self.ctx.search)
     }
 
+    pub async fn compute<T: Send + 'static>(
+        &self,
+        doing: &'static str,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, Failure> {
+        compute::off_the_runtime(doing, work).await
+    }
+
     fn timed<'a, S>(&'a self, seam: &'a S) -> Timed<'a, S> {
         Timed {
             seam,
@@ -193,13 +218,25 @@ pub struct Recorded<'a> {
 impl Recorded<'_> {
     pub async fn get(self, key: &DiffKey) -> Option<Entry> {
         let entry = self.store.get(key).await;
+        self.record(entry.is_some());
+        entry
+    }
 
+    pub async fn answer_by_id<T>(
+        self,
+        diff_id: &DiffId,
+        answer: impl FnOnce(Entry) -> Option<T>,
+    ) -> Option<T> {
+        let answered = self.store.get_by_id(diff_id).await.and_then(answer);
+        self.record(answered.is_some());
+        answered
+    }
+
+    fn record(self, found: bool) {
         match self.store.is_available() {
-            true => self.lookup.looked(entry.is_some()),
+            true => self.lookup.looked(found),
             false => self.lookup.found_no_store(),
         }
-
-        entry
     }
 
     pub fn put(self, entry: Entry) {
@@ -270,7 +307,7 @@ pub async fn call(
     arguments: Option<JsonObject>,
     ctx: &Ctx,
 ) -> Result<CallToolResult, ErrorData> {
-    let line = Line::new(name).about(arguments.as_ref());
+    let line = Line::calling(name).about(Some(&with_handle_decoded(arguments.as_ref())));
 
     let answer = run(ctx, line, async |call| {
         dispatch(name, arguments, call).await
@@ -283,15 +320,44 @@ pub async fn call(
     }
 }
 
-pub(crate) async fn run<T>(
+fn with_handle_decoded(arguments: Option<&JsonObject>) -> JsonObject {
+    let mut arguments = arguments.cloned().unwrap_or_default();
+
+    let inputs = arguments
+        .get(HANDLE_ARGUMENT)
+        .and_then(Value::as_str)
+        .and_then(DiffHandle::inputs_named_in);
+
+    if let Some(inputs) = inputs {
+        arguments.remove(HANDLE_ARGUMENT);
+        for (name, value) in inputs {
+            arguments.entry(name).or_insert(value);
+        }
+    }
+
+    arguments
+}
+
+const HANDLE_ARGUMENT: &str = "handle";
+
+pub async fn run<T>(
     ctx: &Ctx,
     line: Line,
     work: impl AsyncFnOnce(&Call) -> Result<T, Failure>,
 ) -> Result<T, Failure> {
     let call = Call::new(ctx);
     let started = Instant::now();
+    let doing = line.subject.doing();
 
-    let answer = work(&call).await;
+    let guarded = AssertUnwindSafe(work(&call)).catch_unwind();
+
+    let answer = match tokio::time::timeout(ctx.deadline, guarded).await {
+        Ok(Ok(answered)) => answered,
+        Ok(Err(_panic)) => Err(Failure::Panicked { doing }),
+        Err(_elapsed) => Err(Failure::OutOfTime {
+            deadline: ctx.deadline,
+        }),
+    };
     ctx.log.write(
         &line
             .taking(started.elapsed(), &call.spent)
@@ -302,8 +368,30 @@ pub(crate) async fn run<T>(
     answer
 }
 
+const JSON_SCHEMA_FORMATS: [&str; 19] = [
+    "date-time",
+    "date",
+    "time",
+    "duration",
+    "email",
+    "idn-email",
+    "hostname",
+    "idn-hostname",
+    "ipv4",
+    "ipv6",
+    "uri",
+    "uri-reference",
+    "iri",
+    "iri-reference",
+    "uuid",
+    "uri-template",
+    "json-pointer",
+    "relative-json-pointer",
+    "regex",
+];
+
 fn definition<T: Tool>() -> Definition {
-    Definition::new(T::NAME, T::DESCRIPTION, Arc::new(JsonObject::new()))
+    let mut tool = Definition::new(T::NAME, T::DESCRIPTION, Arc::new(JsonObject::new()))
         .with_title(T::TITLE)
         .with_input_schema::<T::Args>()
         .with_output_schema::<T::Output>()
@@ -312,7 +400,38 @@ fn definition<T: Tool>() -> Definition {
                 .read_only(T::READ_ONLY)
                 .idempotent(T::IDEMPOTENT)
                 .open_world(T::OPEN_WORLD),
-        )
+        );
+
+    tool.input_schema = with_standard_formats_only(&tool.input_schema);
+    tool.output_schema = tool
+        .output_schema
+        .map(|schema| with_standard_formats_only(&schema));
+    tool
+}
+
+fn with_standard_formats_only(schema: &JsonObject) -> Arc<JsonObject> {
+    let mut schema = schema.clone();
+    drop_unknown_formats(&mut schema);
+    Arc::new(schema)
+}
+
+fn drop_unknown_formats(schema: &mut JsonObject) {
+    schema.retain(|keyword, value| !(keyword == "format" && is_unknown_format(value)));
+    schema.values_mut().for_each(drop_unknown_formats_within);
+}
+
+fn drop_unknown_formats_within(value: &mut Value) {
+    match value {
+        Value::Object(schema) => drop_unknown_formats(schema),
+        Value::Array(schemas) => schemas.iter_mut().for_each(drop_unknown_formats_within),
+        _ => {}
+    }
+}
+
+fn is_unknown_format(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|format| !JSON_SCHEMA_FORMATS.contains(&format))
 }
 
 async fn invoke<T: Tool>(

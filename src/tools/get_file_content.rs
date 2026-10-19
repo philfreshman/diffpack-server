@@ -52,7 +52,9 @@ impl Tool for GetFileContent {
     const TITLE: &'static str = "Get file content";
     const DESCRIPTION: &'static str = "\
         Read one file out of one published version of a package, so you can \
-        see what it actually says before reasoning about a change to it. \
+        see what it actually says before reasoning about a change to it. To \
+        see how a file changed between two versions, call `get_file_diff` \
+        instead: this reads one version as it stands. \
         Takes a registry, a package name, one exact version and a path. \
         Paths have the archive's top-level directory removed: a file is \
         `src/index.js`, never `zod-4.0.0/src/index.js`. A directory has no \

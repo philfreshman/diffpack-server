@@ -138,6 +138,41 @@ async fn a_version_pair_is_summarised_by_status_and_by_line() {
 }
 
 #[tokio::test]
+async fn a_go_module_pair_reports_what_changed_rather_than_everything_moved() {
+    let result = call(json!({
+        "registry": "go",
+        "package": "github.com/Masterminds/semver/v3",
+        "from_version": "v3.2.0",
+        "to_version": "v3.2.1",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "a module path with capitals is fetched from the proxy's escaped path, \
+         got {result}"
+    );
+
+    assert_eq!(
+        result["structuredContent"]["totals"],
+        json!({
+            "added": 1,
+            "removed": 0,
+            "modified": 1,
+            "renamed": 0,
+            "unchanged": 3,
+            "lines_added": 4,
+            "lines_removed": 1,
+        }),
+        "every entry of a module zip sits under `{{module}}@{{version}}/`, a \
+         prefix that differs between the two versions, so unless it is \
+         stripped no path is shared and all four files of v3.2.0 read as \
+         removed: got {result}"
+    );
+}
+
+#[tokio::test]
 async fn the_answer_names_the_pair_it_compared() {
     let result = call(json!({
         "registry": "npm",
@@ -308,6 +343,29 @@ async fn a_version_that_does_not_exist_is_an_error_the_model_sees() {
         said.contains("9.9.9") && said.contains("diffable"),
         "the refusal names what was not found, so the model can correct it \
          without guessing which of the two versions was wrong: got {said}"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_version_tells_the_model_where_to_find_one_that_exists() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "diffable",
+        "from_version": "1.0.0",
+        "to_version": "9.9.9",
+    }))
+    .await;
+
+    assert_eq!(result["isError"], json!(true), "got {result}");
+
+    let said = result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a tool error carries text a model reads, got {result}"));
+
+    assert!(
+        said.contains("`list_package_versions`"),
+        "a refusal the model can only guess its way past is not one it recovers \
+         from, so it names the tool that lists the versions there are: got {said}"
     );
 }
 

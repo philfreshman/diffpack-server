@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 
+use axum::http::request::Parts;
 use futures::FutureExt as _;
 #[expect(
     deprecated,
@@ -23,9 +24,10 @@ use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 
 use crate::error::Failure;
+use crate::log::Line;
 use crate::prompts;
-use crate::resources;
-use crate::tools::{self, Call, Ctx};
+use crate::resources::{self, Address};
+use crate::tools::{self, Ctx};
 
 pub const NAME: &str = "diffpack";
 
@@ -33,16 +35,35 @@ pub const TOOL_LIST_TTL_MS: u64 = 60 * 60 * 1000;
 
 #[derive(Debug, Clone, Default)]
 pub struct Diffpack {
-    ctx: Ctx,
+    seams: Seams,
+}
+
+#[derive(Debug, Clone, Default)]
+enum Seams {
+    #[default]
+    LiveForEachRequest,
+    Given(Ctx),
 }
 
 impl Diffpack {
     pub fn new() -> Self {
-        Self::with_ctx(Ctx::new())
+        Self::default()
     }
 
     pub fn with_ctx(ctx: Ctx) -> Self {
-        Self { ctx }
+        Self {
+            seams: Seams::Given(ctx),
+        }
+    }
+
+    fn ctx_for(&self, context: &RequestContext<RoleServer>) -> Ctx {
+        match &self.seams {
+            Seams::Given(ctx) => ctx.clone(),
+            Seams::LiveForEachRequest => match context.extensions.get::<Parts>() {
+                Some(request) => Ctx::for_request(&request.headers),
+                None => Ctx::new(),
+            },
+        }
     }
 }
 
@@ -58,7 +79,7 @@ impl ServerHandler for Diffpack {
         .with_server_info(Implementation::new(NAME, env!("CARGO_PKG_VERSION")))
         .with_instructions(
             "Diff two versions of a published package and read the result. \
-             Works with npm, crates.io and PyPI. Start with `tools/list`: \
+             Works with npm, crates.io, PyPI and Go. Start with `tools/list`: \
              every tool takes a registry, a package name and a version, and \
              names the registry the way that registry does. `resources/list` \
              has the registries described in one document, and a comparison \
@@ -111,20 +132,25 @@ impl ServerHandler for Diffpack {
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        resources::read(&request.uri, &Call::new(&self.ctx))
-            .await
-            .map(ReadResourceResponse::from)
-            .map_err(Failure::refuse)
+        let address = Address::of(&request.uri);
+        let line = Line::reading(address.name_in_line()).about(Some(&address.arguments()));
+
+        tools::run(&self.ctx_for(&context), line, async |call| {
+            address.read(call).await
+        })
+        .await
+        .map(ReadResourceResponse::from)
+        .map_err(Failure::refuse)
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        tools::call(&request.name, request.arguments, &self.ctx)
+        tools::call(&request.name, request.arguments, &self.ctx_for(&context))
             .await
             .map(CallToolResponse::from)
     }

@@ -1,9 +1,18 @@
 mod common;
 
 use axum::body::Body;
+use axum::http::request::Parts;
 use axum::http::{Request, StatusCode};
-use common::{Client, CURRENT, PREVIOUS};
+use common::{names, Client, CURRENT, PREVIOUS};
+use diffpack_server::registry::Registry;
 use diffpack_server::router;
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, ResourceContents,
+    ServerCapabilities, ServerConfig,
+};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde_json::{json, Value};
 
 fn client(version: &'static str) -> Client {
@@ -71,6 +80,26 @@ async fn discover_returns_versions_capabilities_and_identity() {
         env!("CARGO_PKG_VERSION"),
         "the identity should name the build that answered, as /health does"
     );
+}
+
+#[tokio::test]
+async fn the_instructions_name_every_registry_this_server_has() {
+    let result = client(CURRENT)
+        .respond(body(1, "server/discover", json!({})))
+        .await
+        .result();
+    let instructions = result["instructions"]
+        .as_str()
+        .unwrap_or_else(|| panic!("discover carries the server's instructions, got {result}"));
+
+    for registry in Registry::ALL {
+        assert!(
+            names(instructions, registry.name()),
+            "a client deciding whether this server can help reads the \
+             instructions first, so they should name {}: got {instructions}",
+            registry.name()
+        );
+    }
 }
 
 #[tokio::test]
@@ -238,4 +267,85 @@ async fn an_unknown_path_is_not_found() {
         "a 404 should say so in JSON, got {}",
         answer.json()
     );
+}
+
+#[tokio::test]
+async fn a_call_and_a_read_see_the_headers_of_the_request_they_came_in() {
+    let client = Client::routed(|| router::router_with(|| Ok(PresentedTokenEcho), Vec::new()));
+
+    for body in [
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "echo", "arguments": {} },
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "resources/read",
+            "params": { "uri": "diffpack://registries" },
+        }),
+    ] {
+        let mut request = client.request(body.clone());
+        request.headers_mut().insert(
+            "x-vercel-oidc-token",
+            "a-request-token".parse().expect("a valid header"),
+        );
+
+        let answer = client.send(request).await.result().to_string();
+
+        assert!(
+            answer.contains("a-request-token"),
+            "the store's token comes with the request, so `{}` has to be handed \
+             the request's headers to build a store with it, got {answer}",
+            body["method"]
+        );
+    }
+}
+
+#[derive(Clone)]
+struct PresentedTokenEcho;
+
+impl PresentedTokenEcho {
+    fn presented(context: &RequestContext<RoleServer>) -> String {
+        context
+            .extensions
+            .get::<Parts>()
+            .and_then(|request| request.headers.get("x-vercel-oidc-token"))
+            .and_then(|token| token.to_str().ok())
+            .unwrap_or("no headers reached the handler")
+            .to_owned()
+    }
+}
+
+impl ServerHandler for PresentedTokenEcho {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+    }
+
+    async fn call_tool(
+        &self,
+        _request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        Ok(CallToolResult::success(vec![ContentBlock::text(Self::presented(&context))]).into())
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        Ok(ReadResourceResult::new(vec![ResourceContents::text(
+            Self::presented(&context),
+            request.uri,
+        )])
+        .into())
+    }
 }

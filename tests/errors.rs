@@ -5,7 +5,7 @@ mod common;
 use axum::http::StatusCode;
 use common::Client;
 use diffpack_server::error::{self, Failure};
-use diffpack_server::router;
+use diffpack_server::{fetch, router, store};
 use serde_json::{json, Value};
 
 #[tokio::test]
@@ -89,6 +89,9 @@ fn our_own_codes_stay_inside_the_implementation_range() {
         Failure::Busy {
             waited: error::UPSTREAM_TIMEOUT,
         },
+        Failure::OutOfTime {
+            deadline: error::CALL_DEADLINE,
+        },
         Failure::TooLarge {
             package: "zod".to_owned(),
             version: "4.0.0".to_owned(),
@@ -126,7 +129,14 @@ fn a_missing_version_names_the_package_the_version_and_a_way_forward() {
     assert_eq!(result.is_error, Some(true));
 
     let text = text_of(&result);
-    for expected in ["zod", "9.9.9", "npm", "4.0.0", "3.25.76"] {
+    for expected in [
+        "zod",
+        "9.9.9",
+        "npm",
+        "4.0.0",
+        "3.25.76",
+        "`list_package_versions`",
+    ] {
         assert!(
             text.contains(expected),
             "the message should name {expected}, got: {text}"
@@ -326,6 +336,14 @@ fn every_cause_a_line_can_carry_names_one_failure() {
             doing: "answering a tool call",
         }
         .kind(),
+        Failure::Panicked {
+            doing: "calling a tool",
+        }
+        .kind(),
+        Failure::OutOfTime {
+            deadline: error::CALL_DEADLINE,
+        }
+        .kind(),
     ];
 
     let mut seen = causes.to_vec();
@@ -353,6 +371,9 @@ fn the_transient_failures_say_so_and_the_permanent_ones_do_not() {
         },
         Failure::Unreachable {
             registry: "PyPI".to_owned(),
+        },
+        Failure::OutOfTime {
+            deadline: error::CALL_DEADLINE,
         },
     ] {
         let message = message_of(transient);
@@ -402,6 +423,37 @@ fn the_upstream_budget_leaves_the_function_time_to_answer() {
         "an upstream budget of {}s leaves too little of the function's {max_duration}s \
          to answer in",
         error::UPSTREAM_TIMEOUT.as_secs()
+    );
+}
+
+#[test]
+fn the_call_deadline_leaves_the_function_time_to_answer() {
+    let manifest: Value =
+        serde_json::from_str(include_str!("../vercel.json")).expect("vercel.json should parse");
+
+    let max_duration = manifest["functions"]["api/mcp.rs"]["maxDuration"]
+        .as_u64()
+        .expect("vercel.json should give the handler a maxDuration");
+    let time_to_answer = Duration::from_secs(30);
+
+    assert!(
+        (error::CALL_DEADLINE + time_to_answer).as_secs() <= max_duration,
+        "a call deadline of {}s leaves too little of the function's {max_duration}s to \
+         answer in",
+        error::CALL_DEADLINE.as_secs()
+    );
+}
+
+#[test]
+fn the_call_deadline_outlasts_the_longest_a_call_can_wait() {
+    let a_listing_then_its_archive = 2;
+    let longest_wait = store::LONGEST_LOOKUP + fetch::LONGEST_FETCH * a_listing_then_its_archive;
+
+    assert!(
+        error::CALL_DEADLINE > longest_wait,
+        "a slow registry or blob store should be answered as slow, not as a call out \
+         of time: {:?} against {longest_wait:?}",
+        error::CALL_DEADLINE
     );
 }
 

@@ -149,7 +149,7 @@ fn a_malformed_handle_is_refused() {
     extra_field["nonce"] = json!("1");
 
     let mut unknown_registry = payload.clone();
-    unknown_registry["registry"] = json!("go");
+    unknown_registry["registry"] = json!("maven");
 
     for (what, text) in [
         ("nothing at all", String::new()),
@@ -286,7 +286,7 @@ fn the_schema_says_a_handle_is_minted_rather_than_written() {
         "the description should name where a handle comes from: {description}"
     );
     assert!(
-        description.contains("not"),
+        description.contains("not written by hand"),
         "and say it is not written by hand: {description}"
     );
 }

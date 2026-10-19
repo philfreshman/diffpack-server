@@ -137,6 +137,30 @@ async fn a_pypi_package_is_listed_through_the_metadata_hop() {
 }
 
 #[tokio::test]
+async fn a_go_module_is_listed_without_its_module_and_version_prefix() {
+    let result = call(json!({
+        "registry": "go",
+        "package": "github.com/go-chi/chi/v5",
+        "version": "v5.0.12",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "`/v5` is the last segment of the module path, so the archive is \
+         asked for under it rather than for a version called `v5`: got {result}"
+    );
+
+    assert_eq!(
+        paths(&result),
+        vec!["chi.go", "go.mod"],
+        "a module zip wraps everything in `github.com/go-chi/chi/v5@v5.0.12/`, \
+         four directories deep rather than one: got {result}"
+    );
+}
+
+#[tokio::test]
 async fn an_entry_says_what_it_is_and_how_big_it_is() {
     let result = call(json!({
         "registry": "crates",
@@ -374,6 +398,34 @@ async fn a_cursor_a_client_invented_never_reaches_the_handler() {
     assert_eq!(
         answer["error"]["code"], -32602,
         "a cursor that is not ours is the client's mistake, got {answer}"
+    );
+}
+
+#[tokio::test]
+async fn a_cursor_in_the_shape_the_server_writes_is_followed_wherever_it_came_from() {
+    let serde = json!({ "registry": "crates", "package": "serde", "version": "1.0.0" });
+    let whole = paths(&call(serde.clone()).await)
+        .iter()
+        .map(|path| path.to_string())
+        .collect::<Vec<_>>();
+
+    let mut from_the_second = serde;
+    from_the_second["cursor"] = json!("p1:1");
+    let resumed = call(from_the_second).await;
+
+    assert_eq!(
+        paths(&resumed),
+        &whole[1..],
+        "a cursor is only checked for its shape, so one written by hand \
+         resumes where it says: got {resumed}"
+    );
+
+    let cursor = &listed(TOOL).await["inputSchema"]["properties"]["cursor"];
+    let description = cursor["description"].as_str().unwrap_or_default();
+    assert!(
+        !description.contains("by hand is refused"),
+        "the description must not promise a refusal the server does not \
+         make, got {cursor}"
     );
 }
 

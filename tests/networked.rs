@@ -1,3 +1,5 @@
+use std::future::Future;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use diffpack_server::archive::{Archive, At};
@@ -5,6 +7,7 @@ use diffpack_server::catalogue::Catalogue;
 use diffpack_server::error::Failure;
 use diffpack_server::registry::{Registry, Version, Versions};
 use diffpack_server::search::Search;
+use tokio::runtime::Runtime;
 
 #[tokio::test]
 #[ignore = "networked: fetches from registry.npmjs.org"]
@@ -283,4 +286,137 @@ async fn a_second_pypi_search_is_answered_from_the_index_already_fetched() {
         "a search answered from the index already held should cost a scan \
          rather than a download, took {spent:?}"
     );
+}
+
+#[test]
+#[ignore = "networked: fetches from proxy.golang.org"]
+fn the_go_proxy_serves_a_module_with_capitals_under_its_escaped_path() {
+    on_one_runtime(async {
+        let files = Archive::live()
+            .fetch(Registry::Go, "github.com/Masterminds/semver/v3", "v3.2.1")
+            .await
+            .expect("the proxy serves this version");
+
+        assert!(
+            files.at("go.mod") != At::Nothing,
+            "every module zip carries its `go.mod`, at the module's own root"
+        );
+        assert!(
+            !files.paths().iter().any(|path| path.contains("@v3.2.1")),
+            "the `{{module}}@{{version}}/` prefix is gone from every path"
+        );
+    });
+}
+
+#[test]
+#[ignore = "networked: fetches from proxy.golang.org"]
+fn two_versions_of_a_go_module_share_their_paths() {
+    on_one_runtime(async {
+        let archive = Archive::live();
+        let module = "github.com/go-chi/chi/v5";
+        let older = archive
+            .fetch(Registry::Go, module, "v5.0.11")
+            .await
+            .expect("the proxy serves v5.0.11");
+        let newer = archive
+            .fetch(Registry::Go, module, "v5.0.12")
+            .await
+            .expect("the proxy serves v5.0.12");
+
+        for path in ["go.mod", "chi.go", "mux.go"] {
+            assert!(
+                older.at(path) != At::Nothing && newer.at(path) != At::Nothing,
+                "`{path}` is at one path in both versions, so a diff compares it \
+                 rather than reading it as removed and re-added"
+            );
+        }
+    });
+}
+
+#[test]
+#[ignore = "networked: fetches from proxy.golang.org"]
+fn the_go_proxy_lists_a_major_version_modules_versions_highest_first() {
+    on_one_runtime(async {
+        let versions = Catalogue::live()
+            .versions(Registry::Go, "github.com/go-chi/chi/v5")
+            .await
+            .expect("the proxy lists this module");
+
+        let listed: Vec<&str> = versions.all.iter().map(|v| v.version.as_str()).collect();
+        assert!(
+            listed.iter().all(|version| version.starts_with("v5.")),
+            "`/v5` is the module path's, so every version it lists is a v5: got {listed:?}"
+        );
+
+        let position = |version: &str| {
+            listed
+                .iter()
+                .position(|listed| *listed == version)
+                .unwrap_or_else(|| panic!("{version} is published, got {listed:?}"))
+        };
+        assert!(
+            position("v5.0.12") < position("v5.0.11") && position("v5.0.11") < position("v5.0.2"),
+            "highest first, with 12 above 2 rather than below it: got {listed:?}"
+        );
+        assert_points_somewhere(&versions, "`@latest`");
+    });
+}
+
+#[test]
+#[ignore = "networked: fetches from proxy.golang.org"]
+fn an_untagged_go_module_is_listed_as_the_pseudo_version_latest_resolves() {
+    on_one_runtime(async {
+        let versions = Catalogue::live()
+            .versions(Registry::Go, "golang.org/x/exp")
+            .await
+            .expect("the proxy resolves this module");
+
+        let [only] = versions.all.as_slice() else {
+            panic!(
+                "a module with no tags is the one version `@latest` resolves, got {:?}",
+                versions.all
+            );
+        };
+        assert!(
+            only.version.starts_with("v0.0.0-"),
+            "an untagged module resolves to a pseudo-version, got {}",
+            only.version
+        );
+        assert_eq!(versions.current.as_deref(), Some(only.version.as_str()));
+    });
+}
+
+#[test]
+#[ignore = "networked: fetches from proxy.golang.org"]
+fn the_go_proxy_answers_a_whole_module_path_and_nothing_less() {
+    on_one_runtime(async {
+        let search = Search::live();
+
+        let hits = search
+            .hits(Registry::Go, "github.com/go-chi/chi/v5", 5)
+            .await
+            .expect("the proxy answers for a module it has");
+        let [hit] = hits.as_slice() else {
+            panic!("a module path is one module, got {hits:?}");
+        };
+        assert_eq!(hit.name, "github.com/go-chi/chi/v5");
+        assert!(
+            hit.version.as_deref().is_some_and(|v| v.starts_with("v5.")),
+            "got {hit:?}"
+        );
+
+        let none = search
+            .hits(Registry::Go, "chi", 5)
+            .await
+            .expect("a name that is not a module path is a miss, not a failure");
+        assert!(none.is_empty(), "got {none:?}");
+    });
+}
+
+fn on_one_runtime(test: impl Future<Output = ()>) {
+    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+
+    RUNTIME
+        .get_or_init(|| Runtime::new().expect("a test can start a runtime"))
+        .block_on(test);
 }

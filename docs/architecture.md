@@ -16,11 +16,11 @@ src/tools/          one module per tool: definition and handler together,
                     and diff_package_versions::compare, the one walk from a
                     handle to a comparison that every diff path takes, with
                     Comparison::file_patch, the one way to one file's patch;
-                    Ctx, the seams that outlive a call, and Call, one call
+                    Ctx, the seams a call is made over, and Call, one call
                     over them with its own tally
 src/resources/      one module per resource: URI and handler together
 src/prompts/        one module per prompt: arguments and messages together
-src/registry.rs     what a registry is: npm, crates, pypi (go later); and the
+src/registry.rs     what a registry is: npm, crates, pypi, go; and the
                     package and version arguments that state its rules
 src/archive/        fetch(registry, package, version) -> FileMap, and what
                     a FileMap answers: what is at a path, and its paths
@@ -28,13 +28,18 @@ src/catalogue/      versions(registry, package) -> Versions, newest first
 src/search/         hits(registry, query, limit) -> Vec<Hit>, best match first
 src/document/       what the three above share: host check, adapters, fixtures, cap
 src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, caps
-src/store/          DiffStore: get(&DiffKey) / put(entry), inside a budget
+src/store/          DiffStore: get(&DiffKey) / get_by_id(&DiffId) / put(entry),
+                    inside a budget
+src/entries.rs      GET /diffs/v1/{diff_id}: an Entry for the browser app
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs;
                     and the arguments that shape an answer, Subtree included
 src/handle.rs       the diff handle: mint, encode, decode, verify
-src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
-src/error.rs        Failure, the two channels, the code each earns, redaction
-src/log.rs          one line per tool call: what, cache outcome, how long, how it ended
+src/cache_key.rs    DiffKey, diff_id, DiffId, blob paths — docs/cache-key.md
+src/error.rs        Failure, the two channels, the code each earns, redaction;
+                    the upstream timeout and the call's deadline
+src/compute.rs      off_the_runtime: CPU-bound work on the blocking pool
+src/log.rs          one line per tool call, resource read or entry served: what,
+                    cache outcome, how long, how it ended
 src/engine.rs       the only importer of diffpack_engine
 src/health.rs       the /health body
 ```
@@ -111,6 +116,7 @@ transport (the half of a request that runs before `rmcp` hands off to a
 handler), the `X-Accel-Buffering` rule for event streams, and where the allowed
 browser origins come from. `router_with` takes the handler factory and the
 origin list as parameters, which is the seam the transport tests drive.
+`router()` merges the entries route beside it.
 
 ### `src/mcp.rs` — what this server says it is
 
@@ -121,11 +127,17 @@ definition lives with its handler under `src/tools/` ([ADR
 0002](adr/0002-one-module-per-tool.md)), a resource's URI lives with its
 handler under `src/resources/`, and a prompt's arguments live with its
 messages under `src/prompts/`. Which URI resolves to what is
-`resources::read`'s, the way which name runs what is `tools::call`'s and which
-name renders what is `prompts::get`'s. `Guarded` is also here: the wrapper
-that turns a panic inside a handler into a JSON-RPC error rather than a hung
-request, which has to be inside the handler because `rmcp` runs handlers on a
-task of their own.
+`resources::Address`'s, the way which name runs what is `tools::call`'s and
+which name renders what is `prompts::get`'s. `read_resource` builds the read's
+line from the `Address` and runs the read through `tools::run`, the step a
+tool call goes through, because `src/resources/` may not reach `crate::log`
+and the line has to be written by something a resource cannot forget to call.
+`Guarded` is also here: the wrapper that turns a panic inside a handler into a
+JSON-RPC error rather than a hung request, which has to be inside the handler
+because `rmcp` runs handlers on a task of their own. A panic in a tool call or
+a resource read never reaches it, because `tools::run` catches the unwind
+first so that the call still leaves its line; `Guarded` is for every other
+method, and for a panic outside the work, such as one in building the line.
 
 ### `src/tools/` — one module per tool
 
@@ -134,6 +146,16 @@ that adding a tool is adding a file and reviewing a tool is reading one. What
 a tool module does is: ask `registry`, `archive`, `catalogue`, `search` or
 `store` for what it needs, shape an answer through `page`, and fail through
 `error`. What it does not do is fetch, cache or paginate by hand.
+
+`src/tools/mod.rs` builds every definition the same way: `rmcp` writes the
+input and output schemas from the tool's `Args` and `Output` types, and
+`definition` then removes any `format` that JSON Schema 2020-12 does not
+define, such as the `uint32` schemars puts on a `u32`. A validating client
+warns about an unknown format on every call, and an unsigned integer already
+carries `minimum: 0`, so nothing is lost. `tests/tools.rs` holds every tool to
+the rest of what an agent reads: a description that names the neighbouring
+tool it could be mistaken for, every default and bound stated in words, and an
+answer that validates against the declared `outputSchema`.
 
 One thing under here is not a tool, and it is in a tool module rather than
 beside one. `diff_package_versions::compare` is the walk from a handle to a
@@ -203,20 +225,23 @@ list of tools, and the generic call path where arguments are validated and
 `Failure` is put on its channel — which is why a handler returns
 `Result<Output, Failure>` and never names a result type of MCP's.
 
-`Ctx` is what outlives a call, built once per request by the service factory
-`router::router_with` takes: the seams a handler may reach — `Archive`,
-`Catalogue`, `Search` and `DiffStore`, while `registry`, `page` and `handle`
-are named directly because a pure module has nothing to hand over — and the
-log's `Sink`, which the dispatch writes to and a handler never touches.
-Nothing in it belongs to one call, so cloning a `Ctx` is always safe.
+`Ctx` is what a call is made over. A live `Diffpack` builds one for each tool
+call and resource read from the headers of the request it came in, because the
+blob store's token arrives with the request
+([`operations.md`](operations.md#the-caches-credentials)); a `Diffpack` given a
+`Ctx`, as every suite's is, clones that one per call. It holds the seams a
+handler may reach — `Archive`, `Catalogue`, `Search` and `DiffStore`, while
+`registry`, `page` and `handle` are named directly because a pure module has
+nothing to hand over — the log's `Sink`, which the dispatch writes to and a
+handler never touches, and the deadline every call it serves is given. Nothing
+in it belongs to one call, so cloning a `Ctx` is always safe.
 
 `Call` is one call while it runs, and it is what a handler is handed: a
 `Ctx`'s seams, and the call's own tally — the `Spent` its phases add up in and
 the `Lookup` that says what it found in the store. Both are made with the
 call. `tools::run` makes the `Call`, runs the work and writes the line, and
-`tools::call` is that step with the dispatch as the work, so a resource read
-can use the same step once #26 says what its line holds. Until then
-`read_resource` makes a `Call` of its own and writes nothing. The tally used
+`tools::call` is that step with the dispatch as the work, and `read_resource`
+is the same step with an `Address`'s read as the work. The tally used
 to live in the `Ctx` (#96), and in production nothing could tell: by [ADR
 0008](adr/0008-no-sessions.md) there are no sessions, so a request is one call
 and a context built per request lived exactly as long as its call. A `Ctx`
@@ -226,6 +251,18 @@ that — which is where every call after a cache hit logged `hit`.
 `Call::archive()`, `Call::catalogue()` and `Call::search()` hand back their
 seam with that call's stopwatch already on it, so a wait on a registry cannot
 go uncounted and a handler's call is unchanged.
+
+`tools::run` also gives the work the `Ctx`'s deadline, `CALL_DEADLINE` unless
+the suite set a shorter one, and answers `Failure::OutOfTime` when it passes
+([ADR 0021](adr/0021-the-compute-deadline-lives-on-the-call.md)). A deadline
+can only pass while the work yields, so the steps that compute rather than
+wait go to tokio's blocking pool through `compute::off_the_runtime`.
+Extraction does that inside `Archive::fetch`, so no tool can skip it. The
+tree build with its patches, and the one-file patch, go through
+`Call::compute` in `diff_package_versions`, and a tool that called the engine
+inline would escape the deadline without failing to compile. The work on the
+pool is not stopped when the deadline passes: it finishes, and its result is
+dropped. What the deadline guarantees is the answer.
 
 `Call::store()` hands back a wrapper of its own rather than that one, and the
 difference is a decision rather than an omission: the `fetch` phase answers
@@ -251,14 +288,16 @@ as production does, and `Client::over` clones one the suite made. The two
 differ only in what the seams remember, since a call's tally is never in the
 context.
 
-`Ctx` itself is built two ways and only two: `Ctx::new` is every seam live and
-`Ctx::fixture` is every seam reading from the checked-in sets under
-`fixtures/`. Both name every field, so a seam added later is a compile error
-in each of them and its author answers for production and for the suite at
-once. There is deliberately no builder that supplies one seam and fills the
-rest, because filling them meant filling them live: a test naming the archive
-carried a live catalogue beside it, and the first tool to read a catalogue
-through such a context would have asked npm from CI.
+`Ctx` itself is built two ways and only two: `Ctx::for_request` is every seam
+live, with the store reached by whatever token the request's headers present
+(`Ctx::new` is a request that presents none), and `Ctx::fixture` is every seam
+reading from the checked-in sets under `fixtures/`. Both name every field, so a
+seam added later is a compile error in each of them and its author answers for
+production and for the suite at once. There is deliberately no builder that
+supplies one seam and fills the rest, because filling them meant filling them
+live: a test naming the archive carried a live catalogue beside it, and the
+first tool to read a catalogue through such a context would have asked npm from
+CI.
 
 What the compiler checks there is that every field was answered for, not that
 the answer was a fixture one, so the second half is `Ctx::seams`. It names the
@@ -277,7 +316,9 @@ given. A spread of `..Self::new()` is the shape that reopens this.
 One module per resource, in the shape `src/tools/` has and for the reason [ADR
 0002](adr/0002-one-module-per-tool.md) gives: a URI, its description and the
 handler that answers it, together. `mod.rs` is the collection — the two lists
-a client discovers them through, and the dispatch that reads one.
+a client discovers them through, and `Address`, which says which resource a
+URI addresses: the read that answers it and what that read's line calls it,
+out of one match so that the two cannot disagree.
 
 Each module matches its own URI rather than the collection holding a table, so
 there is nothing to keep in step with the templates it advertises. There is
@@ -378,15 +419,15 @@ the compiler.
 
 ### `src/registry.rs` — what a registry is
 
-npm, crates.io and PyPI, described once: the identifier used in a parameter and
-in a cache key (`npm`, `crates`, `pypi`), the name the registry calls itself in
-a message to a model (`npm`, `crates.io`, `PyPI`), where a version's archive is,
-where versions and search come from, the hosts it may be reached at, and the
-name rules an agent would otherwise guess at, and the manifest a package
-declares its dependencies in and the runtime it targets, which
-`review_upgrade` sends an agent to. Every per-registry fact is a
-`match` over the three variants in this one file, so the compiler enumerates
-what a fourth registry owes.
+npm, crates.io, PyPI and Go, described once: the identifier used in a parameter
+and in a cache key (`npm`, `crates`, `pypi`, `go`), the name the registry calls
+itself in a message to a model (`npm`, `crates.io`, `PyPI`, `Go`), where a
+version's archive is, where versions and search come from, the hosts it may be
+reached at, and the name rules an agent would otherwise guess at, and the
+manifest a package declares its dependencies in and the runtime it targets,
+which `review_upgrade` sends an agent to. Every per-registry fact is a `match`
+over the four variants in this one file, so the compiler enumerates what a fifth
+registry owes.
 
 Two things are *derived* here rather than written down beside it. The `registry`
 enum in every tool's schema is generated from the variant list, so a registry
@@ -412,8 +453,16 @@ fact be tested with no network at all — the URL npm is asked for, the media
 type PyPI's index needs and the order a query ranks its names in are all
 asserted without a socket. The `diffpack://registries` resource (#16) is a
 projection of this module rather than a hand-written copy of it, and Go
-support (#28) is a value added here rather than an edit in five places. See [ADR
-0004](adr/0004-one-registry-module.md).
+support (#28) was mostly a value added here rather than an edit in five
+places. What it needed outside this file is the part a `match` could not
+absorb, because Go's source is shaped differently rather than located
+differently: `src/engine.rs` re-exports `escape_go_module_path` for the
+version and search URLs the engine does not build, `catalogue` fetches a
+second document for the Current version, `search` reads a `404` as no hits
+for a source that names a package, and two tool descriptions and the
+server's instructions say where Go differs. See [ADR
+0004](adr/0004-one-registry-module.md) and [ADR
+0019](adr/0019-a-go-module-is-ordered-by-version-and-found-by-path.md).
 
 ### `src/archive/` — a version's files
 
@@ -453,7 +502,10 @@ two seams; extraction is this module's, and is what is left here along with
 where a version's archive is and the hop PyPI needs to find out. The fixture
 index is keyed by URL for that same reason — a fetch path that built a URL of
 its own instead of asking `registry` finds nothing there, so `tests/archive.rs`
-is a test of resolution as well as of extraction.
+is a test of resolution as well as of extraction. Extraction runs on the
+blocking pool through `compute::off_the_runtime`, so that a call's deadline
+can pass while an archive is still being read ([ADR
+0021](adr/0021-the-compute-deadline-lives-on-the-call.md)).
 
 The index has a third answer beside "here are the bytes" and "this URL is not
 in the set": `null`, meaning the registry serves nothing there. It is the
@@ -491,11 +543,23 @@ map here is a `BTreeMap`. A version the source gives no date for — one of
 `requests`' 161, thirty-seven of `numpy`'s — is still a published version, so
 it is listed last rather than dropped.
 
-**The current version is the other answer in the same document**, and it is
-read out of it rather than picked from the list: npm's `dist-tags.latest`,
-crates.io's `default_version`, the `isDefault` deps.dev puts on a PyPI
-version. Which of crates.io's four pointers, and why, is argued in
-`src/registry.rs` beside the read. It is not checked against the versions
+Go is the exception, and the only one: the proxy's `@v/list` names versions
+with no date, so a Go module's versions are in diffpack.io's order instead,
+its comparator ported, and every one the list names is listed without a date.
+That order only ever separates two undated Go versions; every other
+registry's order is its dates and nothing else. See [ADR
+0019](adr/0019-a-go-module-is-ordered-by-version-and-found-by-path.md).
+
+**The current version is the registry's own answer**, read out of what it
+serves rather than picked from the list. For three registries it is in the
+same document as the list: npm's `dist-tags.latest`, crates.io's
+`default_version`, the `isDefault` deps.dev puts on a PyPI version. Go's list
+carries none, so its `VersionSource` names a second document, `@latest`,
+fetched beside the list at the same time. A failed `@latest` costs the
+pointer and not the list, except for a module that was never tagged: that one
+lists nothing, and the version `@latest` resolves is then its one version.
+Which of crates.io's four pointers, and why, is argued in `src/registry.rs`
+beside the read. It is not checked against the versions
 listed with it — a registry pointing past its own list is answered as the
 registry spelled it, because the alternative reports no current release for a
 package that has one.
@@ -517,6 +581,12 @@ different questions and fail in opposite directions: a `404` on a version
 document is a package that does not exist, and a `404` on a search source is
 the source itself having moved, since nothing in that URL named a package. See
 [ADR 0011](adr/0011-what-a-registry-publishes-is-its-own-seam.md).
+
+Go is where that last clause stops holding. There is no Go search, so a Go
+query is asked of the proxy's `@latest` as a whole module path, and that URL
+*does* name a package: `SearchSource::names_a_package` says so, and a `404`
+there is a module that does not exist, answered as no hits. See [ADR
+0019](adr/0019-a-go-module-is-ordered-by-version-and-found-by-path.md).
 
 Where a search is asked, what to ask it for, and how to read the answer are
 `registry`'s; making the request, checking the host and weighing the body are
@@ -594,6 +664,18 @@ takes the turn; archives and version lists go straight to `fetch`. The turn is
 always taken before a download slot and never while holding one, so it adds no
 cycle to the slots' waits.
 
+A caller waits for the turn for as long as the caller ahead can hold it and no
+longer: `fetch::LONGEST_FETCH`, the bound on one whole `bytes()` call. Still
+waiting after that, it is behind a line rather than a turn, and is refused as
+`Busy` without asking the registry anything. Any shorter, and a caller right
+behind a fetch that waited for a slot and then succeeded would be refused just
+before the index landed. Without the bound, a registry that hangs drains the
+line one slow failure at a time, and the caller at depth `n` waits `n` turns,
+past the 300 seconds `vercel.json` gives the function. With it, no caller waits
+longer than one turn plus its own fetch, however long the line. A fast failure
+still gives every caller its own fetch and its own failure; the bound only
+matters when the line ahead is made of slow ones.
+
 ### `src/fetch.rs` — the registries' HTTP client
 
 Every request this server makes to a registry. It was `archive`'s until
@@ -651,7 +733,11 @@ about how many turns are queued ahead of a caller: at depth `n` the wait is
 turn is behind a queue rather than a turn, and is refused as `Busy` — this
 server being full, which is what it is, rather than a `TimedOut` naming a
 registry nothing asked. The two budgets added are what bounds the whole of
-`bytes()`. The wait counts towards the call's fetch phase, because it is the
+`bytes()`, and that sum is exported as `LONGEST_FETCH` because it is a budget
+of its own one level up: PyPI's index is fetched behind a turn in
+`src/document/`, a second queue in front of a fetch, and a caller waits for
+that turn no longer than one whole fetch, then is refused as `Busy` the same
+way. The wait counts towards the call's fetch phase, because it is the
 same thing to whoever is waiting for the answer.
 
 A caller passes the refusals that differ between seams rather than this module
@@ -800,15 +886,19 @@ question.
 
 There is no published specification for that API and no usable Rust client for
 it, so the wire is taken from what `@vercel/blob` sends, read out of its
-source. Three of those facts are not guessable and fail only against the real
+source. Four of those facts are not guessable and fail only against the real
 store: a write's pathname is a query parameter rather than a path segment, the
-store id is provisioned with a `store_` prefix the header does not want, and
-`access` has no default. The tests drive the client through a stub HTTP server
+store id is provisioned with a `store_` prefix the header does not want,
+`access` has no default and must be `private` for this project's private store,
+and that store serves a blob's download only to a request that carries the
+token. The token itself comes with each request rather than from the
+environment; [`operations.md`](operations.md#the-caches-credentials) says
+why. The tests drive the client through a stub HTTP server
 on a loopback port, so what they hold is the request this module writes rather
 than a shape it was told to produce — and because the client is private, they
 live in the module rather than in `tests/`.
 
-A stub cannot settle those three, which is why one test is not a stub. It was
+A stub cannot settle those four, which is why one test is not a stub. It was
 written from the same reading of `@vercel/blob` as the client, so it agrees
 with the client whether or not the reading was right; only the store can
 disagree. So the four operations also run against it once, `#[ignore]`d the
@@ -936,6 +1026,9 @@ string is built by concatenation rather than by serialising a struct: the field
 set is closed and the order is fixed, so a `serde` upgrade cannot quietly
 reorder it. Read the document before changing anything here.
 
+`DiffId` is a `diff_id` that arrived from outside, parsed: 64 lowercase hex
+digits or nothing, so a path built from one cannot leave `diffs/v1/`.
+
 ### `src/error.rs` — which channel a failure reaches the client on
 
 MCP has two, and conflating them is the usual mistake: a protocol error the
@@ -956,19 +1049,54 @@ the caller's to fix. A `resources/read` is the surface that needs them: it has
 no second channel, so the code is all a client has. See [ADR
 0017](adr/0017-a-failure-carries-the-code-it-earned.md).
 
-### `src/log.rs` — one line per tool call
+### `src/log.rs` — one line per tool call, resource read or entry served
 
 What an incident is read from. The questions asked when this server has
 misbehaved are always the same — which tool ran, what was it asked for, where
 did its time go, how did it end — so the answer is one structured line per
 call rather than prose in whichever handler wanted it.
 
-The line is written by `tools::call`, not by a tool. A tool that emitted its
-own would not fail to compile, and the gap would be invisible until the call
-nobody logged was the one being looked for. That is also why `crate::log` is
-not on `check-tool-seams.sh`'s list: `src/tools/mod.rs` is exempt from the
-import rule because it is the collection rather than a tool, and a tool still
-cannot reach the module.
+The line is written by `tools::run`, not by a tool or a resource. A tool
+that emitted its own would not fail to compile, and the gap would be invisible
+until the call nobody logged was the one being looked for. That is also why
+`crate::log` is not on `check-tool-seams.sh`'s list: `src/tools/mod.rs` is
+exempt from the import rule because it is the collection rather than a tool,
+and a tool still cannot reach the module.
+
+`run` writes its line whatever the work does, a panic included: it catches the
+unwind around the work, writes the line with the result `panicked`, and
+answers `Failure::Panicked`, which keeps the `-32603` and the sentence
+`Guarded` answered with before — what the call was doing comes from the
+line's subject, a tool call or a resource read. A handler that panics never returns, so a line written after the work
+returns was the one line a crash did not leave, and the call that crashed is
+the one an incident is about. The message and the place of the panic are
+already in the log, written by the default panic hook beside the line; the
+line does not repeat them, because a panic message is free text that can carry
+whatever the code that panicked formatted into it.
+
+A `resources/read` leaves a line too, through the same `run`, and so
+does a request to the entries route. A line names one of `tool`,
+`resource` and `route`, never two, so counting one key counts only its
+own population. A read names the resource its URI addresses —
+`registries`, `diff`, `file-diff`, the names the two lists publish — and
+summarises a diff handle by the inputs it carries, under the names
+`diff_package_versions` takes them by, so a read and that tool's call group
+together on `registry`, `package`, `from_version` and `to_version`. A
+`get_diff_tree` or `get_file_diff` line does the same with its `handle`
+argument: `tools::call` replaces a handle that decodes with its inputs, through
+the same `DiffHandle::inputs_named_in`, and keeps one that does not as sent.
+Not on every key: a decoded handle always carries the threshold and the
+whitespace flag, where a `diff_package_versions` line has only what its caller
+sent. Decoding exposes
+nothing: by [ADR 0006](adr/0006-the-handle-carries-its-inputs.md) the handle
+is those inputs, encoded. A file-diff read adds the `path` it was for,
+percent-decoded the way the read decodes it, so one file is one path and
+redaction sees a URL that was encoded into it. A URI that
+addresses nothing is written as itself, as a tool name nothing answers to is,
+and through the same redaction. Reads were left out until #26 settled this,
+and the cost was the hit rate: both diff resources go through the store, a
+file-diff read can be answered without fetching anything, and those were the
+calls no line counted.
 
 A `Line` is built before it is written, which is what makes the line
 testable: `Sink` has a variant that keeps lines in memory, a `Ctx` carries
@@ -1034,13 +1162,19 @@ thing about this module a call over the wire cannot show: the fixture
 archives answer in under a millisecond, so `tests/log.rs` builds two
 overlapping spans by hand against `Spent::starting_at`.
 
-Two phases today. The finer split #26 asks for — download, extract, diff,
-store — needs each of the four to be something this crate can time, and none
-of them is: download and extract are one interface by ADR 0001, the diff is a
-synchronous call inside `src/engine.rs` which by ADR 0007 has no reach into a
-request, and the store's write happens after the answer, so a call's line is
-written before there is anything to report about it. Each is a decision about
-a seam rather than a field to add.
+Two phases, and #26 decided to keep it at two. The finer split it asked for
+— download, extract, diff, store — needs each of the four to be something this
+crate can time, and none of them is: download and extract are one interface by
+ADR 0001, the diff is a synchronous call inside `src/engine.rs` which by ADR
+0007 has no reach into a request, and the store's write happens after the
+answer, so a call's line is written before there is anything to report about
+it. Each is a decision about a seam rather than a field to add, and none is
+worth its seam yet. The diff is `total` less `fetch` on a `miss` line of
+`diff_package_versions`, to within one store lookup. Download against extract
+is the one question the line cannot answer, and the way to ask it is the
+registry's own latency beside a `fetch` that looks too long, before reopening
+ADR 0001. The store's write leaves a `Note` when it fails, which is the only
+thing about it an incident has needed.
 
 ### `src/engine.rs` — the one importer of `diffpack-engine`
 
@@ -1081,6 +1215,36 @@ two ([philfreshman/diffpack-engine#7](https://github.com/philfreshman/diffpack-e
 So `get_diff_tree::node_at` is asked for a node of a kind, and descends only
 into directories. The engine version is a field in the cache key, so the bump
 that brought the fix also retired every entry written with the old tree.
+
+### `src/entries.rs` — an Entry for the browser app
+
+`GET /diffs/v1/{diff_id}`, the one reader of the cache that is not a tool.
+`diffpack` computes the `diff_id` from `docs/cache-key.md` and asks here before
+it downloads two archives; the Blob store is private, so this route is how it
+reads one. See [ADR 0020](adr/0020-the-browser-reads-an-entry-through-the-server-by-diff-id.md).
+
+It asks the DiffStore with `get_by_id`, which serves an Entry only when the key
+inside it hashes to the `diff_id` asked for, and answers with that key, the
+tree and the patches. Everything else is a 404 miss: no Entry, half an Entry, a
+store that could not be read, no store at all, and anything after
+`/diffs/v1/` that is not 64 lowercase hex digits, deeper paths included. A hit
+is cached for a day in a browser and a year in the CDN (ADR 0020 says why not
+`immutable`), a miss is `no-store`, and every answer from the route carries
+`Access-Control-Allow-Origin: *` and no credentials.
+
+An Entry may be 8 MiB, so the Response ceiling is the route's to keep, and it
+is a field for the reason the store's caps are. Over it, the patches are left
+out and the app computes the files it opens; a tree alone over it is a miss.
+
+Each request runs through `tools::run` over a Ctx built for it by a factory
+handed the request's headers, `Ctx::for_request` in production, exactly as a
+tool call's is. So the route and the tools find the store's credentials the
+same way, from the token the request presents, a panic is caught the same
+way, and every request leaves one Line: `"route": "/diffs/v1"`, the `diff_id`
+it was asked for, and the Cache outcome. The outcome is what the browser got:
+an Entry whose tree alone is over the ceiling is a `miss`. A path that is not
+a `diff_id` is `invalid_params` with no Cache outcome, because nothing was
+looked up.
 
 ### `src/health.rs` — the `/health` body
 

@@ -7,6 +7,8 @@ use rmcp::model::{CallToolResult, ContentBlock, ErrorCode, ErrorData};
 
 pub const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(30);
 
+pub const CALL_DEADLINE: Duration = Duration::from_secs(240);
+
 const INTERNAL_FAILURE: ErrorCode = ErrorCode(-32000);
 
 const ASK_FOR_SOMETHING_ELSE: ErrorCode = ErrorCode(-32001);
@@ -42,6 +44,10 @@ pub enum Failure {
 
     Busy {
         waited: Duration,
+    },
+
+    OutOfTime {
+        deadline: Duration,
     },
 
     Unreachable {
@@ -133,6 +139,10 @@ pub enum Failure {
     Internal {
         doing: &'static str,
     },
+
+    Panicked {
+        doing: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -180,6 +190,7 @@ impl Failure {
             Self::RateLimited { .. }
             | Self::TimedOut { .. }
             | Self::Busy { .. }
+            | Self::OutOfTime { .. }
             | Self::Unreachable { .. }
             | Self::Unavailable { .. } => Channel::Model(TRY_AGAIN),
 
@@ -193,6 +204,8 @@ impl Failure {
             | Self::NoSuchPrompt { .. } => Channel::Protocol(ErrorCode::INVALID_PARAMS),
 
             Self::Internal { .. } => Channel::Protocol(INTERNAL_FAILURE),
+
+            Self::Panicked { .. } => Channel::Protocol(ErrorCode::INTERNAL_ERROR),
         }
     }
 
@@ -203,6 +216,7 @@ impl Failure {
             Self::RateLimited { .. } => "rate_limited",
             Self::TimedOut { .. } => "timed_out",
             Self::Busy { .. } => "busy",
+            Self::OutOfTime { .. } => "out_of_time",
             Self::Unreachable { .. } => "unreachable",
             Self::Unavailable { .. } => "unavailable",
             Self::MalformedArchive { .. } => "malformed_archive",
@@ -220,6 +234,7 @@ impl Failure {
             Self::NoSuchResource { .. } => "no_such_resource",
             Self::NoSuchPrompt { .. } => "no_such_prompt",
             Self::Internal { .. } => "internal",
+            Self::Panicked { .. } => "panicked",
         }
     }
 
@@ -240,6 +255,11 @@ impl Failure {
                 if !known.is_empty() {
                     let _ = write!(message, " Known recent versions: {}.", known.join(", "));
                 }
+                let _ = write!(
+                    message,
+                    " Call `list_package_versions` to see every version {registry} has, \
+                     spelled the way it spells them."
+                );
                 message
             }
 
@@ -260,9 +280,19 @@ impl Failure {
             ),
 
             Self::Busy { waited } => format!(
-                "This server is already downloading as many package archives as it will \
-                 hold at once, and no slot came free within {} seconds. Try again shortly.",
+                "This server is already fetching as much from registries as it will at \
+                 once, and this call's turn did not come within {} seconds. Try again shortly.",
                 waited.as_secs()
+            ),
+
+            Self::OutOfTime { deadline } => format!(
+                "Working this out took longer than the {} seconds this server gives one \
+                 call, so this answer was sent instead of waiting longer. Try again once: \
+                 a slow registry or a busy server passes. If it runs out of time again, \
+                 what was asked for is too large to work out here: compare two versions \
+                 closer together, or read the files you need one at a time with \
+                 `list_package_files` and `get_file_content`.",
+                deadline.as_secs()
             ),
 
             Self::Unreachable { registry } => {
@@ -386,7 +416,9 @@ impl Failure {
 
             Self::InvalidParams { message } => format!("Invalid parameters: {}", redact(message)),
             Self::NoSuchResource { uri } => format!("No resource at `{}`.", redact(uri)),
-            Self::Internal { doing } => format!("diffpack failed while {doing}."),
+            Self::Internal { doing } | Self::Panicked { doing } => {
+                format!("diffpack failed while {doing}.")
+            }
             Self::NoSuchTool { name } => format!("No tool named `{}`.", redact(name)),
             Self::NoSuchPrompt { name } => format!("No prompt named `{}`.", redact(name)),
         }
