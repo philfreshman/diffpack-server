@@ -112,6 +112,80 @@ async fn a_pypi_zip_source_distribution_arrives_as_its_files() {
     assert!(has(&files, "setup.py"), "got {:?}", paths(&files));
 }
 
+#[tokio::test]
+async fn a_packagist_version_arrives_as_the_files_of_the_archive_its_listing_names() {
+    let files = fixtures()
+        .fetch(Registry::Composer, "monolog/monolog", "3.12.1")
+        .await
+        .expect("the listing names a GitHub zipball, fetched from codeload");
+
+    assert_eq!(
+        paths(&files),
+        vec![
+            "README.md",
+            "composer.json",
+            "src",
+            "src/Monolog",
+            "src/Monolog/Logger.php"
+        ],
+        "codeload's `Seldaek-monolog-d7059e4/` folder is not part of the version's files"
+    );
+    assert!(
+        text(&files, "src/Monolog/Logger.php").contains("'3.12.1'"),
+        "the archive is the one listed for the version asked for"
+    );
+}
+
+#[tokio::test]
+async fn a_version_packagist_does_not_list_is_no_such_version_with_the_ones_it_does() {
+    let failure = fixtures()
+        .fetch(Registry::Composer, "monolog/monolog", "9.9.9")
+        .await
+        .expect_err("9.9.9 is not in the listing");
+
+    match failure {
+        Failure::NoSuchVersion {
+            registry,
+            version,
+            known,
+            ..
+        } => {
+            assert_eq!(registry, "Packagist");
+            assert_eq!(version, "9.9.9");
+            assert_eq!(
+                known.first().map(String::as_str),
+                Some("3.12.1"),
+                "the listing is in hand, so the refusal can say what is there"
+            );
+        }
+        other => panic!("a version the listing lacks is no_such_version, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_packagist_version_without_an_archive_this_server_reads_is_refused_as_such() {
+    for (version, why) in [
+        ("1.0.0", "its dist is unset"),
+        (
+            "2.0.0",
+            "its dist is on a host this server does not fetch from",
+        ),
+    ] {
+        let failure = fixtures()
+            .fetch(Registry::Composer, "diffpack/awkward", version)
+            .await
+            .expect_err(why);
+
+        match failure {
+            Failure::MalformedArchive { reason, .. } => assert!(
+                reason.contains("lists no archive"),
+                "{version}: the refusal should say why, got {reason}"
+            ),
+            other => panic!("{version} is listed but has no archive here, got {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn the_size_cap_is_above_what_a_large_package_weighs() {
     let a_large_crate: u64 = 80_000_000;

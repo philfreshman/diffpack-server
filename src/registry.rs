@@ -651,6 +651,20 @@ impl Versions {
         }
     }
 
+    pub fn lists(&self, version: &str) -> bool {
+        self.all
+            .iter()
+            .any(|listed| without_leading_v(&listed.version) == without_leading_v(version))
+    }
+
+    pub fn newest(&self, count: usize) -> Vec<String> {
+        self.all
+            .iter()
+            .take(count)
+            .map(|listed| listed.version.clone())
+            .collect()
+    }
+
     pub fn pointing_at(self, current: String) -> Self {
         Self {
             current: Some(current),
@@ -909,6 +923,10 @@ fn carry_forward(carried: &mut Option<String>, listed: Option<String>) {
         Some(value) => *carried = Some(value),
         None => {}
     }
+}
+
+fn without_leading_v(version: &str) -> &str {
+    version.strip_prefix('v').unwrap_or(version)
 }
 
 fn composer_preview(version: &str) -> bool {
