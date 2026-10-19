@@ -372,27 +372,16 @@ async fn a_lost_read_is_a_miss_that_says_the_read_failed() {
 }
 
 #[tokio::test]
-async fn the_answer_does_not_wait_for_the_entry_to_be_written() {
-    let store = Memory::new().stalling(Duration::from_millis(500));
+async fn the_entry_is_written_before_the_answer_is_given() {
+    let store = Memory::new().stalling(Duration::from_millis(100));
 
-    let began = Instant::now();
     let answer = call(|| store.store(), diffable()).await;
-    let answered = began.elapsed();
 
-    assert_eq!(
-        answer["isError"],
-        json!(false),
-        "the comparison is the answer, got {answer}"
-    );
+    let written = store.written();
     assert!(
-        answered < Duration::from_millis(250),
-        "the answer waited {answered:?} on a store that takes 500ms a blob"
-    );
-
-    settles(&store, 2).await;
-    assert!(
-        began.elapsed() >= Duration::from_millis(500),
-        "a write this fast was not the slow store's, which would make the          measurement above meaningless"
+        written.contains(&meta_of(&answer)) && written.contains(&patches_of(&answer)),
+        "Vercel's Rust runtime gives a function no time after its response, so \
+         an entry left for later is an entry never written: got {written:?}"
     );
 }
 
@@ -1575,7 +1564,7 @@ async fn two_admissions_at_once_do_not_take_the_store_over_the_ceiling() {
 }
 
 #[tokio::test]
-async fn the_answer_does_not_wait_for_the_sweep() {
+async fn the_sweep_is_done_before_the_answer_is_given() {
     let store = Memory::new();
 
     let oldest = call(|| store.store(), at(0)).await;
@@ -1585,38 +1574,23 @@ async fn the_answer_does_not_wait_for_the_sweep() {
     let second = call(|| store.store(), at(1)).await;
     lands(&store, &second).await;
 
-    let slow = store.clone().stalling(Duration::from_millis(500));
-    let budgeted = || slow.store().budgeting(entry + entry / 16, entry);
-
-    let began = Instant::now();
+    let budgeted = || store.store().budgeting(entry + entry / 16, entry);
     let third = call(budgeted, at(2)).await;
-    let answered = began.elapsed();
 
     assert_eq!(
         third["isError"],
         json!(false),
         "the comparison is the answer, got {third}"
     );
+    let written = store.written();
     assert!(
-        answered < Duration::from_millis(250),
-        "the answer waited {answered:?} on a store that takes 500ms a blob"
+        !written.contains(&meta_of(&oldest)),
+        "the room the third entry needed is made before the answer, or it is \
+         never made: {written:?}"
     );
     assert!(
-        store.written().contains(&meta_of(&oldest)),
-        "the oldest entry was already gone when the answer arrived, so the \
-         caller waited for the sweep after all"
-    );
-
-    lands(&store, &third).await;
-    assert!(
-        !store.written().contains(&meta_of(&oldest)),
-        "the sweep nobody waited for should still have happened: {:?}",
-        store.written()
-    );
-    assert!(
-        began.elapsed() >= Duration::from_millis(500),
-        "a sweep this fast was not the slow store's, which would make the \
-         measurement above meaningless"
+        written.contains(&meta_of(&third)) && written.contains(&patches_of(&third)),
+        "and the third entry is in it: {written:?}"
     );
 }
 

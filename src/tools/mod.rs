@@ -239,8 +239,8 @@ impl Recorded<'_> {
         }
     }
 
-    pub fn put(self, entry: Entry) {
-        Arc::clone(self.store).put(entry);
+    pub async fn put(self, entry: Entry) {
+        self.store.put(entry).await;
     }
 }
 

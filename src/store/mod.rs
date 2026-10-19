@@ -1,13 +1,10 @@
 mod blob;
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-use vercel_runtime::{AppState, LogContext};
 
 use serde::{Deserialize, Serialize};
 
@@ -226,8 +223,8 @@ impl DiffStore {
         })
     }
 
-    pub fn put(self: Arc<Self>, entry: Entry) {
-        in_background(async move { self.writing(entry).await });
+    pub async fn put(&self, entry: Entry) {
+        self.writing(entry).await;
     }
 
     async fn writing(&self, entry: Entry) {
@@ -417,10 +414,6 @@ fn oldest_first(blobs: &[blob::Blob]) -> Vec<Listed<'_>> {
     });
 
     entries
-}
-
-fn in_background(work: impl Future<Output = ()> + Send + 'static) {
-    AppState::new(LogContext::new(None, None, None)).wait_until(work);
 }
 
 const NO_CREDENTIALS: &str = "reading the blob store's credentials";

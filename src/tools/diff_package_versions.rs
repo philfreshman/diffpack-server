@@ -466,11 +466,13 @@ pub async fn compare(handle: &DiffHandle, call: &Call) -> Result<Comparison, Fai
         })
         .await?;
 
-    call.store().put(Entry {
-        key,
-        tree: tree.clone(),
-        patches,
-    });
+    call.store()
+        .put(Entry {
+            key,
+            tree: tree.clone(),
+            patches,
+        })
+        .await;
 
     Ok(Comparison {
         tree,
