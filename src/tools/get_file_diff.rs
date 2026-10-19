@@ -275,8 +275,11 @@ impl Tool for GetFileDiff {
         byte that could not be decoded shown as `U+FFFD`; `validUtf8` is \
         false when either version of the file had one, even if none of the \
         lines you were shown do, so replacement characters do not mean the \
-        file arrived broken. A long diff is cut short, and the answer says so \
-        and gives the whole thing's size.";
+        file arrived broken. A long diff is cut short, at `max_bytes` or at \
+        its default when you omit it: `truncated` says when that happened, \
+        and `bytes` gives the whole thing's size. To see more of a cut diff, \
+        ask again with a larger `max_bytes`. There is no way to start partway \
+        through one, so every answer starts at its beginning.";
 
     const READ_ONLY: bool = true;
 

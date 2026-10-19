@@ -152,7 +152,7 @@ async fn the_description_says_what_an_agent_would_otherwise_get_wrong() {
         .as_str()
         .unwrap_or_else(|| panic!("a tool carries a description, got {tool}"));
 
-    for said in ["isDiff", "old_path", "context_lines"] {
+    for said in ["isDiff", "old_path", "context_lines", "max_bytes"] {
         assert!(
             description.contains(said),
             "the description should name `{said}`, which is a case where a \
