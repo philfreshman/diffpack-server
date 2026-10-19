@@ -58,6 +58,36 @@ impl DiffKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffId(String);
+
+impl DiffId {
+    const HEX_DIGITS: usize = 64;
+
+    pub fn parse(text: &str) -> Option<Self> {
+        let is_lowercase_hex = |c: char| c.is_ascii_digit() || ('a'..='f').contains(&c);
+
+        (text.len() == Self::HEX_DIGITS && text.chars().all(is_lowercase_hex))
+            .then(|| Self(text.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn meta_path(&self) -> String {
+        self.blob_path("meta.json")
+    }
+
+    pub fn patches_path(&self) -> String {
+        self.blob_path("patches.json")
+    }
+
+    fn blob_path(&self, file: &str) -> String {
+        format!("{}{}/{}", prefix(SCHEMA), self.0, file)
+    }
+}
+
 pub fn prefix(schema: u32) -> String {
     format!("diffs/v{schema}/")
 }

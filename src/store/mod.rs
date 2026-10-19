@@ -11,7 +11,7 @@ use vercel_runtime::{AppState, LogContext};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cache_key::DiffKey;
+use crate::cache_key::{DiffId, DiffKey};
 use crate::engine::{DiffFileEntry, Patch};
 use crate::error::Failure;
 use crate::log::{Note, Sink};
@@ -182,14 +182,32 @@ impl DiffStore {
     }
 
     pub async fn get(&self, key: &DiffKey) -> Option<Entry> {
-        let meta = self.read(&key.meta_path()).await?;
-        let meta: Meta = serde_json::from_slice(&meta).ok()?;
+        let meta = self.meta_at(&key.meta_path()).await?;
 
         if &meta.key != key {
             return None;
         }
 
-        let patches = match self.read(&key.patches_path()).await {
+        self.entry_from(meta, &key.patches_path()).await
+    }
+
+    pub async fn get_by_id(&self, diff_id: &DiffId) -> Option<Entry> {
+        let meta = self.meta_at(&diff_id.meta_path()).await?;
+
+        if meta.key.diff_id() != diff_id.as_str() {
+            return None;
+        }
+
+        self.entry_from(meta, &diff_id.patches_path()).await
+    }
+
+    async fn meta_at(&self, pathname: &str) -> Option<Meta> {
+        let meta = self.read(pathname).await?;
+        serde_json::from_slice(&meta).ok()
+    }
+
+    async fn entry_from(&self, meta: Meta, patches_path: &str) -> Option<Entry> {
+        let patches = match self.read(patches_path).await {
             Some(bytes) => serde_json::from_slice(&bytes).ok()?,
             None if meta.patches_omitted => BTreeMap::new(),
             None => return None,
@@ -507,6 +525,13 @@ impl Memory {
         Some(self.blobs.lock().ok()?.get(pathname)?.uploaded_at.clone())
     }
 
+    pub fn place(&self, pathname: &str, bytes: Vec<u8>) {
+        if let Ok(mut blobs) = self.blobs.lock() {
+            let uploaded_at = format!("{:020}", UPLOADS.fetch_add(1, Ordering::Relaxed));
+            blobs.insert(pathname.to_owned(), Held { bytes, uploaded_at });
+        }
+    }
+
     pub fn blob(&self, pathname: &str) -> Option<Vec<u8>> {
         Some(self.blobs.lock().ok()?.get(pathname)?.bytes.clone())
     }
@@ -597,10 +622,7 @@ impl Memory {
         self.stalled().await;
         self.refusing(Operation::Write)?;
 
-        if let Ok(mut blobs) = self.blobs.lock() {
-            let uploaded_at = format!("{:020}", UPLOADS.fetch_add(1, Ordering::Relaxed));
-            blobs.insert(pathname.to_owned(), Held { bytes, uploaded_at });
-        }
+        self.place(pathname, bytes);
 
         Ok(())
     }
