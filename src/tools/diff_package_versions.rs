@@ -228,7 +228,7 @@ fn walk(node: &DiffFileEntry, totals: &mut Totals, changed: &mut Vec<Changed>) {
     }
 }
 
-fn worked_out(
+fn compared(
     files: &Versions,
     similarity_threshold: f64,
     ignore_whitespace: bool,
@@ -355,12 +355,12 @@ impl Comparison {
 
         refuse_directory(inputs, path, from_path, |end, path| files.kind_at(end, path))?;
 
-        let files = files.clone();
+        let to_render = files.clone();
         let (path, from_path) = (path.to_owned(), from_path.to_owned());
         let ignore_whitespace = inputs.ignore_whitespace;
 
         call.compute("rendering one file's diff", move || {
-            patch_of(&files, &path, &from_path, ignore_whitespace)
+            patch_of(&to_render, &path, &from_path, ignore_whitespace)
         })
         .await
     }
@@ -454,15 +454,15 @@ pub async fn compare(handle: &DiffHandle, call: &Call) -> Result<Comparison, Fai
     }
 
     let files = versions(handle, call).await?;
-    let (similarity_threshold, ignore_whitespace) = (
-        handle.inputs().similarity_threshold,
-        handle.inputs().ignore_whitespace,
-    );
+
+    let to_compare = files.clone();
+    let inputs = handle.inputs();
+    let (similarity_threshold, ignore_whitespace) =
+        (inputs.similarity_threshold, inputs.ignore_whitespace);
 
     let (tree, patches) = call
-        .compute("comparing two versions", {
-            let files = files.clone();
-            move || worked_out(&files, similarity_threshold, ignore_whitespace)
+        .compute("comparing two versions", move || {
+            compared(&to_compare, similarity_threshold, ignore_whitespace)
         })
         .await?;
 

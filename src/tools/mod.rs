@@ -335,12 +335,13 @@ pub async fn run<T>(
 
     let guarded = AssertUnwindSafe(work(&call)).catch_unwind();
 
-    let answer = tokio::time::timeout(ctx.deadline, guarded).await.map_or(
-        Err(Failure::OutOfTime {
+    let answer = match tokio::time::timeout(ctx.deadline, guarded).await {
+        Ok(Ok(answered)) => answered,
+        Ok(Err(_panic)) => Err(Failure::Panicked { doing }),
+        Err(_elapsed) => Err(Failure::OutOfTime {
             deadline: ctx.deadline,
         }),
-        |finished| finished.unwrap_or(Err(Failure::Panicked { doing })),
-    );
+    };
     ctx.log.write(
         &line
             .taking(started.elapsed(), &call.spent)
