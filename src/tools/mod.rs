@@ -2,7 +2,7 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::FutureExt as _;
 use rmcp::model::{
@@ -17,7 +17,7 @@ use serde_json::Value;
 use crate::archive::{Archive, FileMap};
 use crate::cache_key::DiffKey;
 use crate::catalogue::Catalogue;
-use crate::error::Failure;
+use crate::error::{Failure, CALL_BUDGET};
 use crate::log::{Line, Lookup, Sink, Spent};
 use crate::registry::{Hit, Registry, Versions};
 use crate::search::Search;
@@ -74,6 +74,7 @@ pub struct Ctx {
     search: Arc<Search>,
     store: Arc<DiffStore>,
     log: Sink,
+    budget: Duration,
 }
 
 impl Ctx {
@@ -84,6 +85,7 @@ impl Ctx {
             search: Arc::new(Search::live()),
             store: Arc::new(DiffStore::live()),
             log: Sink::default(),
+            budget: CALL_BUDGET,
         }
     }
 
@@ -95,11 +97,16 @@ impl Ctx {
             search: Arc::new(Search::fixture(fixtures.join("searches"))),
             store: Arc::new(Memory::new().store()),
             log: Sink::default(),
+            budget: CALL_BUDGET,
         }
     }
 
     pub fn logging_to(self, log: Sink) -> Self {
         Self { log, ..self }
+    }
+
+    pub fn answering_within(self, budget: Duration) -> Self {
+        Self { budget, ..self }
     }
 
     pub fn storing_in(self, store: DiffStore) -> Self {
@@ -116,6 +123,7 @@ impl Ctx {
             search: _,
             store: _,
             log: _,
+            budget: _,
         } = self;
 
         &["archive", "catalogue", "search", "store"]
@@ -295,10 +303,13 @@ pub async fn run<T>(
     let started = Instant::now();
     let doing = line.subject.doing();
 
-    let answer = AssertUnwindSafe(work(&call))
-        .catch_unwind()
+    let guarded = AssertUnwindSafe(work(&call)).catch_unwind();
+
+    let answer = tokio::time::timeout(ctx.budget, guarded)
         .await
-        .unwrap_or(Err(Failure::Panicked { doing }));
+        .map_or(Err(Failure::OutOfTime { budget: ctx.budget }), |finished| {
+            finished.unwrap_or(Err(Failure::Panicked { doing }))
+        });
     ctx.log.write(
         &line
             .taking(started.elapsed(), &call.spent)
