@@ -36,8 +36,8 @@ src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs;
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, DiffId, blob paths — docs/cache-key.md
 src/error.rs        Failure, the two channels, the code each earns, redaction
-src/log.rs          one line per tool call or resource read: what, cache outcome,
-                    how long, how it ended
+src/log.rs          one line per tool call, resource read or entry served: what,
+                    cache outcome, how long, how it ended
 src/engine.rs       the only importer of diffpack_engine
 src/health.rs       the /health body
 ```
@@ -996,7 +996,7 @@ the caller's to fix. A `resources/read` is the surface that needs them: it has
 no second channel, so the code is all a client has. See [ADR
 0017](adr/0017-a-failure-carries-the-code-it-earned.md).
 
-### `src/log.rs` — one line per tool call or resource read
+### `src/log.rs` — one line per tool call, resource read or entry served
 
 What an incident is read from. The questions asked when this server has
 misbehaved are always the same — which tool ran, what was it asked for, where
@@ -1021,9 +1021,9 @@ already in the log, written by the default panic hook beside the line; the
 line does not repeat them, because a panic message is free text that can carry
 whatever the code that panicked formatted into it.
 
-A `resources/read` leaves a line too, through the same `run`, and a line names
-either a `tool` or a `resource` and never both, so counting one key counts
-only its own population. A read names the resource its URI addresses —
+A `resources/read` leaves a line too, through the same `run`, and so does a
+request to the entries route. A line names one of `tool`, `resource` and
+`route`, never two, so counting one key counts only its own population. A read names the resource its URI addresses —
 `registries`, `diff`, `file-diff`, the names the two lists publish — and
 summarises a diff handle by the inputs it carries, under the names
 `diff_package_versions` takes them by, so a read and that tool's call group
@@ -1177,8 +1177,13 @@ An Entry may be 8 MiB, so the Response ceiling is the route's to keep, and it
 is a field for the reason the store's caps are. Over it, the patches are left
 out and the app computes the files it opens; a tree alone over it is a miss.
 
-The store is built per request through a factory, the way a call's Ctx builds
-one, so the route and the tools find their credentials the same way.
+Each request runs through `tools::run` over a Ctx built for it by a factory,
+`Ctx::new` in production, exactly as a tool call does. So the route and the
+tools find the store's credentials the same way, a panic is caught the same
+way, and every request leaves one Line: `"route": "/diffs/v1"`, the `diff_id`
+it was asked for, and the Cache outcome. A path segment that is not a
+`diff_id` is `invalid_params` with no Cache outcome, because nothing was
+looked up.
 
 ### `src/health.rs` — the `/health` body
 

@@ -6,25 +6,32 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use rmcp::model::JsonObject;
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::cache_key::{DiffId, DiffKey};
 use crate::engine::{DiffFileEntry, Patch};
+use crate::error::Failure;
+use crate::log::Line;
 use crate::page::RESPONSE_CEILING;
-use crate::store::{DiffStore, Entry};
+use crate::store::Entry;
+use crate::tools::{self, Ctx};
 
-type StoreFactory = Box<dyn Fn() -> DiffStore + Send + Sync>;
+const ROUTE: &str = "/diffs/v1";
+
+type CtxFactory = Box<dyn Fn() -> Ctx + Send + Sync>;
 
 pub struct Entries {
-    store: StoreFactory,
+    ctx: CtxFactory,
 
     ceiling: usize,
 }
 
 impl Entries {
-    pub fn over(store: impl Fn() -> DiffStore + Send + Sync + 'static) -> Self {
+    pub fn over(ctx: impl Fn() -> Ctx + Send + Sync + 'static) -> Self {
         Self {
-            store: Box::new(store),
+            ctx: Box::new(ctx),
             ceiling: RESPONSE_CEILING,
         }
     }
@@ -38,7 +45,7 @@ impl Entries {
 
     pub fn routes(self) -> Router {
         Router::new()
-            .route("/diffs/v1/{diff_id}", get(serve))
+            .route(&format!("{ROUTE}/{{diff_id}}"), get(serve))
             .with_state(Arc::new(self))
             .layer(axum::middleware::map_response(readable_from_any_origin))
     }
@@ -77,17 +84,28 @@ impl From<Entry> for Served {
     }
 }
 
-async fn serve(State(entries): State<Arc<Entries>>, Path(diff_id): Path<String>) -> Response {
-    let Some(diff_id) = DiffId::parse(&diff_id) else {
-        return miss();
-    };
+async fn serve(State(entries): State<Arc<Entries>>, Path(asked): Path<String>) -> Response {
+    let ctx = (entries.ctx)();
+    let line = Line::serving(ROUTE).about(Some(&arguments(&asked)));
 
-    let entry = (entries.store)().get_by_id(&diff_id).await;
+    let body = tools::run(&ctx, line, async |call| {
+        let diff_id = DiffId::parse(&asked).ok_or_else(|| Failure::InvalidParams {
+            message: format!("`{asked}` is not a diff_id: 64 lowercase hex digits."),
+        })?;
 
-    match entry.and_then(|entry| entries.body_for(entry)) {
-        Some(body) => hit(body),
-        None => miss(),
+        let entry = call.store().get_by_id(&diff_id).await;
+        Ok(entry.and_then(|entry| entries.body_for(entry)))
+    })
+    .await;
+
+    match body {
+        Ok(Some(body)) => hit(body),
+        Ok(None) | Err(_) => miss(),
     }
+}
+
+fn arguments(diff_id: &str) -> JsonObject {
+    JsonObject::from_iter([("diff_id".to_owned(), Value::String(diff_id.to_owned()))])
 }
 
 async fn readable_from_any_origin(mut response: Response) -> Response {

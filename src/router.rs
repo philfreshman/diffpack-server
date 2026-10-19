@@ -13,13 +13,13 @@ use tower_http::catch_panic::{CatchPanicLayer, ResponseForPanic};
 
 use crate::entries::Entries;
 use crate::mcp::{self, Diffpack};
-use crate::store::DiffStore;
+use crate::tools::Ctx;
 
 pub const ALLOWED_ORIGINS: &str = "DIFFPACK_ALLOWED_ORIGINS";
 
 pub fn router() -> Router {
     router_with(|| Ok(Diffpack::new()), allowed_origins_from_env())
-        .merge(Entries::over(DiffStore::live).routes())
+        .merge(Entries::over(Ctx::new).routes())
 }
 
 pub fn router_with<S, F>(service_factory: F, allowed_origins: Vec<String>) -> Router

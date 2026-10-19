@@ -6,6 +6,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::{Answer, Client, FIXTURES};
 use diffpack_server::entries::Entries;
+use diffpack_server::log::Capture;
 use diffpack_server::router;
 use diffpack_server::store::{Memory, Operation};
 use diffpack_server::tools::Ctx;
@@ -199,6 +200,37 @@ async fn the_deployed_router_serves_entries() {
     );
 }
 
+#[tokio::test]
+async fn every_request_leaves_one_line_naming_the_route_the_diff_id_and_the_outcome() {
+    let store = Memory::new();
+    let computed = compare(&store, diffable()).await;
+    let diff_id = diff_id_of(&computed).to_owned();
+
+    for (asked, outcome) in [(diff_id.as_str(), "hit"), (NEVER_WRITTEN, "miss")] {
+        let capture = Capture::new();
+        fetch_logging(&store, &format!("/diffs/v1/{asked}"), &capture).await;
+
+        let lines = capture.lines();
+        assert_eq!(lines.len(), 1, "one request, one line, got {lines:?}");
+        let line: Value = serde_json::from_str(&lines[0]).expect("a line is JSON");
+        assert_eq!(line["route"], "/diffs/v1", "{line}");
+        assert_eq!(line["args"]["diff_id"], asked, "{line}");
+        assert_eq!(line["result"], "ok", "{line}");
+        assert_eq!(line["cache"], outcome, "{line}");
+    }
+}
+
+#[tokio::test]
+async fn a_path_that_is_not_a_diff_id_is_logged_as_the_caller_s_mistake() {
+    let capture = Capture::new();
+
+    fetch_logging(&Memory::new(), "/diffs/v1/not-a-diff-id", &capture).await;
+
+    let line: Value = serde_json::from_str(&capture.lines()[0]).expect("a line is JSON");
+    assert_eq!(line["result"], "invalid_params", "{line}");
+    assert_eq!(line.get("cache"), None, "nothing was looked up, got {line}");
+}
+
 async fn compare(store: &Memory, arguments: Value) -> Value {
     let answer = Client::over(Ctx::fixture(FIXTURES).storing_in(store.store()))
         .call("diff_package_versions", arguments)
@@ -211,7 +243,7 @@ async fn fetch(store: &Memory, path: &str) -> Answer {
     let store = store.clone();
     Client::routed(move || {
         let store = store.clone();
-        Entries::over(move || store.store()).routes()
+        Entries::over(move || Ctx::fixture(FIXTURES).storing_in(store.store())).routes()
     })
     .send(get(path))
     .await
@@ -221,9 +253,26 @@ async fn fetch_capped(store: &Memory, path: &str, ceiling: usize) -> Answer {
     let store = store.clone();
     Client::routed(move || {
         let store = store.clone();
-        Entries::over(move || store.store())
+        Entries::over(move || Ctx::fixture(FIXTURES).storing_in(store.store()))
             .capping_responses_at(ceiling)
             .routes()
+    })
+    .send(get(path))
+    .await
+}
+
+async fn fetch_logging(store: &Memory, path: &str, capture: &Capture) -> Answer {
+    let store = store.clone();
+    let sink = capture.sink();
+    Client::routed(move || {
+        let store = store.clone();
+        let sink = sink.clone();
+        Entries::over(move || {
+            Ctx::fixture(FIXTURES)
+                .storing_in(store.store())
+                .logging_to(sink.clone())
+        })
+        .routes()
     })
     .send(get(path))
     .await
