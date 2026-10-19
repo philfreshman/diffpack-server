@@ -289,7 +289,9 @@ impl Failure {
                 "Working this out took longer than the {} seconds this server gives one \
                  call, so this answer was sent instead of waiting longer. Try again once: \
                  a slow registry or a busy server passes. If it runs out of time again, \
-                 what was asked for is too large to work out here.",
+                 what was asked for is too large to work out here: compare two versions \
+                 closer together, or read the files you need one at a time with \
+                 `list_package_files` and `get_file_content`.",
                 deadline.as_secs()
             ),
 
