@@ -54,7 +54,9 @@ implementation-defined server errors. Of the six:
   exists. A URI is a parameter of it.
 * **`-32603` internal error** is JSON-RPC's own, for a fault in the JSON-RPC
   machinery rather than in what the request asked for. `src/mcp.rs`'s panic
-  guard uses it, which is exactly that case; a registry that timed out is not.
+  guard uses it, which is exactly that case, and so does `Failure::Panicked`,
+  the same guard moved into `tools::run` by #26 so that a crashed call still
+  leaves its line; a registry that timed out is not.
 * **`-32700` parse error** and **`-32600` invalid request** are about the
   frame, which was fine in every case here.
 

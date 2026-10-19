@@ -34,7 +34,8 @@ src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs;
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
 src/error.rs        Failure, the two channels, the code each earns, redaction
-src/log.rs          one line per tool call: what, cache outcome, how long, how it ended
+src/log.rs          one line per tool call or resource read: what, cache outcome,
+                    how long, how it ended
 src/engine.rs       the only importer of diffpack_engine
 src/health.rs       the /health body
 ```
@@ -121,11 +122,17 @@ definition lives with its handler under `src/tools/` ([ADR
 0002](adr/0002-one-module-per-tool.md)), a resource's URI lives with its
 handler under `src/resources/`, and a prompt's arguments live with its
 messages under `src/prompts/`. Which URI resolves to what is
-`resources::read`'s, the way which name runs what is `tools::call`'s and which
-name renders what is `prompts::get`'s. `Guarded` is also here: the wrapper
-that turns a panic inside a handler into a JSON-RPC error rather than a hung
-request, which has to be inside the handler because `rmcp` runs handlers on a
-task of their own.
+`resources::Address`'s, the way which name runs what is `tools::call`'s and
+which name renders what is `prompts::get`'s. `read_resource` builds the read's
+line from the `Address` and runs the read through `tools::run`, the step a
+tool call goes through, because `src/resources/` may not reach `crate::log`
+and the line has to be written by something a resource cannot forget to call.
+`Guarded` is also here: the wrapper that turns a panic inside a handler into a
+JSON-RPC error rather than a hung request, which has to be inside the handler
+because `rmcp` runs handlers on a task of their own. A panic in a tool call or
+a resource read never reaches it, because `tools::run` catches the unwind
+first so that the call still leaves its line; `Guarded` is for every other
+method, and for a panic outside the work, such as one in building the line.
 
 ### `src/tools/` — one module per tool
 
@@ -224,9 +231,8 @@ Nothing in it belongs to one call, so cloning a `Ctx` is always safe.
 `Ctx`'s seams, and the call's own tally — the `Spent` its phases add up in and
 the `Lookup` that says what it found in the store. Both are made with the
 call. `tools::run` makes the `Call`, runs the work and writes the line, and
-`tools::call` is that step with the dispatch as the work, so a resource read
-can use the same step once #26 says what its line holds. Until then
-`read_resource` makes a `Call` of its own and writes nothing. The tally used
+`tools::call` is that step with the dispatch as the work, and `read_resource`
+is the same step with an `Address`'s read as the work. The tally used
 to live in the `Ctx` (#96), and in production nothing could tell: by [ADR
 0008](adr/0008-no-sessions.md) there are no sessions, so a request is one call
 and a context built per request lived exactly as long as its call. A `Ctx`
@@ -287,7 +293,9 @@ given. A spread of `..Self::new()` is the shape that reopens this.
 One module per resource, in the shape `src/tools/` has and for the reason [ADR
 0002](adr/0002-one-module-per-tool.md) gives: a URI, its description and the
 handler that answers it, together. `mod.rs` is the collection — the two lists
-a client discovers them through, and the dispatch that reads one.
+a client discovers them through, and `Address`, which says which resource a
+URI addresses: the read that answers it and what that read's line calls it,
+out of one match so that the two cannot disagree.
 
 Each module matches its own URI rather than the collection holding a table, so
 there is nothing to keep in step with the templates it advertises. There is
@@ -982,19 +990,44 @@ the caller's to fix. A `resources/read` is the surface that needs them: it has
 no second channel, so the code is all a client has. See [ADR
 0017](adr/0017-a-failure-carries-the-code-it-earned.md).
 
-### `src/log.rs` — one line per tool call
+### `src/log.rs` — one line per tool call or resource read
 
 What an incident is read from. The questions asked when this server has
 misbehaved are always the same — which tool ran, what was it asked for, where
 did its time go, how did it end — so the answer is one structured line per
 call rather than prose in whichever handler wanted it.
 
-The line is written by `tools::call`, not by a tool. A tool that emitted its
-own would not fail to compile, and the gap would be invisible until the call
-nobody logged was the one being looked for. That is also why `crate::log` is
-not on `check-tool-seams.sh`'s list: `src/tools/mod.rs` is exempt from the
-import rule because it is the collection rather than a tool, and a tool still
-cannot reach the module.
+The line is written by `tools::run`, not by a tool or a resource. A tool
+that emitted its own would not fail to compile, and the gap would be invisible
+until the call nobody logged was the one being looked for. That is also why
+`crate::log` is not on `check-tool-seams.sh`'s list: `src/tools/mod.rs` is
+exempt from the import rule because it is the collection rather than a tool,
+and a tool still cannot reach the module.
+
+`run` writes its line whatever the work does, a panic included: it catches the
+unwind around the work, writes the line with the result `panicked`, and
+answers `Failure::Panicked`, which keeps the `-32603` `Guarded` answered with
+before. A handler that panics never returns, so a line written after the work
+returns was the one line a crash did not leave, and the call that crashed is
+the one an incident is about. The message and the place of the panic are
+already in the log, written by the default panic hook beside the line; the
+line does not repeat them, because a panic message is free text that can carry
+whatever the code that panicked formatted into it.
+
+A `resources/read` leaves a line too, through the same `run`, and a line names
+either a `tool` or a `resource` and never both, so counting one key counts
+only its own population. A read names the resource its URI addresses —
+`registries`, `diff`, `file-diff`, the names the two lists publish — and
+summarises a diff handle by the inputs it carries, under the names
+`diff_package_versions` takes them by, so a comparison read by URI is counted
+with the same comparison asked for by tool. Decoding exposes nothing: by [ADR
+0006](adr/0006-the-handle-carries-its-inputs.md) the handle is those inputs,
+encoded. A file-diff read adds the `path` it was for, as sent. A URI that
+addresses nothing is written as itself, as a tool name nothing answers to is,
+and through the same redaction. Reads were left out until #26 settled this,
+and the cost was the hit rate: both diff resources go through the store, a
+file-diff read can be answered without fetching anything, and those were the
+calls no line counted.
 
 A `Line` is built before it is written, which is what makes the line
 testable: `Sink` has a variant that keeps lines in memory, a `Ctx` carries
@@ -1060,13 +1093,19 @@ thing about this module a call over the wire cannot show: the fixture
 archives answer in under a millisecond, so `tests/log.rs` builds two
 overlapping spans by hand against `Spent::starting_at`.
 
-Two phases today. The finer split #26 asks for — download, extract, diff,
-store — needs each of the four to be something this crate can time, and none
-of them is: download and extract are one interface by ADR 0001, the diff is a
-synchronous call inside `src/engine.rs` which by ADR 0007 has no reach into a
-request, and the store's write happens after the answer, so a call's line is
-written before there is anything to report about it. Each is a decision about
-a seam rather than a field to add.
+Two phases, and #26 decided to keep it at two. The finer split it asked for
+— download, extract, diff, store — needs each of the four to be something this
+crate can time, and none of them is: download and extract are one interface by
+ADR 0001, the diff is a synchronous call inside `src/engine.rs` which by ADR
+0007 has no reach into a request, and the store's write happens after the
+answer, so a call's line is written before there is anything to report about
+it. Each is a decision about a seam rather than a field to add, and none is
+worth its seam yet. The diff is `total` less `fetch` on a `miss` line of
+`diff_package_versions`, to within one store lookup. Download against extract
+is the one question the line cannot answer, and the way to ask it is the
+registry's own latency beside a `fetch` that looks too long, before reopening
+ADR 0001. The store's write leaves a `Note` when it fails, which is the only
+thing about it an incident has needed.
 
 ### `src/engine.rs` — the one importer of `diffpack-engine`
 
