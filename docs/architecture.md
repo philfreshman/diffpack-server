@@ -226,13 +226,13 @@ list of tools, and the generic call path where arguments are validated and
 `Ctx` is what a call is made over. A live `Diffpack` builds one for each tool
 call and resource read from the headers of the request it came in, because the
 blob store's token arrives with the request
-([`operations.md`](operations.md#the-caches-credentials)); a `Diffpack` given
-a `Ctx`, as every suite's is, clones that one per call. It holds the seams a
-handler may reach — `Archive`,
-`Catalogue`, `Search` and `DiffStore`, while `registry`, `page` and `handle`
-are named directly because a pure module has nothing to hand over — and the
-log's `Sink`, which the dispatch writes to and a handler never touches.
-Nothing in it belongs to one call, so cloning a `Ctx` is always safe.
+([`operations.md`](operations.md#the-caches-credentials)); a `Diffpack` given a
+`Ctx`, as every suite's is, clones that one per call. It holds the seams a
+handler may reach — `Archive`, `Catalogue`, `Search` and `DiffStore`, while
+`registry`, `page` and `handle` are named directly because a pure module has
+nothing to hand over — and the log's `Sink`, which the dispatch writes to and a
+handler never touches. Nothing in it belongs to one call, so cloning a `Ctx` is
+always safe.
 
 `Call` is one call while it runs, and it is what a handler is handed: a
 `Ctx`'s seams, and the call's own tally — the `Spent` its phases add up in and
@@ -277,12 +277,13 @@ context.
 `Ctx` itself is built two ways and only two: `Ctx::for_request` is every seam
 live, with the store reached by whatever token the request's headers present
 (`Ctx::new` is a request that presents none), and `Ctx::fixture` is every seam
-reading from the checked-in sets under `fixtures/`. Both name every field, so a seam added later is a compile error
-in each of them and its author answers for production and for the suite at
-once. There is deliberately no builder that supplies one seam and fills the
-rest, because filling them meant filling them live: a test naming the archive
-carried a live catalogue beside it, and the first tool to read a catalogue
-through such a context would have asked npm from CI.
+reading from the checked-in sets under `fixtures/`. Both name every field, so a
+seam added later is a compile error in each of them and its author answers for
+production and for the suite at once. There is deliberately no builder that
+supplies one seam and fills the rest, because filling them meant filling them
+live: a test naming the archive carried a live catalogue beside it, and the
+first tool to read a catalogue through such a context would have asked npm from
+CI.
 
 What the compiler checks there is that every field was answered for, not that
 the answer was a fixture one, so the second half is `Ctx::seams`. It names the
