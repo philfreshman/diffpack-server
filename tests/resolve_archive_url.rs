@@ -255,7 +255,7 @@ async fn a_registry_outside_the_enum_is_refused_by_naming_the_ones_that_exist() 
     let message = answer["error"]["message"]
         .as_str()
         .expect("a protocol error carries a message");
-    for known in ["npm", "crates", "pypi", "go"] {
+    for known in ["npm", "crates", "pypi", "go", "composer"] {
         assert!(
             message.contains(known),
             "the refusal should name `{known}`, got {message}"
