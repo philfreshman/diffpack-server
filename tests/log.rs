@@ -467,6 +467,31 @@ async fn a_resource_read_leaves_a_line_naming_the_comparison_it_read() {
 }
 
 #[tokio::test]
+async fn a_file_diff_read_names_the_file_as_well_as_the_comparison() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+
+    let summary = client.call("diff_package_versions", diffable()).await;
+    let uri = format!("diffpack://diff/{}/file/src/index.js", handle_in(&summary));
+    read(&client, &uri).await;
+
+    let lines = log.lines();
+    let line = parse(lines.last().expect("the read left a line"));
+    assert_eq!(
+        line["resource"], "file-diff",
+        "a file's diff is the other template, and its own line: {line}"
+    );
+    assert_eq!(
+        line["args"]["path"], "src/index.js",
+        "which file was read is what tells one file-diff read from the next: {line}"
+    );
+    assert_eq!(
+        line["args"]["package"], "diffable",
+        "the file is still read out of one comparison: {line}"
+    );
+}
+
+#[tokio::test]
 async fn a_call_that_panics_still_leaves_its_line() {
     let log = Capture::new();
     let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());

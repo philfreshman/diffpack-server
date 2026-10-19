@@ -3,6 +3,7 @@ pub mod file_diff;
 pub mod registries;
 
 use rmcp::model::{JsonObject, ReadResourceResult, Resource, ResourceTemplate};
+use serde_json::Value;
 
 use crate::error::Failure;
 use crate::handle::DiffHandle;
@@ -15,6 +16,8 @@ pub fn catalogue() -> Vec<Resource> {
 pub fn templates() -> Vec<ResourceTemplate> {
     vec![diff::template(), file_diff::template()]
 }
+
+const PATH: &str = "path";
 
 #[derive(Debug, Clone, Copy)]
 pub enum Address<'a> {
@@ -55,7 +58,12 @@ impl<'a> Address<'a> {
 
     pub fn arguments(self) -> JsonObject {
         match self {
-            Self::Diff { handle } | Self::FileDiff { handle, .. } => inputs_named_in(handle),
+            Self::Diff { handle } => inputs_named_in(handle),
+            Self::FileDiff { handle, path } => {
+                let mut arguments = inputs_named_in(handle);
+                arguments.insert(PATH.to_owned(), Value::from(path));
+                arguments
+            }
             Self::Registries | Self::Nowhere { .. } => JsonObject::new(),
         }
     }
