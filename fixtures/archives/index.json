@@ -53,5 +53,9 @@
   "https://registry.npmjs.org/zod/-/zod-3.25.76.tgz": "zod-3.25.76.tgz",
   "https://registry.npmjs.org/zod/-/zod-4.0.0.tgz": "zod-4.0.0.tgz",
   "https://registry.npmjs.org/zod/-/zod-99.99.99.tgz": null,
-  "https://static.crates.io/crates/not-a-real-crate/not-a-real-crate-1.0.0.crate": null
+  "https://static.crates.io/crates/not-a-real-crate/not-a-real-crate-1.0.0.crate": null,
+
+  "https://proxy.golang.org/github.com/!masterminds/semver/v3/@v/v3.2.0.zip": "semver-v3.2.0.zip",
+  "https://proxy.golang.org/github.com/!masterminds/semver/v3/@v/v3.2.1.zip": "semver-v3.2.1.zip",
+  "https://proxy.golang.org/github.com/go-chi/chi/v5/@v/v5.0.12.zip": "chi-v5.0.12.zip"
 }

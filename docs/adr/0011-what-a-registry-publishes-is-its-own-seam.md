@@ -65,3 +65,13 @@ registry fact testable with no network: `tests/registry.rs` asserts the URL
 npm is asked for, the media type PyPI's index needs and the order a query
 ranks its names in, all without a socket. Putting a request in there would
 trade that for one fewer file.
+
+## Since: #28
+
+The rule that a `404` from a search source is the source having moved holds
+because no search URL here named a package. Go's does: there is no Go search,
+so a Go query is asked of the proxy's `@latest` as a module path, and a `404`
+there is that module not existing. `SearchSource::names_a_package` carries the
+difference, and a search source that names a package answers a `404` with no
+hits. The two seams stay two; see [ADR
+0019](0019-a-go-module-is-ordered-by-version-and-found-by-path.md).

@@ -59,13 +59,14 @@ simpler and impossible to get subtly wrong at a library-version boundary.
 | `from` | string | `"3.25.76"` | The base version. |
 | `ignore_whitespace` | boolean | `false` | Changes statuses and line counts, so it changes the result. |
 | `package` | string | `"zod"` | The package name, verbatim (see *Normalisation*). |
-| `registry` | string | `"npm"` | One of `npm`, `crates`, `pypi`. |
+| `registry` | string | `"npm"` | One of `npm`, `crates`, `pypi`, `go`. |
 | `schema` | number | `1` | The shape of the stored payload. Bumping it invalidates every entry at once. |
 | `similarity_threshold` | string | `"0.7500"` | Rename-detection threshold, as a fixed-precision string (see below). |
 | `to` | string | `"4.0.0"` | The target version. |
 
-`registry` is an open enum in the sense that adding `go` later is additive: a
+`registry` is an open enum in the sense that adding a registry is additive: a
 new value, no schema bump, because the registry is already part of the key.
+`go` arrived that way (#28), and no entry for the other three changed.
 
 The pair is **ordered**. `from` and `to` are not interchangeable: A→B and B→A
 are different diffs and must be different keys.
@@ -125,6 +126,10 @@ supplied them:
 - **No `v`-stripping.** `v4.0.0` and `4.0.0` are different keys.
 - **No scoped-name rewriting for npm.** `@types/node` goes in with the `@` and
   the `/` intact.
+- **No proxy escaping for Go.** `github.com/Masterminds/semver/v3` goes in as
+  typed, capitals and `/v3` included, and not as the proxy's
+  `github.com/!masterminds/semver/v3`: the `!` is how a URL spells a capital,
+  not part of the module's name.
 
 This is deliberate. The cost of being too strict is a cache miss — a diff gets
 recomputed and the result is still correct. The cost of being too loose is

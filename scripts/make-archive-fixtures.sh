@@ -219,4 +219,47 @@ setup(name="sneaky", version="1.0.0")
 '
 targz "sneaky-1.0.0.tar.gz" "sneaky-1.0.0"
 
+go_module_zip() {
+  local out=$1 module=$2 version=$3 tree=$4
+  local staged=$work/go/$out
+  mkdir -p "$(dirname "$staged/$module@$version")"
+  cp -R "$tree" "$staged/$module@$version"
+  find "$staged" -exec touch -t "$STAMP" {} +
+  rm -f "${ARCHIVES:?}/${out}"
+  (cd "$staged" && zip -q -X -D -r "$OLDPWD/${ARCHIVES}/${out}" "${module%%/*}")
+}
+
+semver=$work/semver
+for version in v3.2.0 v3.2.1; do
+  write "$semver/$version/go.mod" 'module github.com/Masterminds/semver/v3
+
+go 1.18
+'
+  write "$semver/$version/constraints.go" 'package semver
+
+func Check() bool { return true }
+'
+  write "$semver/$version/README.md" '# semver
+'
+  write "$semver/$version/version.go" "package semver
+
+const Version = \"${version#v}\"
+"
+done
+write "$semver/v3.2.1/collection.go" 'package semver
+
+type Collection []string
+'
+go_module_zip "semver-v3.2.0.zip" "github.com/Masterminds/semver/v3" "v3.2.0" "$semver/v3.2.0"
+go_module_zip "semver-v3.2.1.zip" "github.com/Masterminds/semver/v3" "v3.2.1" "$semver/v3.2.1"
+
+chi=$work/chi
+write "$chi/go.mod" 'module github.com/go-chi/chi/v5
+
+go 1.20
+'
+write "$chi/chi.go" 'package chi
+'
+go_module_zip "chi-v5.0.12.zip" "github.com/go-chi/chi/v5" "v5.0.12" "$chi"
+
 echo "ok: rebuilt the archives in ${ARCHIVES}/"

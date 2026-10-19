@@ -59,7 +59,7 @@ impl ServerHandler for Diffpack {
         .with_server_info(Implementation::new(NAME, env!("CARGO_PKG_VERSION")))
         .with_instructions(
             "Diff two versions of a published package and read the result. \
-             Works with npm, crates.io and PyPI. Start with `tools/list`: \
+             Works with npm, crates.io, PyPI and Go. Start with `tools/list`: \
              every tool takes a registry, a package name and a version, and \
              names the registry the way that registry does. `resources/list` \
              has the registries described in one document, and a comparison \
