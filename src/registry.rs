@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
@@ -99,18 +100,22 @@ impl Registry {
     pub fn versions(self, package: &str) -> VersionSource {
         let escaped = escape(package);
         match self {
-            Self::Npm => VersionSource {
-                url: format!("https://registry.npmjs.org/{escaped}"),
-            },
-            Self::Crates => VersionSource {
-                url: format!("https://crates.io/api/v1/crates/{escaped}"),
-            },
-            Self::PyPi => VersionSource {
-                url: format!("https://api.deps.dev/v3/systems/pypi/packages/{escaped}"),
-            },
-            Self::Go => VersionSource {
-                url: format!("{GO_PROXY}/{}/@v/list", go_module_path(package)),
-            },
+            Self::Npm => {
+                VersionSource::one_document(format!("https://registry.npmjs.org/{escaped}"))
+            }
+            Self::Crates => {
+                VersionSource::one_document(format!("https://crates.io/api/v1/crates/{escaped}"))
+            }
+            Self::PyPi => VersionSource::one_document(format!(
+                "https://api.deps.dev/v3/systems/pypi/packages/{escaped}"
+            )),
+            Self::Go => {
+                let module = go_module_path(package);
+                VersionSource {
+                    url: format!("{GO_PROXY}/{module}/@v/list"),
+                    current: Some(format!("{GO_PROXY}/{module}/@latest")),
+                }
+            }
         }
     }
 
@@ -212,14 +217,54 @@ impl Registry {
                 (listed, current)
             }
 
-            Self::Go => return None,
+            Self::Go => {
+                let listed = document
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(|version| {
+                        version.starts_with('v').then(|| Version {
+                            prerelease: self.is_prerelease(version),
+                            version: version.to_owned(),
+                            published_at: None,
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                (listed, None)
+            }
         };
 
-        versions.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+        versions.sort_by(|a, b| {
+            b.published_at
+                .cmp(&a.published_at)
+                .then_with(|| self.precedence(&b.version, &a.version))
+        });
         Some(Versions {
             all: versions,
             current,
         })
+    }
+
+    pub fn read_current(self, document: &str) -> Option<Version> {
+        match self {
+            Self::Npm | Self::Crates | Self::PyPi => None,
+            Self::Go => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "PascalCase")]
+                struct Latest {
+                    version: String,
+                    #[serde(default)]
+                    time: Option<String>,
+                }
+
+                let latest: Latest = serde_json::from_str(document).ok()?;
+                Some(Version {
+                    prerelease: self.is_prerelease(&latest.version),
+                    version: latest.version,
+                    published_at: latest.time,
+                })
+            }
+        }
     }
 
     pub fn search(self, query: &str, limit: u32) -> SearchSource {
@@ -343,6 +388,13 @@ impl Registry {
         match self {
             Self::Npm | Self::Crates | Self::Go => &[],
             Self::PyPi => &["files.pythonhosted.org"],
+        }
+    }
+
+    fn precedence(self, left: &str, right: &str) -> Ordering {
+        match self {
+            Self::Npm | Self::Crates | Self::PyPi => Ordering::Equal,
+            Self::Go => GoVersion::parse(left).cmp(&GoVersion::parse(right)),
         }
     }
 
@@ -517,6 +569,14 @@ impl JsonSchema for VersionName {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionSource {
     pub url: String,
+
+    pub current: Option<String>,
+}
+
+impl VersionSource {
+    fn one_document(url: String) -> Self {
+        Self { url, current: None }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -524,6 +584,21 @@ pub struct Versions {
     pub all: Vec<Version>,
 
     pub current: Option<String>,
+}
+
+impl Versions {
+    pub fn pointing_at(self, current: Version) -> Self {
+        let all = if self.all.is_empty() {
+            vec![current.clone()]
+        } else {
+            self.all
+        };
+
+        Self {
+            current: Some(current.version),
+            all,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -606,6 +681,57 @@ fn rank(name: &str, query: &str) -> Option<Rank> {
     } else {
         None
     }
+}
+
+#[derive(PartialEq, Eq)]
+struct GoVersion<'a> {
+    numbers: [u64; 3],
+    prerelease: Option<&'a str>,
+}
+
+impl<'a> GoVersion<'a> {
+    fn parse(version: &'a str) -> Self {
+        let version = version.strip_prefix('v').unwrap_or(version);
+        let without_build = version.split('+').next().unwrap_or_default();
+        let (core, prerelease) = match without_build.split_once('-') {
+            Some((core, prerelease)) => (core, Some(prerelease)),
+            None => (without_build, None),
+        };
+
+        let mut numbers = [0; 3];
+        for (slot, part) in numbers.iter_mut().zip(core.split('.')) {
+            *slot = leading_number(part);
+        }
+
+        Self {
+            numbers,
+            prerelease,
+        }
+    }
+}
+
+impl Ord for GoVersion<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.numbers
+            .cmp(&other.numbers)
+            .then_with(|| match (self.prerelease, other.prerelease) {
+                (None, None) => Ordering::Equal,
+                (None, Some(_)) => Ordering::Greater,
+                (Some(_), None) => Ordering::Less,
+                (Some(left), Some(right)) => left.cmp(right),
+            })
+    }
+}
+
+impl PartialOrd for GoVersion<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn leading_number(part: &str) -> u64 {
+    let digits = part.len() - part.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    part[..digits].parse().unwrap_or_default()
 }
 
 fn pep440_prerelease(version: &str) -> bool {

@@ -10,5 +10,11 @@
   "https://registry.npmjs.org/unreadable": "npm-unreadable.json",
   "https://registry.npmjs.org/untagged": "npm-untagged.json",
   "https://registry.npmjs.org/unpublished-latest": "npm-unpublished-latest.json",
-  "https://registry.npmjs.org/not-a-real-package": null
+  "https://registry.npmjs.org/not-a-real-package": null,
+  "https://proxy.golang.org/github.com/go-chi/chi/@v/list": "go-chi-list.txt",
+  "https://proxy.golang.org/github.com/go-chi/chi/@latest": "go-chi-latest.json",
+  "https://proxy.golang.org/golang.org/x/exp/@v/list": "go-exp-list.txt",
+  "https://proxy.golang.org/golang.org/x/exp/@latest": "go-exp-latest.json",
+  "https://proxy.golang.org/github.com/not-a-real/module/@v/list": null,
+  "https://proxy.golang.org/github.com/not-a-real/module/@latest": null
 }

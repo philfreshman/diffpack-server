@@ -129,6 +129,21 @@ fn every_registry_says_how_to_reach_a_version_archive() {
         },
         "PyPI's archive URL is in the version's metadata, so that is the first hop"
     );
+    assert_eq!(
+        source(Registry::Go, "github.com/Masterminds/semver/v3", "v3.2.1"),
+        ArchiveSource::Archive {
+            url: "https://proxy.golang.org/github.com/!masterminds/semver/v3/@v/v3.2.1.zip"
+                .to_owned()
+        },
+        "the proxy serves a module path lower-cased, each capital marked with `!`"
+    );
+    assert_eq!(
+        source(Registry::Go, "github.com/go-chi/chi/v5", "v5.0.12"),
+        ArchiveSource::Archive {
+            url: "https://proxy.golang.org/github.com/go-chi/chi/v5/@v/v5.0.12.zip".to_owned()
+        },
+        "a major-version suffix is part of the module path, not a version"
+    );
 }
 
 #[test]
@@ -165,6 +180,7 @@ fn every_registry_says_where_its_versions_are_listed() {
         Registry::Npm.versions("zod"),
         VersionSource {
             url: "https://registry.npmjs.org/zod".to_owned(),
+            current: None,
         }
     );
     assert_eq!(
@@ -176,14 +192,32 @@ fn every_registry_says_where_its_versions_are_listed() {
         Registry::Crates.versions("serde"),
         VersionSource {
             url: "https://crates.io/api/v1/crates/serde".to_owned(),
+            current: None,
         }
     );
     assert_eq!(
         Registry::PyPi.versions("requests"),
         VersionSource {
             url: "https://api.deps.dev/v3/systems/pypi/packages/requests".to_owned(),
+            current: None,
         },
         "PyPI's own index is not a version list a client can read, so deps.dev is the source"
+    );
+    assert_eq!(
+        Registry::Go.versions("github.com/Masterminds/semver/v3"),
+        VersionSource {
+            url: "https://proxy.golang.org/github.com/!masterminds/semver/v3/@v/list".to_owned(),
+            current: Some(
+                "https://proxy.golang.org/github.com/!masterminds/semver/v3/@latest".to_owned()
+            ),
+        },
+        "the proxy's version list names versions and nothing else, so the version \
+         `go get` installs is asked of `@latest` beside it"
+    );
+    assert_eq!(
+        Registry::Go.versions("example.com/a module?#").url,
+        "https://proxy.golang.org/example.com/a%20module%3F%23/@v/list",
+        "a module path keeps its slashes, and anything that would end the path is escaped"
     );
 }
 
