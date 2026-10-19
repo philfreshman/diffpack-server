@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,7 +17,7 @@ const DEADLINE: Duration = Duration::from_millis(50);
 
 const LONGER_THAN_THE_DEADLINE: Duration = Duration::from_secs(1);
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_call_that_outlasts_its_deadline_is_answered_rather_than_waited_on() {
     let log = Capture::new();
     let ctx = Ctx::fixture(FIXTURES)
@@ -44,6 +45,7 @@ async fn a_call_that_outlasts_its_deadline_is_answered_rather_than_waited_on() {
     assert_eq!(failure.kind(), "out_of_time");
 
     let lines = log.lines();
+    assert_eq!(lines.len(), 1, "one call, one line: {lines:?}");
     let line: Value = serde_json::from_str(&lines[0]).expect("a line is JSON");
     assert_eq!(
         line["result"], "out_of_time",
@@ -82,21 +84,34 @@ async fn work_that_holds_a_thread_is_still_answered_when_the_deadline_passes() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn extracting_an_archive_lets_the_runtime_get_on_with_other_work() {
-    let other_work_ran = Arc::new(AtomicBool::new(false));
-    tokio::spawn({
-        let other_work_ran = Arc::clone(&other_work_ran);
-        async move { other_work_ran.store(true, Ordering::SeqCst) }
-    });
+    let archives = Archive::fixture(format!("{FIXTURES}/archives"));
 
-    Archive::fixture(format!("{FIXTURES}/archives"))
-        .fetch(Registry::Npm, "diffable", "1.0.0")
-        .await
-        .expect("the fixture set has this archive");
-
+    let ran_while_refusing = ran_during(archives.fetch(Registry::Npm, "diffable", "9.9.9")).await;
     assert!(
-        other_work_ran.load(Ordering::SeqCst),
+        !ran_while_refusing,
+        "a fetch that extracts nothing must not give the thread up, or the assertion \
+         below would hold whether or not extraction does"
+    );
+
+    let ran_while_extracting = ran_during(archives.fetch(Registry::Npm, "diffable", "1.0.0")).await;
+    assert!(
+        ran_while_extracting,
         "on one thread, a task spawned before the fetch runs during it only if the \
          extraction gave the thread up, which is what lets a call's deadline pass \
          while an archive is still being read"
     );
+}
+
+async fn ran_during(work: impl Future) -> bool {
+    let other_work_ran = Arc::new(AtomicBool::new(false));
+    let other_work = tokio::spawn({
+        let other_work_ran = Arc::clone(&other_work_ran);
+        async move { other_work_ran.store(true, Ordering::SeqCst) }
+    });
+
+    work.await;
+    let ran = other_work_ran.load(Ordering::SeqCst);
+
+    other_work.await.expect("the other work finishes");
+    ran
 }
