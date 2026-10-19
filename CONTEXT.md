@@ -528,11 +528,14 @@ _Avoid_: token, offset, page number
 
 **Cap**:
 How many bytes a caller asks one Excerpt for — `max_bytes`, and the Limit's
-opposite number on the blob-shaped half. It is the same kind of politeness
-and the same kind of not-protection: it can only ask for *less* than the
-Response ceiling already allows, because the ceiling is the platform's and
-not a caller's to raise. Omitting it means the ceiling alone, which is what
-makes a long file come back cut whether or not anyone asked.
+opposite number on the blob-shaped half. Like the Limit it is filled in when
+absent, by `src/page.rs`: the default is small enough that a client which
+refuses a large tool result still hands the answer to its model whole. A
+caller can ask for more than the default but not for more than the Response
+ceiling allows, because the ceiling is the platform's and not a caller's to
+raise. So a long file comes back cut whether or not anyone asked, and a larger
+Cap is the only way to see further into it: an Excerpt always starts at the
+beginning.
 _Avoid_: max bytes (as a concept), truncation limit, size (unqualified)
 
 **Limit**:

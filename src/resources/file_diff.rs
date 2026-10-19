@@ -5,6 +5,7 @@ use rmcp::model::{CacheScope, ReadResourceResult, ResourceContents, ResourceTemp
 use crate::engine::DiffFileEntry;
 use crate::error::Failure;
 use crate::handle::DiffHandle;
+use crate::page;
 use crate::tools::get_file_diff::{self, OneFile};
 use crate::tools::{diff_package_versions, get_diff_tree, Call};
 
@@ -53,7 +54,7 @@ pub async fn read(
         path: &wanted,
         old_path: moved.as_deref(),
         context_lines: get_file_diff::ContextLines::default(),
-        max_bytes: None,
+        max_bytes: page::MaxBytes::CEILING,
     };
 
     let patch = comparison.file_patch(call, asked).await?;

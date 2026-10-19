@@ -75,6 +75,12 @@ async fn the_description_says_what_an_agent_would_otherwise_get_wrong() {
         "a binary file comes back decoded rather than refused, which reads as \
          a corrupt file to an agent that was not told: got {description}"
     );
+    assert!(
+        description.contains("max_bytes") && description.contains("beginning"),
+        "a long file is cut at a default, and an agent that was not told how to \
+         read more either trusts the cut or offers to read on from where it \
+         stopped, which no argument here can do: got {description}"
+    );
 }
 
 #[tokio::test]
@@ -88,12 +94,42 @@ async fn the_cap_argument_documents_the_number_that_binds() {
         "got {max_bytes}"
     );
     assert_eq!(max_bytes["minimum"], json!(1), "got {max_bytes}");
+    assert_eq!(
+        max_bytes["default"],
+        json!(page::DEFAULT_MAX_BYTES),
+        "the default in the schema is the cut a caller gets by omitting the \
+         argument, which `a_long_file_is_cut_at_the_default_when_no_cap_is_asked_for` \
+         holds from the other end: got {max_bytes}"
+    );
     assert!(
         max_bytes["description"]
             .as_str()
             .is_some_and(|said| said.contains("narrowed")),
         "the description is the one the response module writes, and a doc \
          comment here would silently replace it: got {max_bytes}"
+    );
+}
+
+#[tokio::test]
+async fn the_cap_argument_says_how_to_read_more_without_promising_an_offset() {
+    let tool = listed(TOOL).await;
+    let described = tool["inputSchema"]["properties"]["max_bytes"]["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the argument carries a description, got {tool}"))
+        .to_owned();
+
+    assert!(
+        described.contains(&page::DEFAULT_MAX_BYTES.to_string()),
+        "a model that omits the argument should know how much it gets: got {described}"
+    );
+    assert!(
+        described.contains("`truncated`"),
+        "the field that says there is more is the one to name: got {described}"
+    );
+    assert!(
+        described.contains("beginning"),
+        "there is no offset, so a larger cap reads from the start again, and a \
+         model that was not told offers to read on from where it stopped: got {described}"
     );
 }
 
@@ -206,12 +242,61 @@ async fn a_file_that_fits_comes_back_whole_and_says_it_was_not_cut() {
 }
 
 #[tokio::test]
-async fn a_file_larger_than_a_response_is_cut_without_being_asked() {
+async fn a_long_file_is_cut_at_the_default_when_no_cap_is_asked_for() {
     let result = call(json!({
         "registry": "npm",
         "package": "odd-files",
         "version": "1.0.0",
         "path": "big.txt",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["truncated"],
+        json!(true),
+        "two megabytes are far over the default, got {result}"
+    );
+    assert_eq!(
+        shown_before_the_marker(&result),
+        page::DEFAULT_MAX_BYTES,
+        "an answer a client can hand a model in one piece, unless the model \
+         asks for more"
+    );
+    assert_eq!(
+        result["structuredContent"]["bytes"],
+        json!(2_000_000),
+        "the file's whole size, so an agent knows how much it has not seen"
+    );
+}
+
+#[tokio::test]
+async fn a_cap_above_the_default_reads_more_of_the_file() {
+    let asked = page::DEFAULT_MAX_BYTES * 4;
+
+    let result = call(json!({
+        "registry": "npm",
+        "package": "odd-files",
+        "version": "1.0.0",
+        "path": "big.txt",
+        "max_bytes": asked,
+    }))
+    .await;
+
+    assert_eq!(
+        shown_before_the_marker(&result),
+        asked,
+        "the default is where a cut falls when nobody asked, not a ceiling"
+    );
+}
+
+#[tokio::test]
+async fn a_cap_above_what_fits_in_a_response_is_narrowed_to_it() {
+    let result = call(json!({
+        "registry": "npm",
+        "package": "odd-files",
+        "version": "1.0.0",
+        "path": "big.txt",
+        "max_bytes": u64::MAX,
     }))
     .await;
 
@@ -380,7 +465,7 @@ async fn the_handler_answers_with_a_typed_excerpt() {
             package: PackageName::new("serde"),
             version: VersionName::new("1.0.0"),
             path: "src/lib.rs".to_owned(),
-            max_bytes: None,
+            max_bytes: page::MaxBytes::default(),
         },
         &Call::new(&Ctx::fixture(FIXTURES)),
     )
@@ -406,7 +491,7 @@ async fn the_handler_returns_the_failure_that_says_the_path_is_a_directory() {
             package: PackageName::new("serde"),
             version: VersionName::new("1.0.0"),
             path: "src".to_owned(),
-            max_bytes: None,
+            max_bytes: page::MaxBytes::default(),
         },
         &Call::new(&Ctx::fixture(FIXTURES)),
     )
@@ -427,7 +512,7 @@ async fn the_handler_returns_the_failure_that_names_the_absent_path() {
             package: PackageName::new("serde"),
             version: VersionName::new("1.0.0"),
             path: "src/nowhere.rs".to_owned(),
-            max_bytes: None,
+            max_bytes: page::MaxBytes::default(),
         },
         &Call::new(&Ctx::fixture(FIXTURES)),
     )
@@ -446,6 +531,15 @@ async fn the_handler_returns_the_failure_that_names_the_absent_path() {
         }
         other => panic!("an absent path should say so, got {other:?}"),
     }
+}
+
+fn shown_before_the_marker(result: &Value) -> usize {
+    let text = result["structuredContent"]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the answer carries the text, got {result}"));
+
+    text.find("\n[truncated by diffpack")
+        .unwrap_or_else(|| panic!("a cut answer carries its marker, got {} bytes", text.len()))
 }
 
 async fn listed(name: &str) -> Value {
