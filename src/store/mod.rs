@@ -11,7 +11,7 @@ use vercel_runtime::{AppState, LogContext};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cache_key::DiffKey;
+use crate::cache_key::{DiffId, DiffKey};
 use crate::engine::{DiffFileEntry, Patch};
 use crate::error::Failure;
 use crate::log::{Note, Sink};
@@ -182,14 +182,32 @@ impl DiffStore {
     }
 
     pub async fn get(&self, key: &DiffKey) -> Option<Entry> {
-        let meta = self.read(&key.meta_path()).await?;
-        let meta: Meta = serde_json::from_slice(&meta).ok()?;
+        let meta = self.meta_at(&key.meta_path()).await?;
 
         if &meta.key != key {
             return None;
         }
 
-        let patches = match self.read(&key.patches_path()).await {
+        self.entry_from(meta, &key.patches_path()).await
+    }
+
+    pub async fn get_by_id(&self, diff_id: &DiffId) -> Option<Entry> {
+        let meta = self.meta_at(&diff_id.meta_path()).await?;
+
+        if meta.key.diff_id() != diff_id.as_str() {
+            return None;
+        }
+
+        self.entry_from(meta, &diff_id.patches_path()).await
+    }
+
+    async fn meta_at(&self, pathname: &str) -> Option<Meta> {
+        let meta = self.read(pathname).await?;
+        serde_json::from_slice(&meta).ok()
+    }
+
+    async fn entry_from(&self, meta: Meta, patches_path: &str) -> Option<Entry> {
+        let patches = match self.read(patches_path).await {
             Some(bytes) => serde_json::from_slice(&bytes).ok()?,
             None if meta.patches_omitted => BTreeMap::new(),
             None => return None,
