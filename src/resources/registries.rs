@@ -107,12 +107,17 @@ impl Archive {
 #[derive(Serialize)]
 struct Versions {
     url_pattern: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_url_pattern: Option<String>,
 }
 
 impl Versions {
     fn of(registry: Registry) -> Self {
+        let source = registry.versions(&package());
         Self {
-            url_pattern: named(&registry.versions(&package()).url),
+            url_pattern: named(&source.url),
+            current_url_pattern: source.current.as_deref().map(named),
         }
     }
 }

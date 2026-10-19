@@ -2,7 +2,7 @@ mod common;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use common::{Client, PREVIOUS};
+use common::{names, Client, PREVIOUS};
 use diffpack_server::handle::{DiffHandle, Inputs};
 use diffpack_server::page;
 use diffpack_server::registry::{ArchiveSource, Registry, VERSION_RULE};
@@ -78,7 +78,7 @@ async fn the_registry_catalogue_is_listed() {
     let description = catalogue["description"].as_str().unwrap_or_default();
     for registry in Registry::ALL {
         assert!(
-            description.contains(registry.name()),
+            names(description, registry.name()),
             "the description says which registries the catalogue holds, so it \
              should name {}: got {description}",
             registry.name()
@@ -241,16 +241,30 @@ async fn the_catalogue_is_the_registry_module_rather_than_a_copy_of_it() {
             "filling `{id}`'s archive pattern in should give the URL the module builds"
         );
 
+        let versions = registry.versions(PACKAGE);
+        let mut expected = vec!["url_pattern"];
+        if versions.current.is_some() {
+            expected.insert(0, "current_url_pattern");
+        }
         assert_eq!(
             fields(&described["versions"]),
-            vec!["url_pattern"],
-            "got {described}"
+            expected,
+            "a registry whose Current version is a second document says where, \
+             and no other does: got {described}"
         );
         assert_eq!(
             filled(&described["versions"]["url_pattern"]),
-            registry.versions(PACKAGE).url,
+            versions.url,
             "filling `{id}`'s versions pattern in should give the URL the module builds"
         );
+        if let Some(current) = versions.current {
+            assert_eq!(
+                filled(&described["versions"]["current_url_pattern"]),
+                current,
+                "filling `{id}`'s current-version pattern in should give the URL \
+                 the module builds"
+            );
+        }
 
         let search = registry.search(QUERY, LIMIT);
         assert_eq!(
