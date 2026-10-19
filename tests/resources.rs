@@ -130,8 +130,8 @@ async fn the_catalogue_names_every_registry_and_where_its_archives_are() {
         .collect();
     assert_eq!(
         ids,
-        vec!["npm", "crates", "pypi"],
-        "all three registries should be described, got {catalogue}"
+        vec!["npm", "crates", "pypi", "go"],
+        "all four registries should be described, got {catalogue}"
     );
 
     let patterns: Vec<&str> = described
@@ -144,6 +144,7 @@ async fn the_catalogue_names_every_registry_and_where_its_archives_are() {
             "https://registry.npmjs.org/{package}/-/{package-without-scope}-{version}.tgz",
             "https://static.crates.io/crates/{package}/{package}-{version}.crate",
             "https://pypi.org/pypi/{package}/{version}/json",
+            "https://proxy.golang.org/{package}/@v/{version}.zip",
         ],
         "each registry should say where a version's archive comes from, got {catalogue}"
     );

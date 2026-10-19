@@ -12,16 +12,23 @@ pub enum Registry {
     Npm,
     Crates,
     PyPi,
+    Go,
 }
 
 impl Registry {
-    pub const ALL: [Registry; 3] = [Registry::Npm, Registry::Crates, Registry::PyPi];
+    pub const ALL: [Registry; 4] = [
+        Registry::Npm,
+        Registry::Crates,
+        Registry::PyPi,
+        Registry::Go,
+    ];
 
     pub fn id(self) -> &'static str {
         match self {
             Self::Npm => "npm",
             Self::Crates => "crates",
             Self::PyPi => "pypi",
+            Self::Go => "go",
         }
     }
 
@@ -34,6 +41,7 @@ impl Registry {
             Self::Npm => "npm",
             Self::Crates => "crates.io",
             Self::PyPi => "PyPI",
+            Self::Go => "Go",
         }
     }
 
@@ -62,6 +70,11 @@ impl Registry {
                            normalisation is applied, so `Typing.Extensions` keeps its \
                            case and its dot."
             }
+            Self::Go => {
+                "A module path is spelled in full, its major-version suffix \
+                           included: `github.com/go-chi/chi/v5`, not `github.com/go-chi/chi` \
+                           and not `chi`. Case is kept: `github.com/Masterminds/semver/v3`."
+            }
         }
     }
 
@@ -70,6 +83,7 @@ impl Registry {
             Self::Npm => "`package.json`",
             Self::Crates => "`Cargo.toml`",
             Self::PyPi => "`PKG-INFO`, `pyproject.toml` or `setup.py`",
+            Self::Go => "`go.mod`",
         }
     }
 
@@ -78,6 +92,7 @@ impl Registry {
             Self::Npm => "Node.js",
             Self::Crates => "Rust",
             Self::PyPi => "Python",
+            Self::Go => "Go",
         }
     }
 
@@ -92,6 +107,9 @@ impl Registry {
             },
             Self::PyPi => VersionSource {
                 url: format!("https://api.deps.dev/v3/systems/pypi/packages/{escaped}"),
+            },
+            Self::Go => VersionSource {
+                url: format!("{GO_PROXY}/{}/@v/list", go_module_path(package)),
             },
         }
     }
@@ -193,6 +211,8 @@ impl Registry {
                     .collect::<Vec<_>>();
                 (listed, current)
             }
+
+            Self::Go => return None,
         };
 
         versions.sort_by(|a, b| b.published_at.cmp(&a.published_at));
@@ -225,6 +245,11 @@ impl Registry {
                 "https://pypi.org/simple/".to_owned(),
                 "application/vnd.pypi.simple.v1+json",
                 true,
+            ),
+            Self::Go => (
+                format!("{GO_PROXY}/{}/@latest", go_module_path(query)),
+                "application/json",
+                false,
             ),
         };
         SearchSource {
@@ -289,6 +314,8 @@ impl Registry {
                     })
                     .collect()
             }
+
+            Self::Go => return None,
         };
 
         Some(hits.into_iter().take(limit as usize).collect())
@@ -314,7 +341,7 @@ impl Registry {
 
     fn listed_hosts(self) -> &'static [&'static str] {
         match self {
-            Self::Npm | Self::Crates => &[],
+            Self::Npm | Self::Crates | Self::Go => &[],
             Self::PyPi => &["files.pythonhosted.org"],
         }
     }
@@ -323,7 +350,7 @@ impl Registry {
         let version = version.split('+').next().unwrap_or_default();
 
         match self {
-            Self::Npm | Self::Crates => version.contains('-'),
+            Self::Npm | Self::Crates | Self::Go => version.contains('-'),
             Self::PyPi => pep440_prerelease(version),
         }
     }
@@ -602,13 +629,29 @@ fn pep440_prerelease(version: &str) -> bool {
     })
 }
 
+const GO_PROXY: &str = "https://proxy.golang.org";
+
+fn go_module_path(module: &str) -> String {
+    const PATH_SEPARATOR_AND_CASE_MARK: &[u8] = b"/!";
+
+    escape_keeping(
+        &engine::escape_go_module_path(module),
+        PATH_SEPARATOR_AND_CASE_MARK,
+    )
+}
+
 fn escape(text: &str) -> String {
+    escape_keeping(text, &[])
+}
+
+fn escape_keeping(text: &str, kept: &[u8]) -> String {
     let mut escaped = String::with_capacity(text.len());
     for byte in text.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
                 escaped.push(char::from(byte))
             }
+            kept_byte if kept.contains(&kept_byte) => escaped.push(char::from(kept_byte)),
             other => escaped.push_str(&format!("%{other:02X}")),
         }
     }

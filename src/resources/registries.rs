@@ -141,10 +141,10 @@ impl Search {
     }
 }
 
-const SCOPE: &str = "SCOPEPLACEHOLDER";
-const NAME: &str = "NAMEPLACEHOLDER";
-const VERSION: &str = "VERSIONPLACEHOLDER";
-const QUERY: &str = "QUERYPLACEHOLDER";
+const SCOPE: &str = "scopeplaceholder";
+const NAME: &str = "nameplaceholder";
+const VERSION: &str = "versionplaceholder";
+const QUERY: &str = "queryplaceholder";
 
 fn package() -> String {
     format!("{SCOPE}/{NAME}")

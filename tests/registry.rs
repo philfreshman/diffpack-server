@@ -9,8 +9,13 @@ fn every_registry_carries_the_identifier_and_the_name_it_is_known_by() {
 
     assert_eq!(
         known,
-        vec![("npm", "npm"), ("crates", "crates.io"), ("pypi", "PyPI")],
-        "the three registries of CONTEXT.md, in the order a catalogue lists them"
+        vec![
+            ("npm", "npm"),
+            ("crates", "crates.io"),
+            ("pypi", "PyPI"),
+            ("go", "Go")
+        ],
+        "the four registries of CONTEXT.md, in the order a catalogue lists them"
     );
 }
 
@@ -36,9 +41,9 @@ fn a_registry_parses_from_its_identifier_and_nothing_else() {
         "nothing here is normalised, case included"
     );
     assert_eq!(
-        Registry::from_id("go"),
+        Registry::from_id("golang"),
         None,
-        "Go is #28's to add, and until it is added it is not a registry"
+        "Go's identifier is `go`, the one the cache key and the web app use"
     );
 }
 
@@ -61,8 +66,8 @@ fn a_registry_serialises_as_the_identifier_it_parses_from() {
 
 #[test]
 fn an_unknown_identifier_is_refused_by_naming_the_ones_that_exist() {
-    let refusal = serde_json::from_value::<Registry>(serde_json::json!("go"))
-        .expect_err("`go` is #28's to add")
+    let refusal = serde_json::from_value::<Registry>(serde_json::json!("maven"))
+        .expect_err("Maven is not a registry this server knows")
         .to_string();
 
     for known in Registry::ALL {
@@ -84,7 +89,7 @@ fn the_schema_lists_exactly_the_registries_this_server_has() {
     );
     assert_eq!(
         schema["enum"],
-        serde_json::json!(["npm", "crates", "pypi"]),
+        serde_json::json!(["npm", "crates", "pypi", "go"]),
         "the schema's values are the identifiers, in the catalogue's order"
     );
 }

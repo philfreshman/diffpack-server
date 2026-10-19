@@ -205,7 +205,7 @@ async fn a_registry_outside_the_enum_is_refused_by_naming_the_ones_that_exist() 
             "method": "tools/call",
             "params": {
                 "name": TOOL,
-                "arguments": { "registry": "go", "package": "logrus", "version": "1.9.3" },
+                "arguments": { "registry": "maven", "package": "junit", "version": "4.13.2" },
             },
         }))
         .await;
@@ -218,7 +218,7 @@ async fn a_registry_outside_the_enum_is_refused_by_naming_the_ones_that_exist() 
     let message = answer["error"]["message"]
         .as_str()
         .expect("a protocol error carries a message");
-    for known in ["npm", "crates", "pypi"] {
+    for known in ["npm", "crates", "pypi", "go"] {
         assert!(
             message.contains(known),
             "the refusal should name `{known}`, got {message}"
