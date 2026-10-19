@@ -544,11 +544,40 @@ async fn a_uri_that_addresses_nothing_is_written_as_itself_and_redacted() {
         "and the line says nothing answered it: {line}"
     );
 
-    assert!(
-        !lines[1].contains(signed),
-        "a URI is the caller's text and goes through the same redaction: {}",
-        lines[1]
+    let line = parse(&lines[1]);
+    assert_eq!(
+        line["resource"], "https://blob.vercel-storage.com/diffs/abc?[redacted]",
+        "a URI is the caller's text and goes through the same redaction: {line}"
     );
+}
+
+#[tokio::test]
+async fn a_read_that_needs_no_handle_or_cannot_decode_one_has_no_arguments() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    read(&client, "diffpack://registries").await;
+    read(&client, "diffpack://diff/not-a-handle").await;
+
+    let lines = log.lines();
+    let expected = [
+        ("registries", "ok", "the registries document takes nothing"),
+        (
+            "diff",
+            "invalid_params",
+            "a handle that does not decode carries no inputs to name",
+        ),
+    ];
+    assert_eq!(lines.len(), 2, "two reads, two lines: {lines:?}");
+    for (line, (resource, result, why)) in lines.iter().map(|line| parse(line)).zip(expected) {
+        assert_eq!(line["resource"], resource, "{why}: {line}");
+        assert_eq!(line["args"], json!({}), "{why}: {line}");
+        assert_eq!(line["result"], result, "{why}: {line}");
+        assert_eq!(
+            line.get("cache"),
+            None,
+            "neither read asked the store: {line}"
+        );
+    }
 }
 
 #[tokio::test]
