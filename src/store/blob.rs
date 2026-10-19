@@ -11,6 +11,8 @@ const API_VERSION: &str = "12";
 
 const API_BASE: &str = "https://vercel.com/api/blob";
 
+const STORE_ACCESS: &str = "private";
+
 const ATTEMPTS: u32 = 3;
 
 const BACKOFF: Duration = Duration::from_millis(200);
@@ -130,7 +132,7 @@ impl Api {
             .request(Method::PUT, url)?
             .header("x-add-random-suffix", "0")
             .header("x-allow-overwrite", "0")
-            .header("x-vercel-blob-access", "public")
+            .header("x-vercel-blob-access", STORE_ACCESS)
             .body(body);
 
         let response = self.send(request, DOING).await?;
@@ -536,7 +538,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_write_declares_the_access_the_api_will_not_assume() {
+    async fn a_write_declares_the_private_access_the_store_is_provisioned_with() {
         let stub = Stub::start().await;
         let api = Api::at(stub.base(), "a-test-store", "a-token");
 
@@ -544,7 +546,11 @@ mod tests {
             .await
             .expect("the stub answers the way the API does");
 
-        assert_eq!(stub.received().header("x-vercel-blob-access"), "public");
+        assert_eq!(
+            stub.received().header("x-vercel-blob-access"),
+            "private",
+            "the store is private, and it refuses a write that asks for public access"
+        );
     }
 
     #[tokio::test]
