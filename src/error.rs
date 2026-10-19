@@ -133,6 +133,8 @@ pub enum Failure {
     Internal {
         doing: &'static str,
     },
+
+    Panicked,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -193,6 +195,8 @@ impl Failure {
             | Self::NoSuchPrompt { .. } => Channel::Protocol(ErrorCode::INVALID_PARAMS),
 
             Self::Internal { .. } => Channel::Protocol(INTERNAL_FAILURE),
+
+            Self::Panicked => Channel::Protocol(ErrorCode::INTERNAL_ERROR),
         }
     }
 
@@ -220,6 +224,7 @@ impl Failure {
             Self::NoSuchResource { .. } => "no_such_resource",
             Self::NoSuchPrompt { .. } => "no_such_prompt",
             Self::Internal { .. } => "internal",
+            Self::Panicked => "panicked",
         }
     }
 
@@ -387,6 +392,7 @@ impl Failure {
             Self::InvalidParams { message } => format!("Invalid parameters: {}", redact(message)),
             Self::NoSuchResource { uri } => format!("No resource at `{}`.", redact(uri)),
             Self::Internal { doing } => format!("diffpack failed while {doing}."),
+            Self::Panicked => "diffpack failed while answering this call.".to_owned(),
             Self::NoSuchTool { name } => format!("No tool named `{}`.", redact(name)),
             Self::NoSuchPrompt { name } => format!("No prompt named `{}`.", redact(name)),
         }

@@ -3,9 +3,10 @@ use std::time::{Duration, Instant};
 mod common;
 
 use common::{Client, FIXTURES};
-use diffpack_server::log::{Capture, Spent};
+use diffpack_server::error::Failure;
+use diffpack_server::log::{Capture, Line, Spent};
 use diffpack_server::store::{DiffStore, Memory};
-use diffpack_server::tools::Ctx;
+use diffpack_server::tools::{self, Ctx};
 use serde_json::{json, Value};
 
 #[tokio::test]
@@ -455,6 +456,39 @@ async fn a_resource_read_leaves_no_line_until_26_says_what_it_holds() {
         "diff_package_versions",
         "the one line is the tool call's: {}",
         lines[0]
+    );
+}
+
+#[tokio::test]
+async fn a_call_that_panics_still_leaves_its_line() {
+    let log = Capture::new();
+    let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
+
+    let answer = tools::run(
+        &ctx,
+        Line::new("get_diff_tree"),
+        async |_| -> Result<(), Failure> {
+            panic!("deliberately panicking, so that the dispatch has something to catch")
+        },
+    )
+    .await;
+
+    let line = one(&log);
+    assert_eq!(
+        line["tool"], "get_diff_tree",
+        "the call that crashed is the one an incident asks about: {line}"
+    );
+    assert_eq!(
+        line["result"], "panicked",
+        "a panic is its own cause, not an internal failure a handler returned: {line}"
+    );
+
+    let refused = answer
+        .expect_err("a call that panicked has no answer to give")
+        .refuse();
+    assert_eq!(
+        refused.code.0, -32603,
+        "a panic is JSON-RPC's own internal error, as it was before the dispatch caught it"
     );
 }
 
