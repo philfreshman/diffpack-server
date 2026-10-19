@@ -120,10 +120,6 @@ impl Blobs {
 }
 
 impl DiffStore {
-    pub fn live() -> Self {
-        Self::live_for(&RequestHeaders::new())
-    }
-
     pub fn live_for(request: &RequestHeaders) -> Self {
         let source = match blob::Credentials::from_request(request) {
             Ok(credentials) => Source::Blobs(Blobs::Live(blob::Api::live(credentials))),

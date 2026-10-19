@@ -35,7 +35,7 @@ pub const TOOL_LIST_TTL_MS: u64 = 60 * 60 * 1000;
 
 #[derive(Debug, Clone, Default)]
 pub struct Diffpack {
-    ctx: Seams,
+    seams: Seams,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -52,12 +52,12 @@ impl Diffpack {
 
     pub fn with_ctx(ctx: Ctx) -> Self {
         Self {
-            ctx: Seams::Given(ctx),
+            seams: Seams::Given(ctx),
         }
     }
 
     fn ctx_for(&self, context: &RequestContext<RoleServer>) -> Ctx {
-        match &self.ctx {
+        match &self.seams {
             Seams::Given(ctx) => ctx.clone(),
             Seams::LiveForEachRequest => match context.extensions.get::<Parts>() {
                 Some(request) => Ctx::for_request(&request.headers),
