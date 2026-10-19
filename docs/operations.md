@@ -44,7 +44,7 @@ and uses `VERCEL_OIDC_TOKEN` from `vercel env pull`, or a
 `BLOB_READ_WRITE_TOKEN`.
 
 The store is built for each tool call and resource read from that request's
-headers, and keeps the token for its write after the response. Vercel's
+headers, and uses the token for the write it makes before the answer. Vercel's
 documentation does not say whether a header of that name sent by a client
 survives to the function. Either way, a forged one can only fail: the Blob API
 verifies the token and scopes it to this project, the store is built per
