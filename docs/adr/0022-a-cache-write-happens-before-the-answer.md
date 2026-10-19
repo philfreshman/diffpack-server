@@ -55,8 +55,9 @@ weaker evidence than the count; the laptop run is what separates the two.
 
 - **Keep `waitUntil` and wait for the runtime to support it.** Nothing
   writes in the meantime. If a later `vercel_runtime` signals pending work to
-  the platform, moving the write back is a change to `put`, three tests in
-  `tests/store.rs`, and this record.
+  the platform, moving the write back is a change to `put`, to the suite's
+  direct assertions on what the store holds when an answer arrives, and to
+  this record.
 - **Answer first and write in the same request through a streamed
   response.** The answer is one JSON-RPC message. Holding its connection open
   after the body is sent is the same bet on the platform as `waitUntil`, with

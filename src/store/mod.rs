@@ -237,6 +237,10 @@ impl DiffStore {
 
     pub async fn put(&self, entry: Entry, left_to_write: Duration) {
         let deadline = self.write_deadline.min(left_to_write);
+        if deadline.is_zero() {
+            self.gave_up::<()>(DROPPED);
+            return;
+        }
 
         if tokio::time::timeout(deadline, self.writing(entry))
             .await

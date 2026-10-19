@@ -785,10 +785,11 @@ method has a `Result`, and what would have been one is a line in the log
 instead. **An entry is the unit**: `meta.json` and `patches.json` go together,
 because half of one is not a hit and the only right answer to half is the one
 this module already gives. And **a write happens before the answer**, with a
-deadline of its own, `WRITE_DEADLINE`: Vercel's Rust runtime gives a function
-no time after its response, so a write left for later is never made, and a
-write that outlasts its deadline is dropped with a Note rather than holding the
-answer ([ADR 0022](adr/0022-a-cache-write-happens-before-the-answer.md)).
+deadline of its own, the shorter of `WRITE_DEADLINE` and the time the call has
+left less a second to answer in: Vercel's Rust runtime gives a function no time
+after its response, so a write left for later is never made, and a write that
+outlasts its deadline is dropped with a Note rather than holding the answer
+([ADR 0022](adr/0022-a-cache-write-happens-before-the-answer.md)).
 
 Two caps are the store's too — 256 KiB on one file's patch, 8 MiB on one
 entry — and both are fields rather than constants read where they are used, so

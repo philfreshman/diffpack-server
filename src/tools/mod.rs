@@ -150,7 +150,7 @@ pub struct Call {
 
     lookup: Lookup,
 
-    answer_due: Instant,
+    answer_due: tokio::time::Instant,
 }
 
 impl Call {
@@ -159,7 +159,7 @@ impl Call {
             ctx: ctx.clone(),
             spent: Spent::new(),
             lookup: Lookup::default(),
-            answer_due: Instant::now() + ctx.deadline,
+            answer_due: tokio::time::Instant::now() + ctx.deadline,
         }
     }
 
@@ -217,7 +217,7 @@ impl<S> Copy for Timed<'_, S> {}
 pub struct Recorded<'a> {
     store: &'a DiffStore,
     lookup: &'a Lookup,
-    answer_due: Instant,
+    answer_due: tokio::time::Instant,
 }
 
 impl Recorded<'_> {
@@ -247,7 +247,7 @@ impl Recorded<'_> {
     pub async fn put(self, entry: Entry) {
         let left_to_write = self
             .answer_due
-            .saturating_duration_since(Instant::now())
+            .saturating_duration_since(tokio::time::Instant::now())
             .saturating_sub(TIME_TO_ANSWER_AFTER_A_WRITE);
 
         self.store.put(entry, left_to_write).await;
@@ -363,7 +363,7 @@ pub async fn run<T>(
 
     let guarded = AssertUnwindSafe(work(&call)).catch_unwind();
 
-    let answer = match tokio::time::timeout(ctx.deadline, guarded).await {
+    let answer = match tokio::time::timeout_at(call.answer_due, guarded).await {
         Ok(Ok(answered)) => answered,
         Ok(Err(_panic)) => Err(Failure::Panicked { doing }),
         Err(_elapsed) => Err(Failure::OutOfTime {
