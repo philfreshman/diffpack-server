@@ -1,6 +1,8 @@
 {
   "https://crates.io/api/v1/crates?q=serde&per_page=100": "crates-serde.json",
   "https://pypi.org/simple/": "pypi-simple.json",
+  "https://proxy.golang.org/github.com/go-chi/chi/v5/@latest": "go-chi-v5-latest.json",
+  "https://proxy.golang.org/http%20router/@latest": null,
   "https://registry.npmjs.org/-/v1/search?text=outage&size=200": null,
   "https://registry.npmjs.org/-/v1/search?text=unreadable&size=200": "npm-unreadable.json",
   "https://registry.npmjs.org/-/v1/search?text=zod&size=1": "npm-zod.json",

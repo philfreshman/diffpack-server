@@ -11,6 +11,8 @@ const FRESH_FOR: Duration = Duration::from_secs(600);
 
 const SOURCE_DOWN: u16 = 503;
 
+const NO_SUCH_PACKAGE: u16 = 404;
+
 #[derive(Debug)]
 pub struct Search {
     documents: Document,
@@ -44,7 +46,7 @@ impl Search {
         let cap = self.documents.limit();
         let source = registry.search(query, limit);
 
-        let body = self
+        let answer = self
             .documents
             .body(
                 &source.url,
@@ -53,15 +55,30 @@ impl Search {
                     accept: Some(source.accept),
                     compressed: source.whole_index,
                     remember_for: source.whole_index.then_some(FRESH_FOR),
-                    nothing_there: SOURCE_DOWN,
+                    nothing_there: if source.names_a_package {
+                        NO_SUCH_PACKAGE
+                    } else {
+                        SOURCE_DOWN
+                    },
                     blocked: &|| Failure::Internal {
                         doing: "asking a registry which packages it has",
                     },
-                    missing: &|status| unavailable(registry, status),
+                    missing: &|status| {
+                        if source.names_a_package {
+                            no_such_package(registry, query)
+                        } else {
+                            unavailable(registry, status)
+                        }
+                    },
                     too_large: &|bytes| too_large(registry, bytes, cap),
                 },
             )
-            .await?;
+            .await;
+
+        let body = match answer {
+            Err(Failure::NoSuchPackage { .. }) => return Ok(Vec::new()),
+            answer => answer?,
+        };
 
         let body = std::str::from_utf8(&body)
             .map_err(|_| unreadable(registry, "what the registry served is not text"))?;
@@ -79,6 +96,13 @@ fn unavailable(registry: Registry, status: u16) -> Failure {
     Failure::Unavailable {
         registry: registry.name().to_owned(),
         status,
+    }
+}
+
+fn no_such_package(registry: Registry, query: &str) -> Failure {
+    Failure::NoSuchPackage {
+        registry: registry.name().to_owned(),
+        package: query.to_owned(),
     }
 }
 

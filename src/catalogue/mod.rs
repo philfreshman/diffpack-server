@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use crate::document::{About, Document};
+use crate::document::{About, Body, Document};
 use crate::error::Failure;
-use crate::registry::{Registry, Versions};
+use crate::registry::{Registry, Version, Versions};
 
 pub const SIZE_LIMIT: u64 = 32 * 1024 * 1024;
 
@@ -33,13 +33,55 @@ impl Catalogue {
     }
 
     pub async fn versions(&self, registry: Registry, package: &str) -> Result<Versions, Failure> {
-        let limit = self.documents.limit();
         let source = registry.versions(package);
 
-        let document = self
-            .documents
+        let (listed, current) = futures::join!(
+            self.document(registry, package, &source.url),
+            self.current(registry, package, source.current.as_deref()),
+        );
+
+        let versions = registry
+            .read_versions(text(&listed?, registry, package)?)
+            .ok_or_else(|| unknown_shape(registry, package))?;
+
+        if versions.all.is_empty() {
+            return Ok(current?.map_or(versions, Versions::only));
+        }
+
+        Ok(match current {
+            Ok(Some(current)) => versions.pointing_at(current.version),
+            Ok(None) | Err(_) => versions,
+        })
+    }
+
+    async fn current(
+        &self,
+        registry: Registry,
+        package: &str,
+        url: Option<&str>,
+    ) -> Result<Option<Version>, Failure> {
+        let Some(url) = url else {
+            return Ok(None);
+        };
+
+        let document = self.document(registry, package, url).await?;
+        registry
+            .read_current(text(&document, registry, package)?)
+            .map(Some)
+            .ok_or_else(|| unknown_shape(registry, package))
+    }
+
+    async fn document(
+        &self,
+        registry: Registry,
+        package: &str,
+        url: &str,
+    ) -> Result<Body, Failure> {
+        let limit = self.documents.limit();
+
+        self.documents
             .body(
-                &source.url,
+                url,
                 &About {
                     registry,
                     accept: None,
@@ -57,19 +99,21 @@ impl Catalogue {
                     too_large: &|bytes| too_large(registry, package, bytes, limit),
                 },
             )
-            .await?;
-
-        let document = std::str::from_utf8(&document)
-            .map_err(|_| unreadable(registry, package, "what the registry served is not text"))?;
-
-        registry.read_versions(document).ok_or_else(|| {
-            unreadable(
-                registry,
-                package,
-                "the registry answered in a shape this server does not know",
-            )
-        })
+            .await
     }
+}
+
+fn text<'a>(document: &'a Body, registry: Registry, package: &str) -> Result<&'a str, Failure> {
+    std::str::from_utf8(document)
+        .map_err(|_| unreadable(registry, package, "what the registry served is not text"))
+}
+
+fn unknown_shape(registry: Registry, package: &str) -> Failure {
+    unreadable(
+        registry,
+        package,
+        "the registry answered in a shape this server does not know",
+    )
 }
 
 fn unreadable(registry: Registry, package: &str, reason: &str) -> Failure {

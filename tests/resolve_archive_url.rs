@@ -49,6 +49,43 @@ async fn npm_resolves_to_the_registry_tarball() {
 }
 
 #[tokio::test]
+async fn a_go_module_resolves_to_the_proxys_escaped_zip() {
+    let result = call(json!({
+        "registry": "go",
+        "package": "github.com/Masterminds/semver/v3",
+        "version": "v3.2.1",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["url"],
+        "https://proxy.golang.org/github.com/!masterminds/semver/v3/@v/v3.2.1.zip",
+        "the proxy serves a module at a path built from its name, capitals \
+         escaped, so this tool can say where without asking: got {result}"
+    );
+}
+
+#[tokio::test]
+async fn the_definition_names_every_registry_it_resolves() {
+    let tool = Client::fixture().listed(TOOL).await;
+    let said = format!(
+        "{} {}",
+        tool["description"].as_str().unwrap_or_default(),
+        tool["inputSchema"]["properties"]["registry"]["description"]
+            .as_str()
+            .unwrap_or_default()
+    );
+
+    for resolved in ["`npm`", "`crates`", "`go`"] {
+        assert!(
+            said.contains(resolved),
+            "an agent is told which registries this resolves, and {resolved} is \
+             one: got {said}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_scoped_npm_package_drops_its_scope_from_the_filename() {
     let result = call(json!({
         "registry": "npm",
@@ -205,7 +242,7 @@ async fn a_registry_outside_the_enum_is_refused_by_naming_the_ones_that_exist() 
             "method": "tools/call",
             "params": {
                 "name": TOOL,
-                "arguments": { "registry": "go", "package": "logrus", "version": "1.9.3" },
+                "arguments": { "registry": "maven", "package": "junit", "version": "4.13.2" },
             },
         }))
         .await;
@@ -218,7 +255,7 @@ async fn a_registry_outside_the_enum_is_refused_by_naming_the_ones_that_exist() 
     let message = answer["error"]["message"]
         .as_str()
         .expect("a protocol error carries a message");
-    for known in ["npm", "crates", "pypi"] {
+    for known in ["npm", "crates", "pypi", "go"] {
         assert!(
             message.contains(known),
             "the refusal should name `{known}`, got {message}"

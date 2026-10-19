@@ -1,4 +1,4 @@
-# 0019. The browser reads an Entry through this server, by diff_id
+# 0020. The browser reads an Entry through this server, by diff_id
 
 **Status:** accepted, 2026-10-19. Implemented by #27.
 

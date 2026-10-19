@@ -137,6 +137,30 @@ async fn a_pypi_package_is_listed_through_the_metadata_hop() {
 }
 
 #[tokio::test]
+async fn a_go_module_is_listed_without_its_module_and_version_prefix() {
+    let result = call(json!({
+        "registry": "go",
+        "package": "github.com/go-chi/chi/v5",
+        "version": "v5.0.12",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "`/v5` is the last segment of the module path, so the archive is \
+         asked for under it rather than for a version called `v5`: got {result}"
+    );
+
+    assert_eq!(
+        paths(&result),
+        vec!["chi.go", "go.mod"],
+        "a module zip wraps everything in `github.com/go-chi/chi/v5@v5.0.12/`, \
+         four directories deep rather than one: got {result}"
+    );
+}
+
+#[tokio::test]
 async fn an_entry_says_what_it_is_and_how_big_it_is() {
     let result = call(json!({
         "registry": "crates",

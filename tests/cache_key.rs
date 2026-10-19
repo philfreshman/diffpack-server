@@ -58,6 +58,7 @@ fn the_fixture_covers_the_cases_the_specification_calls_out() {
         "pypi/typing_extensions underscore",
         "pypi/Typing.Extensions mixed separators and case",
         "crates/serde",
+        "go/github.com/Masterminds/semver/v3 module path",
         "threshold 0.75 formats as 0.7500",
         "ignore_whitespace true",
         "order A to B",

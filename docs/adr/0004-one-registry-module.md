@@ -92,3 +92,15 @@ description states all three rules, generated over `Registry::ALL`, and points
 at `diffpack://registries` as well. Pointing alone was the other choice. It is
 shorter, but an agent reads `tools/list` and often nothing else, so the rules
 would reach it only if it went looking.
+
+## Since: #28
+
+Go arrived as the fourth variant, and the `match` held: every fact about where
+Go is and how its answers read is an arm in `src/registry.rs`, and the tool
+schemas, the allowlist and `diffpack://registries` picked it up unedited. The
+strain this record predicted showed up as two shapes rather than as behaviour
+a `match` could not hold. Go's Current version is a second document, so
+`VersionSource` names one and `catalogue` fetches it. Go's search URL names a
+package, so `SearchSource` says that and `search` reads its `404` as no hits.
+Neither needed a trait. Both are fields a registry fills in and the seams
+read. See [ADR 0019](0019-a-go-module-is-ordered-by-version-and-found-by-path.md).

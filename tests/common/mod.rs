@@ -204,3 +204,8 @@ impl Answer {
         self.headers.get(name).and_then(|value| value.to_str().ok())
     }
 }
+
+pub fn names(text: &str, word: &str) -> bool {
+    text.split(|c: char| !c.is_alphanumeric() && c != '.')
+        .any(|candidate| candidate.trim_end_matches('.') == word)
+}

@@ -1,6 +1,6 @@
 mod common;
 
-use common::{Client, FIXTURES};
+use common::{names, Client, FIXTURES};
 use diffpack_server::error::Failure;
 use diffpack_server::page;
 use diffpack_server::registry::{PackageName, Registry};
@@ -83,6 +83,164 @@ async fn a_pypi_packages_versions_are_ordered_by_date_not_by_the_documents_order
         ],
         "deps.dev lists these lexically, so the last entry is 2.9.2 and \
          reversing the document would put a 2016 release on top: got {result}"
+    );
+}
+
+#[tokio::test]
+async fn a_go_modules_versions_come_back_highest_first_because_the_proxy_dates_none() {
+    let result = call(json!({
+        "registry": "go",
+        "package": "github.com/go-chi/chi",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "a module the fixture set has is not an error, got {result}"
+    );
+
+    assert_eq!(
+        versions(&result),
+        vec![
+            "v4.1.2+incompatible",
+            "v4.1.1+incompatible",
+            "v4.1.0+incompatible",
+            "v4.0.4+incompatible",
+            "v4.0.3+incompatible",
+            "v4.0.2+incompatible",
+            "v4.0.1+incompatible",
+            "v4.0.0+incompatible",
+            "v4.0.0-rc2+incompatible",
+            "v3.3.4+incompatible",
+            "v3.3.3+incompatible",
+            "v3.3.2+incompatible",
+            "v3.3.1+incompatible",
+            "v3.3.0+incompatible",
+            "v3.2.1+incompatible",
+            "v3.2.0+incompatible",
+            "v3.1.5+incompatible",
+            "v3.1.4+incompatible",
+            "v3.1.3+incompatible",
+            "v3.1.2+incompatible",
+            "v3.1.1+incompatible",
+            "v3.1.0+incompatible",
+            "v3.0.0+incompatible",
+            "v2.1.0+incompatible",
+            "v2.0.0+incompatible",
+            "v1.5.5",
+            "v1.5.4",
+            "v1.5.3",
+            "v1.5.2",
+            "v1.5.1",
+            "v1.5.0",
+            "v1.0.0",
+            "v0.9.0",
+        ],
+        "the proxy lists versions in no order and with no dates, so they are \
+         ordered the way diffpack.io orders them: by version, a release above \
+         its own previews, build metadata ignored: got {result}"
+    );
+
+    let items = result["structuredContent"]["versions"]["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a page carries its items, got {result}"));
+    assert!(
+        items.iter().all(|item| item["publishedAt"].is_null()),
+        "the proxy's list carries no dates, and none is made up: got {result}"
+    );
+}
+
+#[tokio::test]
+async fn a_go_modules_current_version_is_what_latest_resolves_and_not_the_top_of_the_list() {
+    let result = call(json!({
+        "registry": "go",
+        "package": "github.com/go-chi/chi",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["currentVersion"],
+        json!("v1.5.5"),
+        "`go get github.com/go-chi/chi` resolves v1.5.5, because the proxy's \
+         `@latest` passes over `+incompatible` releases when a compatible one \
+         exists: got {result}"
+    );
+}
+
+#[tokio::test]
+async fn an_untagged_go_module_is_the_one_version_latest_resolves() {
+    let result = call(json!({
+        "registry": "go",
+        "package": "golang.org/x/exp",
+    }))
+    .await;
+
+    let items = result["structuredContent"]["versions"]["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a page carries its items, got {result}"));
+
+    assert_eq!(
+        items,
+        &vec![json!({
+            "version": "v0.0.0-20261014143641-f0251eb4aa3e",
+            "publishedAt": "2026-10-14T14:36:41Z",
+            "prerelease": true,
+        })],
+        "a module that was never tagged lists nothing, and the proxy resolves a \
+         pseudo-version of its default branch instead, dated and a preview by \
+         semver's own rule: got {result}"
+    );
+    assert_eq!(
+        result["structuredContent"]["currentVersion"],
+        json!("v0.0.0-20261014143641-f0251eb4aa3e"),
+        "and that pseudo-version is what `go get` installs: got {result}"
+    );
+}
+
+#[tokio::test]
+async fn a_go_list_is_answered_when_only_latest_fails() {
+    let result = call(json!({
+        "registry": "go",
+        "package": "example.com/latest-unreachable",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "the list answered, and `@latest` is asked only for the pointer beside \
+         it: got {result}"
+    );
+    assert_eq!(versions(&result), vec!["v1.1.0", "v1.0.0"], "got {result}");
+    assert!(
+        result["structuredContent"]["currentVersion"].is_null(),
+        "with no answer from `@latest` there is no pointer to report, rather \
+         than one guessed from the list: got {result}"
+    );
+}
+
+#[tokio::test]
+async fn a_go_prerelease_is_flagged_and_incompatible_build_metadata_is_not() {
+    let result = call(json!({
+        "registry": "go",
+        "package": "github.com/go-chi/chi",
+    }))
+    .await;
+
+    let flagged: Vec<(&str, bool)> = previews(&result)
+        .into_iter()
+        .filter(|(version, _)| version.starts_with("v4.0.0"))
+        .collect();
+
+    assert_eq!(
+        flagged,
+        vec![
+            ("v4.0.0+incompatible", false),
+            ("v4.0.0-rc2+incompatible", true),
+        ],
+        "a Go version is semver, so `+incompatible` is build metadata and `-rc2` \
+         is the preview: got {result}"
     );
 }
 
@@ -426,6 +584,30 @@ async fn a_package_the_registry_does_not_have_is_a_tool_error_naming_it() {
 }
 
 #[tokio::test]
+async fn a_go_module_the_proxy_does_not_have_is_a_tool_error_naming_it() {
+    let result = call(json!({
+        "registry": "go",
+        "package": "github.com/not-a-real/module",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(true),
+        "a module that is not there is the model's to act on, got {result}"
+    );
+
+    let message = result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a tool error carries text a model reads, got {result}"));
+
+    assert!(
+        message.contains("github.com/not-a-real/module") && names(message, "Go"),
+        "the message names what was asked for and where, got {message}"
+    );
+}
+
+#[tokio::test]
 async fn the_definition_carries_everything_an_agent_needs() {
     let tool = listed(TOOL).await;
 
@@ -470,6 +652,30 @@ async fn the_description_says_the_order_is_by_date_rather_than_by_number() {
         description.contains("publish date") && description.contains("version number"),
         "the description should say which of the two orders this is, since \
          an agent cannot tell from the answer: got {description}"
+    );
+}
+
+#[tokio::test]
+async fn the_description_says_a_go_modules_order_is_by_version_number() {
+    let tool = listed(TOOL).await;
+    let description = tool["description"].as_str().unwrap_or_else(|| {
+        panic!("a tool an agent picks without documentation has one, got {tool}")
+    });
+
+    assert!(
+        names(description, "Go"),
+        "the one registry whose list is not by publish date should be named \
+         where the order is promised, got {description}"
+    );
+
+    let published_at = tool["outputSchema"]["$defs"]["Version"]["properties"]["publishedAt"]
+        ["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("every field is described, got {}", tool["outputSchema"]));
+    assert!(
+        names(published_at, "Go"),
+        "the field whose absence changes the order says when it is absent, \
+         got {published_at}"
     );
 }
 

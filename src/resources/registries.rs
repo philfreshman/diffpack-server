@@ -12,7 +12,7 @@ pub fn resource() -> Resource {
     Resource::new(URI, RESOURCE_NAME)
         .with_title("Package registries")
         .with_description(
-            "The registries this server knows — npm, crates.io and PyPI — with the \
+            "The registries this server knows — npm, crates.io, PyPI and Go — with the \
              identifier each is named by in a tool argument, where a version's archive, \
              a package's versions and a search come from, and how each registry spells a \
              package name. Read this once instead of guessing at a scoped npm name or at \
@@ -107,12 +107,17 @@ impl Archive {
 #[derive(Serialize)]
 struct Versions {
     url_pattern: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_url_pattern: Option<String>,
 }
 
 impl Versions {
     fn of(registry: Registry) -> Self {
+        let source = registry.versions(&package());
         Self {
-            url_pattern: named(&registry.versions(&package()).url),
+            url_pattern: named(&source.url),
+            current_url_pattern: source.current.as_deref().map(named),
         }
     }
 }
@@ -141,10 +146,10 @@ impl Search {
     }
 }
 
-const SCOPE: &str = "SCOPEPLACEHOLDER";
-const NAME: &str = "NAMEPLACEHOLDER";
-const VERSION: &str = "VERSIONPLACEHOLDER";
-const QUERY: &str = "QUERYPLACEHOLDER";
+const SCOPE: &str = "scopeplaceholder";
+const NAME: &str = "nameplaceholder";
+const VERSION: &str = "versionplaceholder";
+const QUERY: &str = "queryplaceholder";
 
 fn package() -> String {
     format!("{SCOPE}/{NAME}")

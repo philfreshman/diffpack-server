@@ -20,7 +20,7 @@ src/tools/          one module per tool: definition and handler together,
                     over them with its own tally
 src/resources/      one module per resource: URI and handler together
 src/prompts/        one module per prompt: arguments and messages together
-src/registry.rs     what a registry is: npm, crates, pypi (go later); and the
+src/registry.rs     what a registry is: npm, crates, pypi, go; and the
                     package and version arguments that state its rules
 src/archive/        fetch(registry, package, version) -> FileMap, and what
                     a FileMap answers: what is at a path, and its paths
@@ -399,15 +399,15 @@ the compiler.
 
 ### `src/registry.rs` — what a registry is
 
-npm, crates.io and PyPI, described once: the identifier used in a parameter and
-in a cache key (`npm`, `crates`, `pypi`), the name the registry calls itself in
-a message to a model (`npm`, `crates.io`, `PyPI`), where a version's archive is,
-where versions and search come from, the hosts it may be reached at, and the
-name rules an agent would otherwise guess at, and the manifest a package
-declares its dependencies in and the runtime it targets, which
-`review_upgrade` sends an agent to. Every per-registry fact is a
-`match` over the three variants in this one file, so the compiler enumerates
-what a fourth registry owes.
+npm, crates.io, PyPI and Go, described once: the identifier used in a parameter
+and in a cache key (`npm`, `crates`, `pypi`, `go`), the name the registry calls
+itself in a message to a model (`npm`, `crates.io`, `PyPI`, `Go`), where a
+version's archive is, where versions and search come from, the hosts it may be
+reached at, and the name rules an agent would otherwise guess at, and the
+manifest a package declares its dependencies in and the runtime it targets,
+which `review_upgrade` sends an agent to. Every per-registry fact is a `match`
+over the four variants in this one file, so the compiler enumerates what a fifth
+registry owes.
 
 Two things are *derived* here rather than written down beside it. The `registry`
 enum in every tool's schema is generated from the variant list, so a registry
@@ -433,8 +433,16 @@ fact be tested with no network at all — the URL npm is asked for, the media
 type PyPI's index needs and the order a query ranks its names in are all
 asserted without a socket. The `diffpack://registries` resource (#16) is a
 projection of this module rather than a hand-written copy of it, and Go
-support (#28) is a value added here rather than an edit in five places. See [ADR
-0004](adr/0004-one-registry-module.md).
+support (#28) was mostly a value added here rather than an edit in five
+places. What it needed outside this file is the part a `match` could not
+absorb, because Go's source is shaped differently rather than located
+differently: `src/engine.rs` re-exports `escape_go_module_path` for the
+version and search URLs the engine does not build, `catalogue` fetches a
+second document for the Current version, `search` reads a `404` as no hits
+for a source that names a package, and two tool descriptions and the
+server's instructions say where Go differs. See [ADR
+0004](adr/0004-one-registry-module.md) and [ADR
+0019](adr/0019-a-go-module-is-ordered-by-version-and-found-by-path.md).
 
 ### `src/archive/` — a version's files
 
@@ -512,11 +520,23 @@ map here is a `BTreeMap`. A version the source gives no date for — one of
 `requests`' 161, thirty-seven of `numpy`'s — is still a published version, so
 it is listed last rather than dropped.
 
-**The current version is the other answer in the same document**, and it is
-read out of it rather than picked from the list: npm's `dist-tags.latest`,
-crates.io's `default_version`, the `isDefault` deps.dev puts on a PyPI
-version. Which of crates.io's four pointers, and why, is argued in
-`src/registry.rs` beside the read. It is not checked against the versions
+Go is the exception, and the only one: the proxy's `@v/list` names versions
+with no date, so a Go module's versions are in diffpack.io's order instead,
+its comparator ported, and every one the list names is listed without a date.
+That order only ever separates two undated Go versions; every other
+registry's order is its dates and nothing else. See [ADR
+0019](adr/0019-a-go-module-is-ordered-by-version-and-found-by-path.md).
+
+**The current version is the registry's own answer**, read out of what it
+serves rather than picked from the list. For three registries it is in the
+same document as the list: npm's `dist-tags.latest`, crates.io's
+`default_version`, the `isDefault` deps.dev puts on a PyPI version. Go's list
+carries none, so its `VersionSource` names a second document, `@latest`,
+fetched beside the list at the same time. A failed `@latest` costs the
+pointer and not the list, except for a module that was never tagged: that one
+lists nothing, and the version `@latest` resolves is then its one version.
+Which of crates.io's four pointers, and why, is argued in `src/registry.rs`
+beside the read. It is not checked against the versions
 listed with it — a registry pointing past its own list is answered as the
 registry spelled it, because the alternative reports no current release for a
 package that has one.
@@ -538,6 +558,12 @@ different questions and fail in opposite directions: a `404` on a version
 document is a package that does not exist, and a `404` on a search source is
 the source itself having moved, since nothing in that URL named a package. See
 [ADR 0011](adr/0011-what-a-registry-publishes-is-its-own-seam.md).
+
+Go is where that last clause stops holding. There is no Go search, so a Go
+query is asked of the proxy's `@latest` as a whole module path, and that URL
+*does* name a package: `SearchSource::names_a_package` says so, and a `404`
+there is a module that does not exist, answered as no hits. See [ADR
+0019](adr/0019-a-go-module-is-ordered-by-version-and-found-by-path.md).
 
 Where a search is asked, what to ask it for, and how to read the answer are
 `registry`'s; making the request, checking the host and weighing the body are
@@ -1165,14 +1191,14 @@ that brought the fix also retired every entry written with the old tree.
 `GET /diffs/v1/{diff_id}`, the one reader of the cache that is not a tool.
 `diffpack` computes the `diff_id` from `docs/cache-key.md` and asks here before
 it downloads two archives; the Blob store is private, so this route is how it
-reads one. See [ADR 0019](adr/0019-the-browser-reads-an-entry-through-the-server-by-diff-id.md).
+reads one. See [ADR 0020](adr/0020-the-browser-reads-an-entry-through-the-server-by-diff-id.md).
 
 It asks the DiffStore with `get_by_id`, which serves an Entry only when the key
 inside it hashes to the `diff_id` asked for, and answers with that key, the
 tree and the patches. Everything else is a 404 miss: no Entry, half an Entry, a
 store that could not be read, no store at all, and anything after
 `/diffs/v1/` that is not 64 lowercase hex digits, deeper paths included. A hit
-is cached for a day in a browser and a year in the CDN (ADR 0019 says why not
+is cached for a day in a browser and a year in the CDN (ADR 0020 says why not
 `immutable`), a miss is `no-store`, and every answer from the route carries
 `Access-Control-Allow-Origin: *` and no credentials.
 
