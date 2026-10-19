@@ -1,0 +1,39 @@
+{
+  "diff_package_versions": {
+    "registry": "npm",
+    "package": "diffable",
+    "from_version": "1.0.0",
+    "to_version": "2.0.0"
+  },
+  "get_diff_tree": {
+    "handle": "<handle>"
+  },
+  "get_file_content": {
+    "registry": "npm",
+    "package": "diffable",
+    "version": "1.0.0",
+    "path": "src/index.js"
+  },
+  "get_file_diff": {
+    "handle": "<handle>",
+    "path": "src/index.js"
+  },
+  "list_package_files": {
+    "registry": "npm",
+    "package": "diffable",
+    "version": "1.0.0"
+  },
+  "list_package_versions": {
+    "registry": "npm",
+    "package": "zod"
+  },
+  "resolve_archive_url": {
+    "registry": "npm",
+    "package": "diffable",
+    "version": "1.0.0"
+  },
+  "search_packages": {
+    "registry": "npm",
+    "query": "zod"
+  }
+}

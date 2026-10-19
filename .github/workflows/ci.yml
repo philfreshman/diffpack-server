@@ -87,6 +87,20 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::warning file=fixtures/cache-key-vectors.json::Cache-key vectors changed - confirm they came from docs/cache-key.md"
 
+  conformance:
+    name: MCP conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: conformance/package-lock.json
+      - run: ./scripts/checks.sh conformance
+
   seams:
     name: module seams
     runs-on: ubuntu-latest

@@ -10,7 +10,7 @@ matches() { grep -qE "$1" <<<"$staged"; }
 
 checks=()
 if [[ "${DIFFPACK_HOOK_ALL:-0}" == "1" ]]; then
-  checks=(fmt seams clippy deny audit test)
+  checks=(fmt seams clippy deny audit test conformance)
 else
   if matches '(\.rs$|^scripts/check-.*seams?\.sh$)'; then
     checks+=(seams)
@@ -26,6 +26,10 @@ else
 
   if matches '(\.rs$|^Cargo\.(toml|lock)$|^rust-toolchain\.toml$|^fixtures/|^vercel\.json$)'; then
     checks+=(test)
+  fi
+
+  if matches '^(conformance/|scripts/conformance\.sh$|examples/serve\.rs$)'; then
+    checks+=(conformance)
   fi
 fi
 

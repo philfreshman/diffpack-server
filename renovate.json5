@@ -50,6 +50,11 @@
       ]
     },
     {
+      "description": "the conformance client is what the server is judged by",
+      "matchFileNames": ["conformance/package.json"],
+      "automerge": false
+    },
+    {
       "description": "a toolchain bump brings new clippy lints to fix",
       "matchManagers": ["rust-toolchain"],
       "automerge": false

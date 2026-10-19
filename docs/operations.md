@@ -42,6 +42,24 @@ redirect to the Vercel login. Two public hostnames are fine for an
 unauthenticated server of public package content, but a rate limit added later
 has to cover both ([ADR 0018](adr/0018-no-rate-limit-for-now.md)).
 
+## Protocol conformance
+
+The `MCP conformance` job runs
+[`scripts/conformance.sh`](../scripts/conformance.sh): it starts
+[`examples/serve.rs`](../examples/serve.rs), the real router over the fixture
+archives on a loopback port, and drives it with the
+[MCP Inspector](https://github.com/modelcontextprotocol/inspector) CLI as a
+`2026-07-28` and as a `2025-11-25` client, with `curl` for what the Inspector
+cannot send. The Inspector and ajv are pinned with a lockfile in
+[`conformance/`](../conformance), and `npm ci` installs them without running
+install scripts. Every tool the server lists needs an example call in
+`conformance/calls.json`, or the job fails.
+
+The `cargo test` suite asserts most of the same things in-process. This job
+asks them again over a real socket, through the TypeScript SDK and the schema
+validator a JavaScript client actually uses, rather than through this crate's
+own test client.
+
 ## Dependency updates
 
 [Renovate](https://docs.renovatebot.com), a GitHub App configured by
@@ -61,6 +79,9 @@ required checks pass. These wait for a person:
 - A major. Passing checks prove it compiles, not that it is the version we want.
 - `rust-toolchain.toml`. A new toolchain brings new clippy lints, which
   `-D warnings` turns into failures, and it changes what Vercel builds with.
+- The conformance tools in `conformance/package.json`. The MCP Inspector is the
+  client the `MCP conformance` job judges this server by, so a new release can
+  start failing a server that has not changed. Read what it now checks first.
 - `diffpack-engine`. The pull request fails on purpose until `engine::VERSION`
   in `src/engine.rs` is moved to the new tag in the same branch. Every `diff_id`
   changes with it, so the cache starts cold. Read the engine's release notes for

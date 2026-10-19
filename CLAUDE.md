@@ -15,13 +15,15 @@ cargo test --test <name>                   # one file, tests/<name>.rs
 cargo test --test networked -- --ignored   # against the real registries
 cargo test --lib -- --ignored store::blob  # against the real blob store
 ./scripts/checks.sh seams                  # module boundaries, no compile
-./scripts/checks.sh                        # all six checks, as CI runs them
+./scripts/checks.sh conformance            # MCP Inspector against a local fixture server
+./scripts/checks.sh                        # all seven checks, as CI runs them
 ./scripts/install-hooks.sh                 # once per clone: the pre-commit hook
 ```
 
 Run the ignored tests after changing how the server talks to a registry or the
 blob store; the offline suite cannot check that. `deny` and `audit` need network
-access. Never skip the pre-commit hook with `--no-verify`.
+access, and `conformance` needs Node 22.19 or later. Never skip the pre-commit
+hook with `--no-verify`.
 
 ## Rules that are easy to break
 
