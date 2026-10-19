@@ -1,10 +1,14 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod common;
 
 use common::FIXTURES;
+use diffpack_server::archive::Archive;
 use diffpack_server::error::Failure;
 use diffpack_server::log::{Capture, Line};
+use diffpack_server::registry::Registry;
 use diffpack_server::tools::{self, Ctx};
 use serde_json::Value;
 
@@ -73,5 +77,26 @@ async fn work_that_holds_a_thread_is_still_answered_when_the_budget_runs_out() {
             .expect_err("a call out of time has no answer to give")
             .kind(),
         "out_of_time"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn extracting_an_archive_lets_the_runtime_get_on_with_other_work() {
+    let other_work_ran = Arc::new(AtomicBool::new(false));
+    tokio::spawn({
+        let other_work_ran = Arc::clone(&other_work_ran);
+        async move { other_work_ran.store(true, Ordering::SeqCst) }
+    });
+
+    Archive::fixture(format!("{FIXTURES}/archives"))
+        .fetch(Registry::Npm, "diffable", "1.0.0")
+        .await
+        .expect("the fixture set has this archive");
+
+    assert!(
+        other_work_ran.load(Ordering::SeqCst),
+        "on one thread, a task spawned before the fetch runs during it only if the \
+         extraction gave the thread up, which is what lets a call's budget run out \
+         while an archive is still being read"
     );
 }

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use futures::try_join;
 use rmcp::model::Resource;
@@ -227,6 +228,22 @@ fn walk(node: &DiffFileEntry, totals: &mut Totals, changed: &mut Vec<Changed>) {
     }
 }
 
+fn worked_out(
+    files: &Versions,
+    similarity_threshold: f64,
+    ignore_whitespace: bool,
+) -> (DiffFileEntry, BTreeMap<String, Patch>) {
+    let tree = engine::build_diff_tree(
+        &files.from_files,
+        &files.to_files,
+        similarity_threshold,
+        ignore_whitespace,
+    );
+    let patches = rendered(&tree, files, ignore_whitespace);
+
+    (tree, patches)
+}
+
 fn rendered(node: &DiffFileEntry, files: &Versions, ignore_whitespace: bool) -> BTreeMap<String, Patch> {
     let mut patches = BTreeMap::new();
     collect(node, files, ignore_whitespace, &mut patches);
@@ -272,9 +289,10 @@ fn churn(file: &Changed) -> u32 {
     file.lines_added + file.lines_removed
 }
 
+#[derive(Clone)]
 struct Versions {
-    from_files: FileMap,
-    to_files: FileMap,
+    from_files: Arc<FileMap>,
+    to_files: Arc<FileMap>,
 }
 
 pub struct Comparison {
@@ -337,7 +355,14 @@ impl Comparison {
 
         refuse_directory(inputs, path, from_path, |end, path| files.kind_at(end, path))?;
 
-        Ok(patch_of(files, path, from_path, inputs.ignore_whitespace))
+        let files = files.clone();
+        let (path, from_path) = (path.to_owned(), from_path.to_owned());
+        let ignore_whitespace = inputs.ignore_whitespace;
+
+        call.compute("rendering one file's diff", move || {
+            patch_of(&files, &path, &from_path, ignore_whitespace)
+        })
+        .await
     }
 }
 
@@ -410,8 +435,8 @@ async fn versions(handle: &DiffHandle, call: &Call) -> Result<Versions, Failure>
     )?;
 
     Ok(Versions {
-        from_files,
-        to_files,
+        from_files: Arc::new(from_files),
+        to_files: Arc::new(to_files),
     })
 }
 
@@ -428,17 +453,18 @@ pub async fn compare(handle: &DiffHandle, call: &Call) -> Result<Comparison, Fai
         });
     }
 
-    let inputs = handle.inputs();
     let files = versions(handle, call).await?;
-
-    let tree = engine::build_diff_tree(
-        &files.from_files,
-        &files.to_files,
-        inputs.similarity_threshold,
-        inputs.ignore_whitespace,
+    let (similarity_threshold, ignore_whitespace) = (
+        handle.inputs().similarity_threshold,
+        handle.inputs().ignore_whitespace,
     );
 
-    let patches = rendered(&tree, &files, inputs.ignore_whitespace);
+    let (tree, patches) = call
+        .compute("comparing two versions", {
+            let files = files.clone();
+            move || worked_out(&files, similarity_threshold, ignore_whitespace)
+        })
+        .await?;
 
     call.store().put(Entry {
         key,
