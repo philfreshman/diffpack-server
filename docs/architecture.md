@@ -1006,8 +1006,9 @@ and a tool still cannot reach the module.
 
 `run` writes its line whatever the work does, a panic included: it catches the
 unwind around the work, writes the line with the result `panicked`, and
-answers `Failure::Panicked`, which keeps the `-32603` `Guarded` answered with
-before. A handler that panics never returns, so a line written after the work
+answers `Failure::Panicked`, which keeps the `-32603` and the sentence
+`Guarded` answered with before — what the call was doing comes from the
+line's subject, a tool call or a resource read. A handler that panics never returns, so a line written after the work
 returns was the one line a crash did not leave, and the call that crashed is
 the one an incident is about. The message and the place of the panic are
 already in the log, written by the default panic hook beside the line; the
@@ -1019,10 +1020,15 @@ either a `tool` or a `resource` and never both, so counting one key counts
 only its own population. A read names the resource its URI addresses —
 `registries`, `diff`, `file-diff`, the names the two lists publish — and
 summarises a diff handle by the inputs it carries, under the names
-`diff_package_versions` takes them by, so a comparison read by URI is counted
-with the same comparison asked for by tool. Decoding exposes nothing: by [ADR
-0006](adr/0006-the-handle-carries-its-inputs.md) the handle is those inputs,
-encoded. A file-diff read adds the `path` it was for, as sent. A URI that
+`diff_package_versions` takes them by, so a read and that tool's call group
+together on `registry`, `package`, `from_version` and `to_version`. Not on
+every key: a read always carries the threshold and the whitespace flag, where
+the tool's line has only what its caller sent, and a `get_diff_tree` or
+`get_file_diff` line still carries its handle opaque and cut. Decoding exposes
+nothing: by [ADR 0006](adr/0006-the-handle-carries-its-inputs.md) the handle
+is those inputs, encoded. A file-diff read adds the `path` it was for,
+percent-decoded the way the read decodes it, so one file is one path and
+redaction sees a URL that was encoded into it. A URI that
 addresses nothing is written as itself, as a tool name nothing answers to is,
 and through the same redaction. Reads were left out until #26 settled this,
 and the cost was the hit rate: both diff resources go through the store, a

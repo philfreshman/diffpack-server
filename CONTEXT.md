@@ -518,8 +518,9 @@ rather than by a tool or a resource and written whether the work answered,
 failed or panicked, so a count of lines is a count of calls and reads. A Line
 names a `tool` or a `resource` and never both, so a count of one key is a
 count of that one population. A read names the resource its URI addresses and
-summarises a diff handle by the inputs it carries, under the names the tool
-takes them by. Distinct from a Failure's message, which is written for a
+summarises a diff handle by the inputs it carries, under the names
+`diff_package_versions` takes them by, so the two group together on the
+package and the versions. Distinct from a Failure's message, which is written for a
 model and reaches a client — a Line is written for an operator and goes no
 further than the platform's logs.
 _Avoid_: log, log entry, event, trace, record
