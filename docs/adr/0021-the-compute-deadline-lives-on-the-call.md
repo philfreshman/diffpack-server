@@ -1,4 +1,4 @@
-# 0020. The compute deadline lives on the call, not in the engine
+# 0021. The compute deadline lives on the call, not in the engine
 
 **Status:** accepted, 2026-10-19 (#26).
 

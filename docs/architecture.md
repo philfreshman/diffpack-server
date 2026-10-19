@@ -28,16 +28,18 @@ src/catalogue/      versions(registry, package) -> Versions, newest first
 src/search/         hits(registry, query, limit) -> Vec<Hit>, best match first
 src/document/       what the three above share: host check, adapters, fixtures, cap
 src/fetch.rs        the registries' HTTP client: user agent, timeout, redirects, caps
-src/store/          DiffStore: get(&DiffKey) / put(entry), inside a budget
+src/store/          DiffStore: get(&DiffKey) / get_by_id(&DiffId) / put(entry),
+                    inside a budget
+src/entries.rs      GET /diffs/v1/{diff_id}: an Entry for the browser app
 src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs;
                     and the arguments that shape an answer, Subtree included
 src/handle.rs       the diff handle: mint, encode, decode, verify
-src/cache_key.rs    DiffKey, diff_id, blob paths — docs/cache-key.md
+src/cache_key.rs    DiffKey, diff_id, DiffId, blob paths — docs/cache-key.md
 src/error.rs        Failure, the two channels, the code each earns, redaction;
                     the upstream timeout and the call's deadline
 src/compute.rs      off_the_runtime: CPU-bound work on the blocking pool
-src/log.rs          one line per tool call or resource read: what, cache outcome,
-                    how long, how it ended
+src/log.rs          one line per tool call, resource read or entry served: what,
+                    cache outcome, how long, how it ended
 src/engine.rs       the only importer of diffpack_engine
 src/health.rs       the /health body
 ```
@@ -114,6 +116,7 @@ transport (the half of a request that runs before `rmcp` hands off to a
 handler), the `X-Accel-Buffering` rule for event streams, and where the allowed
 browser origins come from. `router_with` takes the handler factory and the
 origin list as parameters, which is the seam the transport tests drive.
+`router()` merges the entries route beside it.
 
 ### `src/mcp.rs` — what this server says it is
 
@@ -248,7 +251,7 @@ go uncounted and a handler's call is unchanged.
 
 `tools::run` also gives the work the `Ctx`'s deadline, `CALL_DEADLINE` unless
 the suite set a shorter one, and answers `Failure::OutOfTime` when it passes
-([ADR 0020](adr/0020-the-compute-deadline-lives-on-the-call.md)). A deadline
+([ADR 0021](adr/0021-the-compute-deadline-lives-on-the-call.md)). A deadline
 can only pass while the work yields, so the steps that compute rather than
 wait go to tokio's blocking pool through `compute::off_the_runtime`.
 Extraction does that inside `Archive::fetch`, so no tool can skip it. The
@@ -489,15 +492,15 @@ the build.
 Three things are the same code for both adapters rather than the live one's
 alone, because each is a rule about what this server does rather than about
 where bytes come from: the host allowlist `registry` derives, the size cap,
-and extraction. Extraction runs on the blocking pool through
-`compute::off_the_runtime`, so that a call's deadline can pass while an
-archive is still being read ([ADR
-0020](adr/0020-the-compute-deadline-lives-on-the-call.md)). The first two are `src/document/`'s and shared with the other
+and extraction. The first two are `src/document/`'s and shared with the other
 two seams; extraction is this module's, and is what is left here along with
 where a version's archive is and the hop PyPI needs to find out. The fixture
 index is keyed by URL for that same reason — a fetch path that built a URL of
 its own instead of asking `registry` finds nothing there, so `tests/archive.rs`
-is a test of resolution as well as of extraction.
+is a test of resolution as well as of extraction. Extraction runs on the
+blocking pool through `compute::off_the_runtime`, so that a call's deadline
+can pass while an archive is still being read ([ADR
+0021](adr/0021-the-compute-deadline-lives-on-the-call.md)).
 
 The index has a third answer beside "here are the bytes" and "this URL is not
 in the set": `null`, meaning the registry serves nothing there. It is the
@@ -1014,6 +1017,9 @@ string is built by concatenation rather than by serialising a struct: the field
 set is closed and the order is fixed, so a `serde` upgrade cannot quietly
 reorder it. Read the document before changing anything here.
 
+`DiffId` is a `diff_id` that arrived from outside, parsed: 64 lowercase hex
+digits or nothing, so a path built from one cannot leave `diffs/v1/`.
+
 ### `src/error.rs` — which channel a failure reaches the client on
 
 MCP has two, and conflating them is the usual mistake: a protocol error the
@@ -1034,7 +1040,7 @@ the caller's to fix. A `resources/read` is the surface that needs them: it has
 no second channel, so the code is all a client has. See [ADR
 0017](adr/0017-a-failure-carries-the-code-it-earned.md).
 
-### `src/log.rs` — one line per tool call or resource read
+### `src/log.rs` — one line per tool call, resource read or entry served
 
 What an incident is read from. The questions asked when this server has
 misbehaved are always the same — which tool ran, what was it asked for, where
@@ -1059,9 +1065,10 @@ already in the log, written by the default panic hook beside the line; the
 line does not repeat them, because a panic message is free text that can carry
 whatever the code that panicked formatted into it.
 
-A `resources/read` leaves a line too, through the same `run`, and a line names
-either a `tool` or a `resource` and never both, so counting one key counts
-only its own population. A read names the resource its URI addresses —
+A `resources/read` leaves a line too, through the same `run`, and so
+does a request to the entries route. A line names one of `tool`,
+`resource` and `route`, never two, so counting one key counts only its
+own population. A read names the resource its URI addresses —
 `registries`, `diff`, `file-diff`, the names the two lists publish — and
 summarises a diff handle by the inputs it carries, under the names
 `diff_package_versions` takes them by, so a read and that tool's call group
@@ -1199,6 +1206,35 @@ two ([philfreshman/diffpack-engine#7](https://github.com/philfreshman/diffpack-e
 So `get_diff_tree::node_at` is asked for a node of a kind, and descends only
 into directories. The engine version is a field in the cache key, so the bump
 that brought the fix also retired every entry written with the old tree.
+
+### `src/entries.rs` — an Entry for the browser app
+
+`GET /diffs/v1/{diff_id}`, the one reader of the cache that is not a tool.
+`diffpack` computes the `diff_id` from `docs/cache-key.md` and asks here before
+it downloads two archives; the Blob store is private, so this route is how it
+reads one. See [ADR 0020](adr/0020-the-browser-reads-an-entry-through-the-server-by-diff-id.md).
+
+It asks the DiffStore with `get_by_id`, which serves an Entry only when the key
+inside it hashes to the `diff_id` asked for, and answers with that key, the
+tree and the patches. Everything else is a 404 miss: no Entry, half an Entry, a
+store that could not be read, no store at all, and anything after
+`/diffs/v1/` that is not 64 lowercase hex digits, deeper paths included. A hit
+is cached for a day in a browser and a year in the CDN (ADR 0020 says why not
+`immutable`), a miss is `no-store`, and every answer from the route carries
+`Access-Control-Allow-Origin: *` and no credentials.
+
+An Entry may be 8 MiB, so the Response ceiling is the route's to keep, and it
+is a field for the reason the store's caps are. Over it, the patches are left
+out and the app computes the files it opens; a tree alone over it is a miss.
+
+Each request runs through `tools::run` over a Ctx built for it by a factory,
+`Ctx::new` in production, exactly as a tool call does. So the route and the
+tools find the store's credentials the same way, a panic is caught the same
+way, and every request leaves one Line: `"route": "/diffs/v1"`, the `diff_id`
+it was asked for, and the Cache outcome. The outcome is what the browser got:
+an Entry whose tree alone is over the ceiling is a `miss`. A path that is not
+a `diff_id` is `invalid_params` with no Cache outcome, because nothing was
+looked up.
 
 ### `src/health.rs` — the `/health` body
 

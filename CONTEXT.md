@@ -528,12 +528,13 @@ _Avoid_: response limit, size cap
 ### Running it
 
 **Line**:
-What one tool call or one resource read leaves behind: a single JSON object
-naming the tool or the resource, a summary of what it was asked for, where its
-time went and how it ended. One per call or read, written by the dispatch
-rather than by a tool or a resource and written whether the work answered,
-failed, panicked or ran past its Deadline, so a count of lines is a count of
-calls and reads. A Line names a `tool` or a `resource` and never both, so a
+What one tool call, one resource read or one request for an Entry leaves
+behind: a single JSON object naming the tool, the resource or the route, a
+summary of what it was asked for, where its time went and how it ended. One per
+call, read or request, written by the dispatch rather than by a tool, a
+resource or the route, and written whether the work answered, failed, panicked
+or ran past its Deadline, so a count of lines is a count of calls, reads and
+requests. A Line names one of `tool`, `resource` and `route`, never two, so a
 count of one key is a count of that one population. A read names the resource
 its URI addresses. Wherever a diff handle is summarised, by a read or by a
 tool that takes one, it is replaced by the inputs it carries, under the names
@@ -551,7 +552,7 @@ on the blocking pool — extraction, a tree build, a patch — keeps running pas
 it, and its result is dropped. Distinct from the Budget, which is the blob
 store's bytes, and from the upstream timeout, which is one request to a
 registry and is shorter, so that a slow registry is answered as slow rather
-than as out of time ([ADR 0020](docs/adr/0020-the-compute-deadline-lives-on-the-call.md)).
+than as out of time ([ADR 0021](docs/adr/0021-the-compute-deadline-lives-on-the-call.md)).
 _Avoid_: budget (that is the blob store's), timeout (that is one request's),
 time limit
 
