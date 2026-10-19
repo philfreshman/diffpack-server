@@ -35,7 +35,9 @@ src/page.rs         the 4.5 MB response ceiling: pages, and cut blobs;
                     and the arguments that shape an answer, Subtree included
 src/handle.rs       the diff handle: mint, encode, decode, verify
 src/cache_key.rs    DiffKey, diff_id, DiffId, blob paths — docs/cache-key.md
-src/error.rs        Failure, the two channels, the code each earns, redaction
+src/error.rs        Failure, the two channels, the code each earns, redaction;
+                    the upstream timeout and the call's deadline
+src/compute.rs      off_the_runtime: CPU-bound work on the blocking pool
 src/log.rs          one line per tool call, resource read or entry served: what,
                     cache outcome, how long, how it ended
 src/engine.rs       the only importer of diffpack_engine
@@ -230,9 +232,9 @@ blob store's token arrives with the request
 `Ctx`, as every suite's is, clones that one per call. It holds the seams a
 handler may reach — `Archive`, `Catalogue`, `Search` and `DiffStore`, while
 `registry`, `page` and `handle` are named directly because a pure module has
-nothing to hand over — and the log's `Sink`, which the dispatch writes to and a
-handler never touches. Nothing in it belongs to one call, so cloning a `Ctx` is
-always safe.
+nothing to hand over — the log's `Sink`, which the dispatch writes to and a
+handler never touches, and the deadline every call it serves is given. Nothing
+in it belongs to one call, so cloning a `Ctx` is always safe.
 
 `Call` is one call while it runs, and it is what a handler is handed: a
 `Ctx`'s seams, and the call's own tally — the `Spent` its phases add up in and
@@ -249,6 +251,18 @@ that — which is where every call after a cache hit logged `hit`.
 `Call::archive()`, `Call::catalogue()` and `Call::search()` hand back their
 seam with that call's stopwatch already on it, so a wait on a registry cannot
 go uncounted and a handler's call is unchanged.
+
+`tools::run` also gives the work the `Ctx`'s deadline, `CALL_DEADLINE` unless
+the suite set a shorter one, and answers `Failure::OutOfTime` when it passes
+([ADR 0021](adr/0021-the-compute-deadline-lives-on-the-call.md)). A deadline
+can only pass while the work yields, so the steps that compute rather than
+wait go to tokio's blocking pool through `compute::off_the_runtime`.
+Extraction does that inside `Archive::fetch`, so no tool can skip it. The
+tree build with its patches, and the one-file patch, go through
+`Call::compute` in `diff_package_versions`, and a tool that called the engine
+inline would escape the deadline without failing to compile. The work on the
+pool is not stopped when the deadline passes: it finishes, and its result is
+dropped. What the deadline guarantees is the answer.
 
 `Call::store()` hands back a wrapper of its own rather than that one, and the
 difference is a decision rather than an omission: the `fetch` phase answers
@@ -488,7 +502,10 @@ two seams; extraction is this module's, and is what is left here along with
 where a version's archive is and the hop PyPI needs to find out. The fixture
 index is keyed by URL for that same reason — a fetch path that built a URL of
 its own instead of asking `registry` finds nothing there, so `tests/archive.rs`
-is a test of resolution as well as of extraction.
+is a test of resolution as well as of extraction. Extraction runs on the
+blocking pool through `compute::off_the_runtime`, so that a call's deadline
+can pass while an archive is still being read ([ADR
+0021](adr/0021-the-compute-deadline-lives-on-the-call.md)).
 
 The index has a third answer beside "here are the bytes" and "this URL is not
 in the set": `null`, meaning the registry serves nothing there. It is the
@@ -1064,10 +1081,13 @@ own population. A read names the resource its URI addresses —
 `registries`, `diff`, `file-diff`, the names the two lists publish — and
 summarises a diff handle by the inputs it carries, under the names
 `diff_package_versions` takes them by, so a read and that tool's call group
-together on `registry`, `package`, `from_version` and `to_version`. Not on
-every key: a read always carries the threshold and the whitespace flag, where
-the tool's line has only what its caller sent, and a `get_diff_tree` or
-`get_file_diff` line still carries its handle opaque and cut. Decoding exposes
+together on `registry`, `package`, `from_version` and `to_version`. A
+`get_diff_tree` or `get_file_diff` line does the same with its `handle`
+argument: `tools::call` replaces a handle that decodes with its inputs, through
+the same `DiffHandle::inputs_named_in`, and keeps one that does not as sent.
+Not on every key: a decoded handle always carries the threshold and the
+whitespace flag, where a `diff_package_versions` line has only what its caller
+sent. Decoding exposes
 nothing: by [ADR 0006](adr/0006-the-handle-carries-its-inputs.md) the handle
 is those inputs, encoded. A file-diff read adds the `path` it was for,
 percent-decoded the way the read decodes it, so one file is one path and

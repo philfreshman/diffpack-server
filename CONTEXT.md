@@ -533,23 +533,37 @@ What one tool call, one resource read or one request for an Entry leaves
 behind: a single JSON object naming the tool, the resource or the route, a
 summary of what it was asked for, where its time went and how it ended. One per
 call, read or request, written by the dispatch rather than by a tool, a
-resource or the route, and written whether the work answered, failed or
-panicked, so a count of lines is a count of calls, reads and requests. A Line
-names one of `tool`, `resource` and `route`, never two, so a count of one key
-is a count of that one population. A read names the resource its URI addresses and
-summarises a diff handle by the inputs it carries, under the names
-`diff_package_versions` takes them by, so the two group together on the
-package and the versions. Distinct from a Failure's message, which is written for a
-model and reaches a client — a Line is written for an operator and goes no
-further than the platform's logs.
+resource or the route, and written whether the work answered, failed, panicked
+or ran past its Deadline, so a count of lines is a count of calls, reads and
+requests. A Line names one of `tool`, `resource` and `route`, never two, so a
+count of one key is a count of that one population. A read names the resource
+its URI addresses. Wherever a diff handle is summarised, by a read or by a
+tool that takes one, it is replaced by the inputs it carries, under the names
+`diff_package_versions` takes them by, so every line about one comparison
+groups together on the package and the versions. Distinct from a Failure's
+message, which is written for a model and reaches a client — a Line is
+written for an operator and goes no further than the platform's logs.
 _Avoid_: log, log entry, event, trace, record
+
+**Deadline**:
+How long one tool call or one resource read has, from when the dispatch
+starts it, before it is answered as out of time: 240 s, inside the function's
+300 s. It bounds when the caller hears back and not the work. A step that runs
+on the blocking pool — extraction, a tree build, a patch — keeps running past
+it, and its result is dropped. Distinct from the Budget, which is the blob
+store's bytes, and from the upstream timeout, which is one request to a
+registry and is shorter, so that a slow registry is answered as slow rather
+than as out of time ([ADR 0021](docs/adr/0021-the-compute-deadline-lives-on-the-call.md)).
+_Avoid_: budget (that is the blob store's), timeout (that is one request's),
+time limit
 
 **Phase**:
 One part of a call that is timed by itself. Two of them today: the whole
 call, and the part of it spent waiting for a Registry. Every seam that leaves
 this process counts towards the second — an Archive, a Catalogue and a Search
 alike — because the question is the wait and not which document was waited
-for. A Phase that did not happen is absent from a Line rather than zero,
+for. An Archive's extraction is inside that seam (ADR 0001), so the time it
+takes is counted in the wait too. A Phase that did not happen is absent from a Line rather than zero,
 because zero is a measurement and a percentile taken over one describes
 neither population.
 
@@ -589,8 +603,8 @@ _Avoid_: warning, log line, error, event
 
 **Cause**:
 Which Failure a call ended in, in one word, as a Line carries it —
-`no_such_version`, `rate_limited`, `too_large`, or `panicked` for a handler
-that never returned. It is the Failure's kind and not its message: a message
-is a sentence carrying the package name a caller sent, so counting by it would
-give one bucket per call.
+`no_such_version`, `rate_limited`, `too_large`; `panicked` for a handler that
+never returned, and `out_of_time` for one still working at its Deadline. It is
+the Failure's kind and not its message: a message is a sentence carrying the
+package name a caller sent, so counting by it would give one bucket per call.
 _Avoid_: error, reason, status, code

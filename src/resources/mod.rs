@@ -60,10 +60,10 @@ impl<'a> Address<'a> {
 
     pub fn arguments(self) -> JsonObject {
         match self {
-            Self::Diff { handle } => inputs_named_in(handle),
+            Self::Diff { handle } => DiffHandle::inputs_named_in(handle).unwrap_or_default(),
             Self::FileDiff { handle, path } => {
                 let path = file_diff::decoded(path).unwrap_or(Cow::Borrowed(path));
-                let mut arguments = inputs_named_in(handle);
+                let mut arguments = DiffHandle::inputs_named_in(handle).unwrap_or_default();
                 arguments.insert(PATH_ARGUMENT.to_owned(), Value::from(path.into_owned()));
                 arguments
             }
@@ -83,12 +83,4 @@ impl<'a> Address<'a> {
             }),
         }
     }
-}
-
-fn inputs_named_in(handle: &str) -> JsonObject {
-    DiffHandle::decode(handle)
-        .ok()
-        .and_then(|decoded| serde_json::to_value(decoded.inputs()).ok())
-        .and_then(|inputs| inputs.as_object().cloned())
-        .unwrap_or_default()
 }

@@ -142,11 +142,12 @@ impl Spent {
     }
 
     pub async fn while_fetching<T>(&self, work: impl Future<Output = T>) -> T {
-        let began = Instant::now();
-        let done = work.await;
+        let _window = FetchWindow {
+            spent: self,
+            began: Instant::now(),
+        };
 
-        self.fetching(began, Instant::now());
-        done
+        work.await
     }
 
     pub fn fetch(&self) -> Option<Duration> {
@@ -159,6 +160,18 @@ impl Spent {
 
     fn offset(&self, at: Instant) -> u64 {
         u64::try_from(at.saturating_duration_since(self.started).as_micros()).unwrap_or(u64::MAX)
+    }
+}
+
+struct FetchWindow<'a> {
+    spent: &'a Spent,
+
+    began: Instant,
+}
+
+impl Drop for FetchWindow<'_> {
+    fn drop(&mut self) {
+        self.spent.fetching(self.began, Instant::now());
     }
 }
 
