@@ -31,7 +31,7 @@ directory was created (#40).
 | [0018](0018-no-rate-limit-for-now.md) | No rate limit on the public endpoint, for now | #26 |
 | [0019](0019-a-go-module-is-ordered-by-version-and-found-by-path.md) | A Go module is ordered by version and found by its path | done, #28 |
 | [0020](0020-the-browser-reads-an-entry-through-the-server-by-diff-id.md) | The browser reads an Entry through this server, by diff_id | done, #27 |
-| [0021](0021-the-compute-deadline-lives-on-the-call.md) | The compute deadline lives on the call, not in the engine | done, #26 |
+| [0021](0021-the-compute-deadline-lives-on-the-call.md) | The compute deadline lives on the call, not in the engine | done, #26; the longest wait is 192.4 s since 0022 |
 | [0022](0022-a-cache-write-happens-before-the-answer.md) | A cache write happens before the answer, not after it | done, #130 |
 
 A new one goes in at the next number. The bar is the usual three: hard to

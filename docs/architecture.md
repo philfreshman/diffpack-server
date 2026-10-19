@@ -826,10 +826,9 @@ a lookup that missed when it should not have: a transient failure, or two
 invocations computing one comparison at once.
 
 That is a head per blob on a write that does go ahead, and the caller waits for
-it, since the write now comes before the answer. The head inside the write is
-still there and is not the first one repeated: a sweep happens between the two,
-and it is long enough for another invocation to land the blob this one is about
-to write.
+it (ADR 0022). The head inside the write is still there and is not the first
+one repeated: a sweep happens between the two, and it is long enough for
+another invocation to land the blob this one is about to write.
 
 Two numbers rather than one, and the 16 MB between them is the point. Two
 invocations can admit at the same moment, each against a total that did not
