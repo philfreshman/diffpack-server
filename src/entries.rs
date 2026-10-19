@@ -10,7 +10,7 @@ use rmcp::model::JsonObject;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::cache_key::{DiffId, DiffKey};
+use crate::cache_key::{prefix, DiffId, DiffKey, SCHEMA};
 use crate::engine::{DiffFileEntry, Patch};
 use crate::error::Failure;
 use crate::log::Line;
@@ -18,7 +18,9 @@ use crate::page::RESPONSE_CEILING;
 use crate::store::Entry;
 use crate::tools::{self, Ctx};
 
-const ROUTE: &str = "/diffs/v1";
+const HIT_CACHE_CONTROL: &str = "public, max-age=86400, s-maxage=31536000";
+
+const NOT_A_DIFF_ID: &str = "A diff_id is 64 lowercase hex digits.";
 
 type CtxFactory = Box<dyn Fn() -> Ctx + Send + Sync>;
 
@@ -45,7 +47,7 @@ impl Entries {
 
     pub fn routes(self) -> Router {
         Router::new()
-            .route(&format!("{ROUTE}/{{diff_id}}"), get(serve))
+            .route(&format!("/{}{{*asked}}", prefix(SCHEMA)), get(serve))
             .with_state(Arc::new(self))
             .layer(axum::middleware::map_response(readable_from_any_origin))
     }
@@ -86,15 +88,17 @@ impl From<Entry> for Served {
 
 async fn serve(State(entries): State<Arc<Entries>>, Path(asked): Path<String>) -> Response {
     let ctx = (entries.ctx)();
-    let line = Line::serving(ROUTE).about(Some(&arguments(&asked)));
+    let line = Line::serving(&route()).about(Some(&arguments(&asked)));
 
     let body = tools::run(&ctx, line, async |call| {
         let diff_id = DiffId::parse(&asked).ok_or_else(|| Failure::InvalidParams {
-            message: format!("`{asked}` is not a diff_id: 64 lowercase hex digits."),
+            message: NOT_A_DIFF_ID.to_owned(),
         })?;
 
-        let entry = call.store().get_by_id(&diff_id).await;
-        Ok(entry.and_then(|entry| entries.body_for(entry)))
+        Ok(call
+            .store()
+            .answer_by_id(&diff_id, |entry| entries.body_for(entry))
+            .await)
     })
     .await;
 
@@ -102,6 +106,10 @@ async fn serve(State(entries): State<Arc<Entries>>, Path(asked): Path<String>) -
         Ok(Some(body)) => hit(body),
         Ok(None) | Err(_) => miss(),
     }
+}
+
+fn route() -> String {
+    format!("/{}", prefix(SCHEMA).trim_end_matches('/'))
 }
 
 fn arguments(diff_id: &str) -> JsonObject {
@@ -120,7 +128,8 @@ fn hit(body: Vec<u8>) -> Response {
     (
         [
             (header::CONTENT_TYPE, "application/json"),
-            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            (header::CACHE_CONTROL, HIT_CACHE_CONTROL),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
         body,
     )

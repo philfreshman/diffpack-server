@@ -27,10 +27,15 @@ streams the bytes itself instead.
 `GET /diffs/v1?registry=npm&package=zod&from=…` would let this server build the
 `DiffKey` and call `DiffStore::get` unchanged. It would also make the app's own
 implementation of the key pointless, so the vectors would stop being what
-holds the two in step, and it would tell this server which package every
-visitor is looking at. The app is client-side by design. A `diff_id` names a
-Diff and cannot be read back into one, so the request carries nothing a
-visitor typed.
+holds the two in step, and every request would spell out the comparison a
+visitor opened. The app is client-side by design, and asking by `diff_id`
+keeps the package and the versions out of the request.
+
+That is all it buys. It does not stop this server from knowing: on a hit it
+reads an Entry that names its comparison, and on a miss the inputs are a name
+and two versions, so a likely comparison can be hashed and checked. What the
+request carries is less than the comparison; what the server can work out is
+not.
 
 The cost is that the server cannot check the asker's inputs. It checks the
 Entry instead: an Entry is served only when its own key hashes to the
@@ -47,7 +52,15 @@ hand the reader that decision. One route answers with a whole Entry or a miss.
 - An Entry can be 8 MiB and a response 4.5 MB. Over the ceiling, the Entry is
   served without its patches, and the app computes the files it opens. A tree
   alone over the ceiling is a miss.
-- A hit is `immutable`, because a `diff_id` names its contents. A miss is
-  `no-store`, so an Entry written later is seen.
+- A hit is `public, max-age=86400, s-maxage=31536000`: a day in a browser,
+  and a year in Vercel's CDN, whose copy a deployment replaces. Not
+  `immutable`: an Entry is write-once and a `diff_id` names its inputs, but
+  the caps that shape a served body are not in the key, and a mistake in how
+  one is assembled should not outlive a deployment in anyone's browser. A miss
+  is `no-store`, so an Entry written later is seen.
 - Any origin may read, with no credentials. What is served is a diff of two
   published packages, so there is nothing to keep from another site.
+- Like the MCP endpoint (ADR 0018), the route has no rate limit. A request that
+  misses costs a store lookup, and a hit costs reading up to an Entry's 8 MiB,
+  once per CDN copy. Anyone can loop over made-up `diff_id`s; what that costs
+  is Blob API operations, and it is the same exposure ADR 0018 accepts.

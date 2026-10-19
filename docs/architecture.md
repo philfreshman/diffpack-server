@@ -1021,9 +1021,10 @@ already in the log, written by the default panic hook beside the line; the
 line does not repeat them, because a panic message is free text that can carry
 whatever the code that panicked formatted into it.
 
-A `resources/read` leaves a line too, through the same `run`, and so does a
-request to the entries route. A line names one of `tool`, `resource` and
-`route`, never two, so counting one key counts only its own population. A read names the resource its URI addresses —
+A `resources/read` leaves a line too, through the same `run`, and so
+does a request to the entries route. A line names one of `tool`,
+`resource` and `route`, never two, so counting one key counts only its
+own population. A read names the resource its URI addresses —
 `registries`, `diff`, `file-diff`, the names the two lists publish — and
 summarises a diff handle by the inputs it carries, under the names
 `diff_package_versions` takes them by, so a read and that tool's call group
@@ -1169,9 +1170,11 @@ reads one. See [ADR 0019](adr/0019-the-browser-reads-an-entry-through-the-server
 It asks the DiffStore with `get_by_id`, which serves an Entry only when the key
 inside it hashes to the `diff_id` asked for, and answers with that key, the
 tree and the patches. Everything else is a 404 miss: no Entry, half an Entry, a
-store that could not be read, no store at all, and any path segment that is
-not 64 lowercase hex digits. A hit is `immutable` and a miss `no-store`, and
-every answer carries `Access-Control-Allow-Origin: *` and no credentials.
+store that could not be read, no store at all, and anything after
+`/diffs/v1/` that is not 64 lowercase hex digits, deeper paths included. A hit
+is cached for a day in a browser and a year in the CDN (ADR 0019 says why not
+`immutable`), a miss is `no-store`, and every answer from the route carries
+`Access-Control-Allow-Origin: *` and no credentials.
 
 An Entry may be 8 MiB, so the Response ceiling is the route's to keep, and it
 is a field for the reason the store's caps are. Over it, the patches are left
@@ -1181,8 +1184,9 @@ Each request runs through `tools::run` over a Ctx built for it by a factory,
 `Ctx::new` in production, exactly as a tool call does. So the route and the
 tools find the store's credentials the same way, a panic is caught the same
 way, and every request leaves one Line: `"route": "/diffs/v1"`, the `diff_id`
-it was asked for, and the Cache outcome. A path segment that is not a
-`diff_id` is `invalid_params` with no Cache outcome, because nothing was
+it was asked for, and the Cache outcome. The outcome is what the browser got:
+an Entry whose tree alone is over the ceiling is a `miss`. A path that is not
+a `diff_id` is `invalid_params` with no Cache outcome, because nothing was
 looked up.
 
 ### `src/health.rs` — the `/health` body

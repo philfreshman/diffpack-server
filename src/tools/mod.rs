@@ -200,10 +200,14 @@ impl Recorded<'_> {
         entry
     }
 
-    pub async fn get_by_id(self, diff_id: &DiffId) -> Option<Entry> {
-        let entry = self.store.get_by_id(diff_id).await;
-        self.record(entry.is_some());
-        entry
+    pub async fn answer_by_id<T>(
+        self,
+        diff_id: &DiffId,
+        answer: impl FnOnce(Entry) -> Option<T>,
+    ) -> Option<T> {
+        let answered = self.store.get_by_id(diff_id).await.and_then(answer);
+        self.record(answered.is_some());
+        answered
     }
 
     fn record(self, found: bool) {

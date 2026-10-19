@@ -525,6 +525,13 @@ impl Memory {
         Some(self.blobs.lock().ok()?.get(pathname)?.uploaded_at.clone())
     }
 
+    pub fn place(&self, pathname: &str, bytes: Vec<u8>) {
+        if let Ok(mut blobs) = self.blobs.lock() {
+            let uploaded_at = format!("{:020}", UPLOADS.fetch_add(1, Ordering::Relaxed));
+            blobs.insert(pathname.to_owned(), Held { bytes, uploaded_at });
+        }
+    }
+
     pub fn blob(&self, pathname: &str) -> Option<Vec<u8>> {
         Some(self.blobs.lock().ok()?.get(pathname)?.bytes.clone())
     }
@@ -615,10 +622,7 @@ impl Memory {
         self.stalled().await;
         self.refusing(Operation::Write)?;
 
-        if let Ok(mut blobs) = self.blobs.lock() {
-            let uploaded_at = format!("{:020}", UPLOADS.fetch_add(1, Ordering::Relaxed));
-            blobs.insert(pathname.to_owned(), Held { bytes, uploaded_at });
-        }
+        self.place(pathname, bytes);
 
         Ok(())
     }
