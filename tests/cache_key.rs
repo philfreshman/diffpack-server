@@ -58,6 +58,7 @@ fn the_fixture_covers_the_cases_the_specification_calls_out() {
         "pypi/typing_extensions underscore",
         "pypi/Typing.Extensions mixed separators and case",
         "crates/serde",
+        "go/github.com/Masterminds/semver/v3 module path",
         "threshold 0.75 formats as 0.7500",
         "ignore_whitespace true",
         "order A to B",
@@ -238,30 +239,4 @@ fn blob_paths_are_the_diff_id_under_the_schema_prefix() {
             prefix(key.schema)
         );
     }
-}
-
-#[test]
-fn a_go_key_is_a_new_registry_value_in_the_same_schema() {
-    let key = DiffKey {
-        schema: 1,
-        engine: "0.4.1".into(),
-        registry: "go".into(),
-        package: "github.com/Masterminds/semver/v3".into(),
-        from: "v3.2.0".into(),
-        to: "v3.2.1".into(),
-        similarity_threshold: 0.75,
-        ignore_whitespace: false,
-    };
-
-    assert_eq!(
-        key.canonical(),
-        r#"{"engine":"0.4.1","from":"v3.2.0","ignore_whitespace":false,"package":"github.com/Masterminds/semver/v3","registry":"go","schema":1,"similarity_threshold":"0.7500","to":"v3.2.1"}"#,
-        "the module path goes in verbatim, capitals and `/v3` included, and the \
-         schema stays 1 because a registry was always a field of the key"
-    );
-    assert_eq!(
-        key.diff_id(),
-        "ba57f2372213c64cb75657d80ce12cabca61fadc8897d03b42aa31bd1b22a5dd",
-        "sha256 of the canonical string above, computed outside this crate"
-    );
 }

@@ -126,6 +126,10 @@ supplied them:
 - **No `v`-stripping.** `v4.0.0` and `4.0.0` are different keys.
 - **No scoped-name rewriting for npm.** `@types/node` goes in with the `@` and
   the `/` intact.
+- **No proxy escaping for Go.** `github.com/Masterminds/semver/v3` goes in as
+  typed, capitals and `/v3` included, and not as the proxy's
+  `github.com/!masterminds/semver/v3`: the `!` is how a URL spells a capital,
+  not part of the module's name.
 
 This is deliberate. The cost of being too strict is a cache miss — a diff gets
 recomputed and the result is still correct. The cost of being too loose is
