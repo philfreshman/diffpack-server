@@ -229,6 +229,7 @@ fn search_comes_from_the_registrys_own_index() {
             url: "https://registry.npmjs.org/-/v1/search?text=zod&size=10".to_owned(),
             accept: "application/json",
             whole_index: false,
+            names_a_package: false,
         }
     );
     assert_eq!(
@@ -237,6 +238,7 @@ fn search_comes_from_the_registrys_own_index() {
             url: "https://crates.io/api/v1/crates?q=json%20parser&per_page=5".to_owned(),
             accept: "application/json",
             whole_index: false,
+            names_a_package: false,
         },
         "a query is a parameter value, so a space in it is escaped and not sent"
     );
@@ -246,8 +248,57 @@ fn search_comes_from_the_registrys_own_index() {
             url: "https://pypi.org/simple/".to_owned(),
             accept: "application/vnd.pypi.simple.v1+json",
             whole_index: true,
+            names_a_package: false,
         },
         "PyPI has no search endpoint, so the source is the index itself"
+    );
+    assert_eq!(
+        Registry::Go.search("github.com/Masterminds/semver/v3", 10),
+        SearchSource {
+            url: "https://proxy.golang.org/github.com/!masterminds/semver/v3/@latest".to_owned(),
+            accept: "application/json",
+            whole_index: false,
+            names_a_package: true,
+        },
+        "the Go proxy has no search either, so the query is asked for as the module \
+         path it would have to be"
+    );
+}
+
+#[test]
+fn only_a_source_that_names_a_package_has_no_hits_where_it_has_nothing() {
+    assert!(
+        Registry::Go
+            .search("github.com/go-chi/chi/v5", 10)
+            .names_a_package,
+        "a 404 from the proxy is a module path with nothing at it"
+    );
+    for registry in [Registry::Npm, Registry::Crates, Registry::PyPi] {
+        assert!(
+            !registry.search("requests", 10).names_a_package,
+            "a 404 from {} is its search having moved, because no package was named",
+            registry.id()
+        );
+    }
+}
+
+#[test]
+fn a_go_search_answer_is_the_module_asked_for_at_the_version_latest_resolves() {
+    let body = r#"{"Version":"v5.5.0","Time":"2026-10-14T13:20:04Z"}"#;
+
+    assert_eq!(
+        Registry::Go.read_hits(body, "github.com/go-chi/chi/v5", 10),
+        Some(vec![Hit {
+            name: "github.com/go-chi/chi/v5".to_owned(),
+            version: Some("v5.5.0".to_owned()),
+            description: None,
+        }]),
+        "the proxy says which version and nothing about what the module is"
+    );
+    assert_eq!(
+        Registry::Go.read_hits("not found", "github.com/go-chi/chi/v5", 10),
+        None,
+        "a body that is not the proxy's answer is not a hit"
     );
 }
 
@@ -288,6 +339,7 @@ fn a_source_is_never_asked_for_more_than_it_answers() {
             url: "https://registry.npmjs.org/-/v1/search?text=zod&size=250".to_owned(),
             accept: "application/json",
             whole_index: false,
+            names_a_package: false,
         },
         "npm refuses a size over 250"
     );
@@ -297,6 +349,7 @@ fn a_source_is_never_asked_for_more_than_it_answers() {
             url: "https://crates.io/api/v1/crates?q=serde&per_page=100".to_owned(),
             accept: "application/json",
             whole_index: false,
+            names_a_package: false,
         },
         "crates.io refuses a per_page over 100"
     );

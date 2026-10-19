@@ -101,6 +101,18 @@ async fn the_description_says_which_registry_answers_with_less() {
 }
 
 #[tokio::test]
+async fn the_description_says_a_go_query_has_to_be_a_whole_module_path() {
+    let tool = listed(TOOL).await;
+    let said = tool["description"].as_str().unwrap_or_default();
+
+    assert!(
+        said.contains("Go") && said.contains("module path"),
+        "Go has nothing to search, so an agent has to be told that a Go query \
+         is the module path itself, got {said:?}"
+    );
+}
+
+#[tokio::test]
 async fn the_description_says_no_registry_answers_with_as_many_as_limit_allows() {
     let tool = listed(TOOL).await;
     let said = tool["description"].as_str().unwrap_or_default();
@@ -183,6 +195,43 @@ async fn a_pypi_search_answers_with_names_and_says_no_more_than_that() {
         items[1]["name"], "yamldown",
         "and the rest are ranked against the query here — `yamldown` before \
          `yamllint` because the two are the same length, got {items}"
+    );
+}
+
+#[tokio::test]
+async fn a_go_search_finds_the_module_a_whole_path_names() {
+    let result = call(json!({
+        "registry": "go",
+        "query": "github.com/go-chi/chi/v5",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["items"],
+        json!([{ "name": "github.com/go-chi/chi/v5", "version": "v5.5.0" }]),
+        "the proxy has no search, so a Go query is a module path and the hit is \
+         that module with the version `@latest` resolves: got {result}"
+    );
+}
+
+#[tokio::test]
+async fn a_go_query_that_names_no_module_is_no_hits_rather_than_an_outage() {
+    let result = call(json!({
+        "registry": "go",
+        "query": "http router",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "the proxy answers a path with no module at it with a 404, and here \
+         that is the query's miss rather than the source having moved: got {result}"
+    );
+    assert_eq!(
+        result["structuredContent"]["items"],
+        json!([]),
+        "got {result}"
     );
 }
 

@@ -269,38 +269,31 @@ impl Registry {
 
     pub fn search(self, query: &str, limit: u32) -> SearchSource {
         let escaped = escape(query);
-        let (url, accept, whole_index) = match self {
+        match self {
             Self::Npm => {
                 let size = limit.min(250);
-                (
-                    format!("https://registry.npmjs.org/-/v1/search?text={escaped}&size={size}"),
-                    "application/json",
-                    false,
-                )
+                SearchSource::asking(format!(
+                    "https://registry.npmjs.org/-/v1/search?text={escaped}&size={size}"
+                ))
             }
             Self::Crates => {
                 let per_page = limit.min(100);
-                (
-                    format!("https://crates.io/api/v1/crates?q={escaped}&per_page={per_page}"),
-                    "application/json",
-                    false,
-                )
+                SearchSource::asking(format!(
+                    "https://crates.io/api/v1/crates?q={escaped}&per_page={per_page}"
+                ))
             }
-            Self::PyPi => (
-                "https://pypi.org/simple/".to_owned(),
-                "application/vnd.pypi.simple.v1+json",
-                true,
-            ),
-            Self::Go => (
-                format!("{GO_PROXY}/{}/@latest", go_module_path(query)),
-                "application/json",
-                false,
-            ),
-        };
-        SearchSource {
-            url,
-            accept,
-            whole_index,
+            Self::PyPi => SearchSource {
+                url: "https://pypi.org/simple/".to_owned(),
+                accept: "application/vnd.pypi.simple.v1+json",
+                whole_index: true,
+                names_a_package: false,
+            },
+            Self::Go => SearchSource {
+                url: format!("{GO_PROXY}/{}/@latest", go_module_path(query)),
+                accept: "application/json",
+                whole_index: false,
+                names_a_package: true,
+            },
         }
     }
 
@@ -360,7 +353,14 @@ impl Registry {
                     .collect()
             }
 
-            Self::Go => return None,
+            Self::Go => {
+                let module = self.read_current(body)?;
+                vec![Hit {
+                    name: query.to_owned(),
+                    version: Some(module.version),
+                    description: None,
+                }]
+            }
         };
 
         Some(hits.into_iter().take(limit as usize).collect())
@@ -613,6 +613,18 @@ pub struct SearchSource {
     pub url: String,
     pub accept: &'static str,
     pub whole_index: bool,
+    pub names_a_package: bool,
+}
+
+impl SearchSource {
+    fn asking(url: String) -> Self {
+        Self {
+            url,
+            accept: "application/json",
+            whole_index: false,
+            names_a_package: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

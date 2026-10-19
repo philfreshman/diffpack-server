@@ -70,8 +70,11 @@ impl Tool for SearchPackages {
         best match first, each with the name to pass to the other tools. \
         npm and crates.io hits also carry the current version and the \
         package's own description; PyPI hits carry a name alone, because the \
-        index PyPI publishes has nothing else in it. A query that matches \
-        nothing is an empty list rather than an error. Each registry has its \
+        index PyPI publishes has nothing else in it. Go has no search at \
+        all, so a Go query has to be a whole module path, such as \
+        `github.com/go-chi/chi/v5`: the one hit is that module with the \
+        version `go get` installs, and anything else finds nothing. A query \
+        that matches nothing is an empty list rather than an error. Each registry has its \
         own ceiling on one answer, under what you can ask for here: npm \
         gives at most 250 and crates.io at most 100, so the total is what \
         this search found and not how many the registry has.";
