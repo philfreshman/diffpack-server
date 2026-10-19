@@ -90,7 +90,7 @@ fn our_own_codes_stay_inside_the_implementation_range() {
             waited: error::UPSTREAM_TIMEOUT,
         },
         Failure::OutOfTime {
-            budget: error::CALL_BUDGET,
+            deadline: error::CALL_DEADLINE,
         },
         Failure::TooLarge {
             package: "zod".to_owned(),
@@ -341,7 +341,7 @@ fn every_cause_a_line_can_carry_names_one_failure() {
         }
         .kind(),
         Failure::OutOfTime {
-            budget: error::CALL_BUDGET,
+            deadline: error::CALL_DEADLINE,
         }
         .kind(),
     ];
@@ -373,7 +373,7 @@ fn the_transient_failures_say_so_and_the_permanent_ones_do_not() {
             registry: "PyPI".to_owned(),
         },
         Failure::OutOfTime {
-            budget: error::CALL_BUDGET,
+            deadline: error::CALL_DEADLINE,
         },
     ] {
         let message = message_of(transient);
@@ -427,7 +427,7 @@ fn the_upstream_budget_leaves_the_function_time_to_answer() {
 }
 
 #[test]
-fn the_call_budget_leaves_the_function_time_to_answer() {
+fn the_call_deadline_leaves_the_function_time_to_answer() {
     let manifest: Value =
         serde_json::from_str(include_str!("../vercel.json")).expect("vercel.json should parse");
 
@@ -436,24 +436,24 @@ fn the_call_budget_leaves_the_function_time_to_answer() {
         .expect("vercel.json should give the handler a maxDuration");
 
     assert!(
-        (error::CALL_BUDGET + error::UPSTREAM_TIMEOUT).as_secs() <= max_duration,
-        "a call budget of {}s leaves too little of the function's {max_duration}s to \
+        (error::CALL_DEADLINE + error::UPSTREAM_TIMEOUT).as_secs() <= max_duration,
+        "a call deadline of {}s leaves too little of the function's {max_duration}s to \
          answer in",
-        error::CALL_BUDGET.as_secs()
+        error::CALL_DEADLINE.as_secs()
     );
 }
 
 #[test]
-fn the_call_budget_outlasts_the_longest_wait_on_a_registry() {
+fn the_call_deadline_outlasts_the_longest_wait_on_a_registry() {
     let a_listing_then_its_archive = 2;
     let a_slot_then_a_request = 2;
     let longest_wait = error::UPSTREAM_TIMEOUT * a_listing_then_its_archive * a_slot_then_a_request;
 
     assert!(
-        error::CALL_BUDGET > longest_wait,
+        error::CALL_DEADLINE > longest_wait,
         "a registry that is slow should be answered as slow, not as a call out of \
          time: {:?} against {longest_wait:?}",
-        error::CALL_BUDGET
+        error::CALL_DEADLINE
     );
 }
 

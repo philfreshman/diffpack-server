@@ -12,31 +12,31 @@ use diffpack_server::registry::Registry;
 use diffpack_server::tools::{self, Ctx};
 use serde_json::Value;
 
-const BUDGET: Duration = Duration::from_millis(50);
+const DEADLINE: Duration = Duration::from_millis(50);
 
-const LONGER_THAN_THE_BUDGET: Duration = Duration::from_secs(1);
+const LONGER_THAN_THE_DEADLINE: Duration = Duration::from_secs(1);
 
 #[tokio::test]
-async fn a_call_that_outlasts_its_budget_is_answered_rather_than_waited_on() {
+async fn a_call_that_outlasts_its_deadline_is_answered_rather_than_waited_on() {
     let log = Capture::new();
     let ctx = Ctx::fixture(FIXTURES)
         .logging_to(log.sink())
-        .answering_within(BUDGET);
+        .answering_within(DEADLINE);
     let started = Instant::now();
 
     let answer = tools::run(
         &ctx,
         Line::calling("diff_package_versions"),
         async |_| -> Result<(), Failure> {
-            tokio::time::sleep(LONGER_THAN_THE_BUDGET).await;
+            tokio::time::sleep(LONGER_THAN_THE_DEADLINE).await;
             Ok(())
         },
     )
     .await;
 
     assert!(
-        started.elapsed() < LONGER_THAN_THE_BUDGET,
-        "the call should have been answered when its budget ran out, after {:?}",
+        started.elapsed() < LONGER_THAN_THE_DEADLINE,
+        "the call should have been answered when its deadline passed, after {:?}",
         started.elapsed()
     );
 
@@ -52,23 +52,23 @@ async fn a_call_that_outlasts_its_budget_is_answered_rather_than_waited_on() {
 }
 
 #[tokio::test]
-async fn work_that_holds_a_thread_is_still_answered_when_the_budget_runs_out() {
+async fn work_that_holds_a_thread_is_still_answered_when_the_deadline_passes() {
     let log = Capture::new();
     let ctx = Ctx::fixture(FIXTURES)
         .logging_to(log.sink())
-        .answering_within(BUDGET);
+        .answering_within(DEADLINE);
     let started = Instant::now();
 
     let answer = tools::run(&ctx, Line::calling("diff_package_versions"), async |call| {
         call.compute("comparing two versions", || {
-            std::thread::sleep(LONGER_THAN_THE_BUDGET);
+            std::thread::sleep(LONGER_THAN_THE_DEADLINE);
         })
         .await
     })
     .await;
 
     assert!(
-        started.elapsed() < LONGER_THAN_THE_BUDGET,
+        started.elapsed() < LONGER_THAN_THE_DEADLINE,
         "work that never yields should not hold the answer back, answered after {:?}",
         started.elapsed()
     );
@@ -96,7 +96,7 @@ async fn extracting_an_archive_lets_the_runtime_get_on_with_other_work() {
     assert!(
         other_work_ran.load(Ordering::SeqCst),
         "on one thread, a task spawned before the fetch runs during it only if the \
-         extraction gave the thread up, which is what lets a call's budget run out \
+         extraction gave the thread up, which is what lets a call's deadline pass \
          while an archive is still being read"
     );
 }

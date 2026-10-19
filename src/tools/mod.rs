@@ -18,7 +18,7 @@ use crate::archive::{Archive, FileMap};
 use crate::cache_key::DiffKey;
 use crate::catalogue::Catalogue;
 use crate::compute;
-use crate::error::{Failure, CALL_BUDGET};
+use crate::error::{Failure, CALL_DEADLINE};
 use crate::handle::DiffHandle;
 use crate::log::{Line, Lookup, Sink, Spent};
 use crate::registry::{Hit, Registry, Versions};
@@ -76,7 +76,7 @@ pub struct Ctx {
     search: Arc<Search>,
     store: Arc<DiffStore>,
     log: Sink,
-    budget: Duration,
+    deadline: Duration,
 }
 
 impl Ctx {
@@ -87,7 +87,7 @@ impl Ctx {
             search: Arc::new(Search::live()),
             store: Arc::new(DiffStore::live()),
             log: Sink::default(),
-            budget: CALL_BUDGET,
+            deadline: CALL_DEADLINE,
         }
     }
 
@@ -99,7 +99,7 @@ impl Ctx {
             search: Arc::new(Search::fixture(fixtures.join("searches"))),
             store: Arc::new(Memory::new().store()),
             log: Sink::default(),
-            budget: CALL_BUDGET,
+            deadline: CALL_DEADLINE,
         }
     }
 
@@ -107,8 +107,8 @@ impl Ctx {
         Self { log, ..self }
     }
 
-    pub fn answering_within(self, budget: Duration) -> Self {
-        Self { budget, ..self }
+    pub fn answering_within(self, deadline: Duration) -> Self {
+        Self { deadline, ..self }
     }
 
     pub fn storing_in(self, store: DiffStore) -> Self {
@@ -125,7 +125,7 @@ impl Ctx {
             search: _,
             store: _,
             log: _,
-            budget: _,
+            deadline: _,
         } = self;
 
         &["archive", "catalogue", "search", "store"]
@@ -333,11 +333,12 @@ pub async fn run<T>(
 
     let guarded = AssertUnwindSafe(work(&call)).catch_unwind();
 
-    let answer = tokio::time::timeout(ctx.budget, guarded)
-        .await
-        .map_or(Err(Failure::OutOfTime { budget: ctx.budget }), |finished| {
-            finished.unwrap_or(Err(Failure::Panicked { doing }))
-        });
+    let answer = tokio::time::timeout(ctx.deadline, guarded).await.map_or(
+        Err(Failure::OutOfTime {
+            deadline: ctx.deadline,
+        }),
+        |finished| finished.unwrap_or(Err(Failure::Panicked { doing })),
+    );
     ctx.log.write(
         &line
             .taking(started.elapsed(), &call.spent)

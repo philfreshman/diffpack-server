@@ -7,7 +7,7 @@ use rmcp::model::{CallToolResult, ContentBlock, ErrorCode, ErrorData};
 
 pub const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub const CALL_BUDGET: Duration = Duration::from_secs(240);
+pub const CALL_DEADLINE: Duration = Duration::from_secs(240);
 
 const INTERNAL_FAILURE: ErrorCode = ErrorCode(-32000);
 
@@ -47,7 +47,7 @@ pub enum Failure {
     },
 
     OutOfTime {
-        budget: Duration,
+        deadline: Duration,
     },
 
     Unreachable {
@@ -285,12 +285,12 @@ impl Failure {
                 waited.as_secs()
             ),
 
-            Self::OutOfTime { budget } => format!(
+            Self::OutOfTime { deadline } => format!(
                 "Working this out took longer than the {} seconds this server gives one \
                  call, so this answer was sent instead of waiting longer. Try again once: \
                  a slow registry or a busy server passes. If it runs out of time again, \
                  what was asked for is too large to work out here.",
-                budget.as_secs()
+                deadline.as_secs()
             ),
 
             Self::Unreachable { registry } => {
