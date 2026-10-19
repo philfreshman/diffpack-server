@@ -43,6 +43,8 @@ pub const CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 pub const CACHE_TARGET_BYTES: u64 = 240 * 1024 * 1024;
 
+pub const WRITE_DEADLINE: Duration = Duration::from_secs(10);
+
 const THE_TREE_THEN_ITS_PATCHES: u32 = 2;
 
 pub const LONGEST_LOOKUP: Duration = blob::LONGEST_READ.saturating_mul(THE_TREE_THEN_ITS_PATCHES);
@@ -57,6 +59,8 @@ pub struct DiffStore {
     max_bytes: u64,
 
     target_bytes: u64,
+
+    write_deadline: Duration,
 
     prefix: String,
 
@@ -137,6 +141,7 @@ impl DiffStore {
             entry_cap: ENTRY_CAP,
             max_bytes: CACHE_MAX_BYTES,
             target_bytes: CACHE_TARGET_BYTES,
+            write_deadline: WRITE_DEADLINE,
             prefix: crate::cache_key::prefix(crate::cache_key::SCHEMA),
             log: Sink::default(),
         }
@@ -160,6 +165,13 @@ impl DiffStore {
     pub fn capping_entries_at(self, bytes: usize) -> Self {
         Self {
             entry_cap: bytes,
+            ..self
+        }
+    }
+
+    pub fn writing_within(self, deadline: Duration) -> Self {
+        Self {
+            write_deadline: deadline,
             ..self
         }
     }
@@ -224,7 +236,12 @@ impl DiffStore {
     }
 
     pub async fn put(&self, entry: Entry) {
-        self.writing(entry).await;
+        if tokio::time::timeout(self.write_deadline, self.writing(entry))
+            .await
+            .is_err()
+        {
+            self.gave_up::<()>(DROPPED);
+        }
     }
 
     async fn writing(&self, entry: Entry) {
@@ -427,6 +444,9 @@ const LISTING: &str = "listing what the blob store holds";
 const DELETING: &str = "evicting an entry from the blob store";
 
 const TOO_BIG: &str = "admitting an entry larger than the whole budget";
+
+const DROPPED: &str =
+    "writing to the blob store: the entry was dropped, unfinished at the write deadline";
 
 impl std::fmt::Debug for DiffStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

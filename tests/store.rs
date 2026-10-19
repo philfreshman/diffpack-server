@@ -386,6 +386,38 @@ async fn the_entry_is_written_before_the_answer_is_given() {
 }
 
 #[tokio::test]
+async fn a_write_that_outlasts_its_deadline_is_dropped_and_says_so() {
+    let log = Capture::new();
+    let slow = Memory::new().stalling(Duration::from_millis(400));
+    let hurried = || {
+        slow.store()
+            .writing_within(Duration::from_millis(50))
+            .logging_to(log.sink())
+    };
+
+    let began = Instant::now();
+    let answer = call(hurried, diffable()).await;
+    let answered = began.elapsed();
+
+    assert_eq!(
+        answer["isError"],
+        json!(false),
+        "a write the store could not finish in time is not a failed diff, got {answer}"
+    );
+    assert!(
+        answered < Duration::from_millis(350),
+        "the answer waited {answered:?} on a write given 50ms"
+    );
+    let notes = log.lines();
+    assert!(
+        notes
+            .iter()
+            .any(|line| line.contains(r#""seam":"store""#) && line.contains("dropped")),
+        "a write that was cut short leaves a line saying the entry was dropped, got {notes:?}"
+    );
+}
+
+#[tokio::test]
 async fn an_entry_that_is_already_there_is_not_written_again() {
     let store = Memory::new();
 
