@@ -310,7 +310,7 @@ async fn the_line_says_whether_the_answer_was_remembered() {
     let store = Memory::new();
 
     call_storing(&log, &store, "diff_package_versions", diffable()).await;
-    settles(&store).await;
+    entry_written(&store);
     call_storing(&log, &store, "diff_package_versions", diffable()).await;
 
     let lines = log.lines();
@@ -371,7 +371,7 @@ async fn each_call_through_one_context_says_what_its_own_lookup_found() {
     let store = Memory::new();
 
     call_storing(&Capture::new(), &store, "diff_package_versions", diffable()).await;
-    settles(&store).await;
+    entry_written(&store);
 
     let log = Capture::new();
     let client = Client::over(
@@ -451,7 +451,7 @@ async fn a_resource_read_leaves_a_line_naming_the_comparison_it_read() {
     );
 
     let summary = client.call("diff_package_versions", diffable()).await;
-    settles(&store).await;
+    entry_written(&store);
     read(&client, &format!("diffpack://diff/{}", handle_in(&summary))).await;
 
     let lines = log.lines();
@@ -856,16 +856,10 @@ fn diffable() -> Value {
     })
 }
 
-async fn settles(store: &Memory) {
-    for _ in 0..400 {
-        if store.written().len() >= 2 {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-
-    panic!(
-        "the entry should be written by now, the store holds {:?}",
+fn entry_written(store: &Memory) {
+    assert!(
+        store.written().len() >= 2,
+        "the entry is written before the answer, the store holds {:?}",
         store.written()
     );
 }

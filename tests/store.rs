@@ -42,7 +42,7 @@ async fn the_same_diff_asked_for_twice_is_remembered_the_second_time() {
         json!(false),
         "nothing had been diffed yet, got {first}"
     );
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     let second = call(|| store.store(), diffable()).await;
     assert_eq!(
@@ -58,7 +58,7 @@ async fn a_remembered_answer_is_the_one_that_was_computed() {
     let store = Memory::new();
 
     let computed = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     let remembered = call(|| store.store(), diffable()).await;
 
@@ -74,7 +74,7 @@ async fn a_remembered_diff_is_two_blobs_under_the_name_the_comparison_has() {
     let store = Memory::new();
 
     let answer = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     let diff_id = answer["structuredContent"]["diff_id"]
         .as_str()
@@ -95,7 +95,7 @@ async fn every_changed_file_is_remembered_with_its_patch_already_rendered() {
     let store = Memory::new();
 
     let answer = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     assert_eq!(
         blob(&store, &patches_of(&answer)),
@@ -128,7 +128,7 @@ async fn a_patch_over_the_cap_is_left_out_and_the_others_are_kept() {
     let store = Memory::new();
 
     let answer = call(|| store.store().capping_patches_at(100), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     let patches = blob(&store, &patches_of(&answer));
 
@@ -146,7 +146,7 @@ async fn an_entry_that_left_one_patch_out_says_a_patch_was_left_out() {
     let store = Memory::new();
 
     let answer = call(|| store.store().capping_patches_at(100), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     assert_eq!(
         blob(&store, &meta_of(&answer))["patches_omitted"],
@@ -168,7 +168,7 @@ async fn a_comparison_with_nothing_to_patch_says_nothing_was_dropped() {
     let store = Memory::new();
 
     let answer = call(|| store.store(), unchanged()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     assert_eq!(
         blob(&store, &patches_of(&answer)),
@@ -187,7 +187,7 @@ async fn an_entry_over_the_cap_keeps_its_tree_and_says_its_patches_are_gone() {
     let store = Memory::new();
 
     let answer = call(|| store.store().capping_entries_at(100), diffable()).await;
-    settles(&store, 1).await;
+    written_at_least(&store, 1);
 
     assert_eq!(
         store.written(),
@@ -202,7 +202,7 @@ async fn an_entry_over_the_cap_keeps_its_tree_and_says_its_patches_are_gone() {
 
     let whole = Memory::new();
     let answer = call(|| whole.store(), diffable()).await;
-    settles(&whole, 2).await;
+    written_at_least(&whole, 2);
 
     assert_eq!(
         blob(&whole, &meta_of(&answer))["patches_omitted"],
@@ -217,7 +217,7 @@ async fn an_entry_that_dropped_its_patches_is_still_remembered() {
     let capped = || store.store().capping_entries_at(100);
 
     call(capped, diffable()).await;
-    settles(&store, 1).await;
+    written_at_least(&store, 1);
 
     let second = call(capped, diffable()).await;
 
@@ -233,7 +233,7 @@ async fn half_an_entry_is_not_a_cache_hit() {
     let store = Memory::new();
 
     let answer = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     store.forget(&patches_of(&answer));
 
@@ -245,7 +245,7 @@ async fn half_an_entry_is_not_a_cache_hit() {
          {again}"
     );
 
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     assert_eq!(
         store.written(),
         vec![meta_of(&answer), patches_of(&answer)],
@@ -259,7 +259,7 @@ async fn an_entry_that_lost_the_patches_it_kept_still_answers_for_every_file() {
     let capped = || store.store().capping_patches_at(100);
 
     let answer = call(capped, diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     store.forget(&patches_of(&answer));
 
@@ -346,12 +346,12 @@ async fn a_lost_read_is_a_miss_that_says_the_read_failed() {
     let store = Memory::new();
 
     let answer = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     let log = Capture::new();
     let lost = Memory::failing(&store, Operation::Read);
     let again = call(|| lost.store().logging_to(log.sink()), diffable()).await;
-    let notes = noted(&log).await;
+    let notes = store_notes(&log);
 
     assert_eq!(
         again["structuredContent"]["cached"],
@@ -457,7 +457,7 @@ async fn an_entry_that_is_already_there_is_not_written_again() {
     let store = Memory::new();
 
     let answer = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     let uploaded = |at: &str| {
         store
@@ -490,7 +490,7 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
     let store = Memory::new();
 
     let first = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     let named = |answer: &Value| answer["structuredContent"]["diff_id"].clone();
 
@@ -515,7 +515,7 @@ async fn changing_anything_the_comparison_is_named_by_is_an_entry_of_its_own() {
         }
 
         let answer = call(|| store.store(), arguments).await;
-        settles(&store, 2 * (written + 1)).await;
+        written_at_least(&store, 2 * (written + 1));
         written += 1;
 
         assert_eq!(
@@ -543,7 +543,7 @@ async fn a_reading_tool_is_served_the_stored_tree_rather_than_the_archives() {
     let store = Memory::new();
 
     let diffed = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     let walk = json!({ "handle": diffed["structuredContent"]["handle"].clone() });
 
     let served = one_sided(|| store.store(), "get_diff_tree", walk.clone()).await;
@@ -575,7 +575,7 @@ async fn a_read_of_the_whole_comparison_is_served_the_stored_tree_too() {
     let store = Memory::new();
 
     let diffed = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     let uri = format!(
         "diffpack://diff/{}",
         diffed["structuredContent"]["handle"]
@@ -609,7 +609,7 @@ async fn a_file_diff_is_served_the_stored_patch_rather_than_the_archives() {
     let store = Memory::new();
 
     let diffed = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     let asked = json!({
         "handle": diffed["structuredContent"]["handle"].clone(),
         "path": "src/index.js",
@@ -655,7 +655,7 @@ async fn a_remembered_patch_says_whether_its_files_decoded() {
         }),
     )
     .await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     let patches = blob(&store, &patches_of(&diffed));
 
     for path in ["logo.png", "src/far.js"] {
@@ -690,7 +690,7 @@ async fn a_renamed_file_is_served_only_the_patch_it_was_asked_for() {
     let store = Memory::new();
 
     let diffed = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     let handle = || diffed["structuredContent"]["handle"].clone();
 
     let moved = json!({
@@ -721,7 +721,7 @@ async fn a_directory_is_refused_out_of_the_entry_without_the_archives() {
     let store = Memory::new();
 
     let diffed = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     let asked = json!({
         "handle": diffed["structuredContent"]["handle"].clone(),
         "path": "src",
@@ -760,7 +760,7 @@ async fn a_directory_is_refused_out_of_the_entry_whatever_old_path_names() {
     let store = Memory::new();
 
     let diffed = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     for old_path in ["src/new-name.js", "src/old-name.js"] {
         let asked = json!({
@@ -792,7 +792,7 @@ async fn a_read_of_one_files_diff_is_served_the_stored_patch_too() {
     let store = Memory::new();
 
     let diffed = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     let uri = format!(
         "diffpack://diff/{}/file/src/index.js",
         diffed["structuredContent"]["handle"]
@@ -828,7 +828,7 @@ async fn a_read_of_a_directory_is_refused_out_of_the_entry_too() {
     let store = Memory::new();
 
     let diffed = call(|| store.store(), diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     let uri = format!(
         "diffpack://diff/{}/file/src",
         diffed["structuredContent"]["handle"]
@@ -912,7 +912,7 @@ async fn a_read_of_a_path_that_is_a_file_and_a_directory_is_the_tools_answer() {
     for (from, to, header) in directions {
         let store = Memory::new();
         let diffed = call(|| store.store(), shape(from, to)).await;
-        settles(&store, 2).await;
+        written_at_least(&store, 2);
         let handle = diffed["structuredContent"]["handle"]
             .as_str()
             .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
@@ -949,7 +949,7 @@ async fn a_read_of_a_path_that_is_a_file_and_a_directory_is_the_tools_answer() {
 async fn a_file_inside_a_path_that_became_a_directory_is_served_warm_without_the_archives() {
     let store = Memory::new();
     let diffed = call(|| store.store(), shape("1.0.0", "2.0.0")).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     let asked = json!({
         "handle": diffed["structuredContent"]["handle"].clone(),
         "path": "lib/index.js",
@@ -975,7 +975,7 @@ async fn an_entry_holds_the_patch_for_a_file_that_became_a_directory() {
     let store = Memory::new();
 
     let answer = call(|| store.store(), shape("1.0.0", "2.0.0")).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
 
     let patches = blob(&store, &patches_of(&answer));
     assert_eq!(
@@ -1019,7 +1019,7 @@ async fn lib_cold(from: &str, to: &str) -> Value {
 async fn lib_warm(from: &str, to: &str) -> Value {
     let store = Memory::new();
     let diffed = call(|| store.store(), shape(from, to)).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     let asked = json!({
         "handle": diffed["structuredContent"]["handle"].clone(),
         "path": "lib",
@@ -1056,7 +1056,7 @@ async fn a_file_whose_patch_was_dropped_is_rendered_rather_than_missed() {
     let capped = || store.store().capping_patches_at(100);
 
     let diffed = call(capped, diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     let asking = |path: &str| {
         json!({
             "handle": diffed["structuredContent"]["handle"].clone(),
@@ -1093,7 +1093,7 @@ async fn the_tool_and_the_resource_answer_every_kind_of_file_alike() {
     let capped = || store.store().capping_patches_at(100);
 
     let diffed = call(capped, diffable()).await;
-    settles(&store, 2).await;
+    written_at_least(&store, 2);
     let handle = diffed["structuredContent"]["handle"]
         .as_str()
         .unwrap_or_else(|| panic!("the answer carries a handle, got {diffed}"))
@@ -1186,7 +1186,7 @@ async fn a_reading_tool_answers_the_same_with_no_store_to_read() {
         "and it is the page a store would have been served"
     );
 
-    let notes = noted(&log).await;
+    let notes = store_notes(&log);
     assert!(
         notes
             .iter()
@@ -1201,13 +1201,13 @@ async fn a_budget_with_room_for_one_entry_keeps_the_newer_one() {
     let store = Memory::new();
 
     let first = call(|| store.store(), at(0)).await;
-    lands(&store, &first).await;
+    landed(&store, &first);
 
     let entry = held(&store);
     let budgeted = || store.store().budgeting(entry + entry / 16, entry);
 
     let second = call(budgeted, at(1)).await;
-    lands(&store, &second).await;
+    landed(&store, &second);
 
     assert_eq!(
         store.written(),
@@ -1221,7 +1221,7 @@ async fn a_run_well_past_the_budget_never_takes_the_store_over_it() {
     let store = Memory::new();
 
     let first = call(|| store.store(), at(0)).await;
-    lands(&store, &first).await;
+    landed(&store, &first);
 
     let entry = held(&store);
     let (max, target) = (3 * entry + entry / 16, 3 * entry);
@@ -1229,7 +1229,7 @@ async fn a_run_well_past_the_budget_never_takes_the_store_over_it() {
 
     for step in 1..12 {
         let answer = call(budgeted, at(step)).await;
-        lands(&store, &answer).await;
+        landed(&store, &answer);
 
         assert!(
             held(&store) <= max,
@@ -1252,13 +1252,13 @@ async fn a_sweep_takes_the_oldest_entries_whole_and_the_newest_survive() {
     let store = Memory::new();
 
     let first = call(|| store.store(), at(0)).await;
-    lands(&store, &first).await;
+    landed(&store, &first);
     let entry = held(&store);
 
     let mut seeded = vec![first];
     for step in 1..5 {
         let answer = call(|| store.store(), at(step)).await;
-        lands(&store, &answer).await;
+        landed(&store, &answer);
         seeded.push(answer);
     }
 
@@ -1271,7 +1271,7 @@ async fn a_sweep_takes_the_oldest_entries_whole_and_the_newest_survive() {
 
     let budgeted = || store.store().budgeting(2 * entry + entry / 16, 2 * entry);
     let sixth = call(budgeted, at(5)).await;
-    lands(&store, &sixth).await;
+    landed(&store, &sixth);
 
     let mut survived: Vec<String> = [&seeded[4], &sixth]
         .into_iter()
@@ -1291,11 +1291,11 @@ async fn a_put_of_an_entry_already_there_makes_no_room_it_will_not_use() {
     let store = Memory::new();
 
     let first = call(|| store.store(), at(0)).await;
-    lands(&store, &first).await;
+    landed(&store, &first);
     let entry = held(&store);
 
     let second = call(|| store.store(), at(1)).await;
-    lands(&store, &second).await;
+    landed(&store, &second);
 
     let missed = Memory::failing(&store, Operation::Read);
     let budgeted = || missed.store().budgeting(2 * entry + entry / 16, 2 * entry);
@@ -1328,11 +1328,11 @@ async fn a_put_of_the_oldest_entry_does_not_sweep_itself_away() {
     let store = Memory::new();
 
     let oldest = call(|| store.store(), at(0)).await;
-    lands(&store, &oldest).await;
+    landed(&store, &oldest);
     let entry = held(&store);
 
     let newer = call(|| store.store(), at(1)).await;
-    lands(&store, &newer).await;
+    landed(&store, &newer);
 
     let uploaded = |at: &str| {
         store
@@ -1367,7 +1367,7 @@ async fn an_entry_too_big_for_the_whole_budget_is_refused_without_a_sweep() {
     let store = Memory::new();
 
     let first = call(|| store.store(), at(0)).await;
-    lands(&store, &first).await;
+    landed(&store, &first);
     let entry = held(&store);
 
     let log = Capture::new();
@@ -1379,7 +1379,7 @@ async fn an_entry_too_big_for_the_whole_budget_is_refused_without_a_sweep() {
     };
 
     let answered = call(budgeted, at(1)).await;
-    let notes = noted(&log).await;
+    let notes = store_notes(&log);
 
     assert_eq!(
         store.written(),
@@ -1406,7 +1406,7 @@ async fn a_sweep_whose_deletes_all_fail_admits_nothing() {
     let store = Memory::new();
 
     let first = call(|| store.store(), at(0)).await;
-    lands(&store, &first).await;
+    landed(&store, &first);
     let entry = held(&store);
 
     let log = Capture::new();
@@ -1419,8 +1419,8 @@ async fn a_sweep_whose_deletes_all_fail_admits_nothing() {
     };
 
     let second = call(budgeted, at(1)).await;
-    let notes = noted(&log).await;
-    stays_out(&store, &second).await;
+    let notes = store_notes(&log);
+    kept_out(&store, &second);
 
     assert_eq!(
         store.written(),
@@ -1438,13 +1438,13 @@ async fn a_sweep_that_freed_less_than_it_needed_admits_nothing() {
     let store = Memory::new();
 
     let first = call(|| store.store(), at(0)).await;
-    lands(&store, &first).await;
+    landed(&store, &first);
     let entry = held(&store);
 
     let mut seeded = vec![first];
     for step in 1..5 {
         let answer = call(|| store.store(), at(step)).await;
-        lands(&store, &answer).await;
+        landed(&store, &answer);
         seeded.push(answer);
     }
 
@@ -1464,8 +1464,8 @@ async fn a_sweep_that_freed_less_than_it_needed_admits_nothing() {
     };
 
     let sixth = call(budgeted, at(5)).await;
-    let notes = noted(&log).await;
-    stays_out(&store, &sixth).await;
+    let notes = store_notes(&log);
+    kept_out(&store, &sixth);
 
     let mut survived: Vec<String> = seeded[1..]
         .iter()
@@ -1491,8 +1491,8 @@ async fn a_listing_that_fails_refuses_admission_and_writes_nothing() {
     let log = Capture::new();
     let blind = Memory::failing(&store, Operation::List);
     let answer = call(|| blind.store().logging_to(log.sink()), diffable()).await;
-    let notes = noted(&log).await;
-    stays_out(&store, &answer).await;
+    let notes = store_notes(&log);
+    kept_out(&store, &answer);
 
     assert_eq!(
         answer["isError"],
@@ -1519,8 +1519,8 @@ async fn a_head_that_fails_for_one_blob_of_an_entry_writes_neither_blob() {
     let log = Capture::new();
     let unsure = Memory::failing_once(&store, Operation::Head);
     let answer = call(|| unsure.store().logging_to(log.sink()), diffable()).await;
-    let notes = noted(&log).await;
-    stays_out(&store, &answer).await;
+    let notes = store_notes(&log);
+    kept_out(&store, &answer);
 
     assert_eq!(
         answer["isError"],
@@ -1546,7 +1546,7 @@ async fn a_put_that_fails_still_answers_the_diff_and_says_so() {
     let log = Capture::new();
     let refusing = Memory::failing(&store, Operation::Write);
     let answer = call(|| refusing.store().logging_to(log.sink()), diffable()).await;
-    let notes = noted(&log).await;
+    let notes = store_notes(&log);
 
     let working = Memory::new();
     let cold = call(|| working.store(), diffable()).await;
@@ -1567,38 +1567,28 @@ async fn a_put_that_fails_still_answers_the_diff_and_says_so() {
     );
 }
 
-async fn stays_out(store: &Memory, answer: &Value) {
+fn kept_out(store: &Memory, answer: &Value) {
     let meta = meta_of(answer);
-    let giving_up = Instant::now() + Duration::from_secs(1);
 
-    while Instant::now() < giving_up {
-        assert!(
-            !store.written().contains(&meta),
-            "the entry at `{meta}` was admitted into room the sweep never freed"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    assert!(
+        !store.written().contains(&meta),
+        "the entry at `{meta}` was admitted into room the sweep never freed"
+    );
 }
 
-async fn noted(log: &Capture) -> Vec<String> {
-    for _ in 0..400 {
-        let notes: Vec<String> = log
-            .lines()
-            .into_iter()
-            .filter(|line| line.contains(r#""seam":"store""#))
-            .collect();
+fn store_notes(log: &Capture) -> Vec<String> {
+    let notes: Vec<String> = log
+        .lines()
+        .into_iter()
+        .filter(|line| line.contains(r#""seam":"store""#))
+        .collect();
 
-        if !notes.is_empty() {
-            return notes;
-        }
-
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-
-    panic!(
-        "the store should have said something by now, {:?} is all there is",
+    assert!(
+        !notes.is_empty(),
+        "the store has said something by the time the answer is in, {:?} is all there is",
         log.lines()
     );
+    notes
 }
 
 #[tokio::test]
@@ -1606,12 +1596,12 @@ async fn two_admissions_at_once_do_not_take_the_store_over_the_ceiling() {
     let store = Memory::new();
 
     let first = call(|| store.store(), at(0)).await;
-    lands(&store, &first).await;
+    landed(&store, &first);
     let entry = held(&store);
 
     for step in 1..4 {
         let answer = call(|| store.store(), at(step)).await;
-        lands(&store, &answer).await;
+        landed(&store, &answer);
     }
 
     let (max, target) = (4 * entry, 3 * entry);
@@ -1619,8 +1609,8 @@ async fn two_admissions_at_once_do_not_take_the_store_over_the_ceiling() {
     let budgeted = || slow.store().budgeting(max, target);
 
     let (fifth, sixth) = tokio::join!(call(budgeted, at(4)), call(budgeted, at(5)));
-    lands(&store, &fifth).await;
-    lands(&store, &sixth).await;
+    landed(&store, &fifth);
+    landed(&store, &sixth);
 
     assert!(
         held(&store) <= max,
@@ -1635,11 +1625,11 @@ async fn the_sweep_is_done_before_the_answer_is_given() {
     let store = Memory::new();
 
     let oldest = call(|| store.store(), at(0)).await;
-    lands(&store, &oldest).await;
+    landed(&store, &oldest);
     let entry = held(&store);
 
     let second = call(|| store.store(), at(1)).await;
-    lands(&store, &second).await;
+    landed(&store, &second);
 
     let slow = store.clone().stalling(Duration::from_millis(100));
     let budgeted = || slow.store().budgeting(entry + entry / 16, entry);
@@ -1667,7 +1657,7 @@ async fn a_comparison_the_sweep_took_is_recomputed_and_served() {
     let store = Memory::new();
 
     let diffed = call(|| store.store(), at(0)).await;
-    lands(&store, &diffed).await;
+    landed(&store, &diffed);
     let entry = held(&store);
 
     let handle = diffed["structuredContent"]["handle"].clone();
@@ -1676,7 +1666,7 @@ async fn a_comparison_the_sweep_took_is_recomputed_and_served() {
 
     let budgeted = || store.store().budgeting(entry + entry / 16, entry);
     let next = call(budgeted, at(1)).await;
-    lands(&store, &next).await;
+    landed(&store, &next);
 
     assert!(
         !store.written().contains(&meta_of(&diffed)),
@@ -1716,34 +1706,20 @@ fn held(store: &Memory) -> u64 {
         .sum()
 }
 
-async fn lands(store: &Memory, answer: &Value) {
+fn landed(store: &Memory, answer: &Value) {
     let (meta, patches) = (meta_of(answer), patches_of(answer));
-    let giving_up = Instant::now() + Duration::from_secs(30);
+    let written = store.written();
 
-    while Instant::now() < giving_up {
-        let written = store.written();
-        if written.contains(&meta) && written.contains(&patches) {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-
-    panic!(
-        "the entry at `{meta}` should be there by now, {:?} is",
-        store.written()
+    assert!(
+        written.contains(&meta) && written.contains(&patches),
+        "the entry at `{meta}` is written before the answer, and {written:?} is what is there"
     );
 }
 
-async fn settles(store: &Memory, blobs: usize) {
-    for _ in 0..400 {
-        if store.written().len() >= blobs {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-
-    panic!(
-        "the store should hold {blobs} blobs by now, it holds {:?}",
+fn written_at_least(store: &Memory, blobs: usize) {
+    assert!(
+        store.written().len() >= blobs,
+        "the store holds {blobs} blobs once the answer is in, it holds {:?}",
         store.written()
     );
 }
