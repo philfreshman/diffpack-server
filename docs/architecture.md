@@ -970,7 +970,7 @@ where it is deliberately.
 `page::Cursor` and `page::MaxBytes` — rather than two numbers and a string a
 tool describes for itself. They are the only part of the ceiling an agent ever
 sees, so the default, the range, the "passed back unchanged" rule and the
-"this can only ask for less" rule are written into their schemas and every
+"never more than the ceiling" rule are written into their schemas and every
 tool inherits them by naming the type. `Cursor` deserialises by decoding, so a
 cursor that is not ours is `-32602` before a handler runs, the same way a
 `DiffHandle` is.
