@@ -492,6 +492,40 @@ async fn a_file_diff_read_names_the_file_as_well_as_the_comparison() {
 }
 
 #[tokio::test]
+async fn a_uri_that_addresses_nothing_is_written_as_itself_and_redacted() {
+    let unknown = "diffpack://nothing-here";
+    let signed = "https://blob.vercel-storage.com/diffs/abc?token=s3cr3t&expires=1";
+
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    read(&client, unknown).await;
+    read(&client, signed).await;
+
+    let lines = log.lines();
+    assert_eq!(
+        lines.len(),
+        2,
+        "a read nothing answers is still a read: {lines:?}"
+    );
+
+    let line = parse(&lines[0]);
+    assert_eq!(
+        line["resource"], unknown,
+        "with no resource to name, the URI is what the caller asked for: {line}"
+    );
+    assert_eq!(
+        line["result"], "no_such_resource",
+        "and the line says nothing answered it: {line}"
+    );
+
+    assert!(
+        !lines[1].contains(signed),
+        "a URI is the caller's text and goes through the same redaction: {}",
+        lines[1]
+    );
+}
+
+#[tokio::test]
 async fn a_call_that_panics_still_leaves_its_line() {
     let log = Capture::new();
     let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
