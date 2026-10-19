@@ -73,9 +73,10 @@ fn success(response: Response, about: &About<'_>) -> Result<Response, Failure> {
     }
 
     Err(match status {
-        StatusCode::NOT_FOUND | StatusCode::FORBIDDEN | StatusCode::GONE => {
-            (about.missing)(status.as_u16())
-        }
+        StatusCode::NOT_FOUND
+        | StatusCode::FORBIDDEN
+        | StatusCode::METHOD_NOT_ALLOWED
+        | StatusCode::GONE => (about.missing)(status.as_u16()),
 
         StatusCode::TOO_MANY_REQUESTS => Failure::RateLimited {
             registry: about.registry.name().to_owned(),
@@ -206,7 +207,12 @@ pub(crate) mod tests {
     async fn stub() -> (String, InFlight) {
         let in_flight = InFlight::default();
         let app = Router::new().fallback(hold).with_state(in_flight.clone());
+        let addr = listening(app).await;
 
+        (format!("http://{addr}/archive"), in_flight)
+    }
+
+    async fn listening(app: Router) -> std::net::SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("a test can bind a loopback port");
@@ -217,7 +223,7 @@ pub(crate) mod tests {
             let _ = axum::serve(listener, app).await;
         });
 
-        (format!("http://{addr}/archive"), in_flight)
+        addr
     }
 
     async fn hold(State(in_flight): State<InFlight>) -> &'static str {
@@ -309,6 +315,36 @@ pub(crate) mod tests {
             2,
             "a comparison asks for both versions at once, and the cap has to \
              let it"
+        );
+    }
+
+    async fn npm_refusing_a_slashed_name_with(status: StatusCode) -> String {
+        let app = Router::new().fallback(move || async move { status });
+        let addr = listening(app).await;
+
+        format!("http://{addr}/types%2Fnode")
+    }
+
+    #[tokio::test]
+    async fn a_url_the_registry_will_not_serve_a_get_at_names_nothing() {
+        let _turn = ONE_AT_A_TIME.lock().await;
+        let url = npm_refusing_a_slashed_name_with(StatusCode::METHOD_NOT_ALLOWED).await;
+        let about = About {
+            missing: &|_| Failure::NoSuchPackage {
+                registry: "npm".to_owned(),
+                package: "types/node".to_owned(),
+            },
+            ..about()
+        };
+
+        let refused = bytes(&url, 1024, &about).await;
+
+        assert_eq!(
+            refused.as_ref().err().map(Failure::kind),
+            Some("no_such_package"),
+            "npm answers 405 to an unscoped name with a slash in it; this server \
+             only ever sends a GET, so asking again cannot help and the name is \
+             what to correct, got {refused:?}"
         );
     }
 
