@@ -20,6 +20,8 @@ const COMPARISON_OPTIONS: [&str; 2] = ["similarity_threshold", "ignore_whitespac
 
 const PATH_ARGUMENTS: [&str; 3] = ["path", "prefix", "old_path"];
 
+const ANSWERED_FROM_ITS_ARGUMENTS_ALONE: [&str; 1] = ["resolve_archive_url"];
+
 const JSON_SCHEMA_FORMATS: [&str; 19] = [
     "date-time",
     "date",
@@ -143,9 +145,11 @@ async fn every_tool_declares_the_hints_a_client_decides_on() {
              {annotations}"
         );
         assert_eq!(
-            annotations["openWorldHint"], true,
-            "`{name}` answers about a package on a registry, which is a world \
-             this server does not control, got {annotations}"
+            annotations["openWorldHint"],
+            !ANSWERED_FROM_ITS_ARGUMENTS_ALONE.contains(&name),
+            "`{name}` is open-world exactly when it reaches a registry, a world \
+             this server does not control; one that builds its answer from its \
+             arguments alone reaches nothing: got {annotations}"
         );
         assert!(
             annotations["idempotentHint"].is_boolean(),
