@@ -158,6 +158,11 @@ fn a_listing_is_read_for_the_archive_a_diff_wants() {
         "an sdist is preferred over a wheel, whichever order they are listed in"
     );
     assert_eq!(
+        Registry::PyPi.choose_archive("9.9", &listing(&format!("{wheel},{sdist}"))),
+        Some("https://files.pythonhosted.org/x-1.0.tar.gz".to_owned()),
+        "a PyPI listing is already for one version, so the version asked for does not change the choice"
+    );
+    assert_eq!(
         Registry::PyPi.choose_archive("1.0", &listing(wheel)),
         Some("https://files.pythonhosted.org/x-py3-none-any.whl".to_owned()),
         "a version published only as a wheel is still diffable"
