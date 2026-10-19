@@ -293,11 +293,12 @@ pub async fn run<T>(
 ) -> Result<T, Failure> {
     let call = Call::new(ctx);
     let started = Instant::now();
+    let doing = line.subject.doing();
 
     let answer = AssertUnwindSafe(work(&call))
         .catch_unwind()
         .await
-        .unwrap_or(Err(Failure::Panicked));
+        .unwrap_or(Err(Failure::Panicked { doing }));
     ctx.log.write(
         &line
             .taking(started.elapsed(), &call.spent)

@@ -551,10 +551,15 @@ async fn a_call_that_panics_still_leaves_its_line() {
 
     let refused = answer
         .expect_err("a call that panicked has no answer to give")
-        .refuse();
+        .respond()
+        .expect_err("a panic reaches the protocol channel, not the model");
     assert_eq!(
         refused.code.0, -32603,
         "a panic is JSON-RPC's own internal error, as it was before the dispatch caught it"
+    );
+    assert_eq!(
+        refused.message, "diffpack failed while calling a tool.",
+        "the client is told what `Guarded` told it before the dispatch caught the panic"
     );
 }
 

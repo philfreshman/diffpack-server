@@ -326,7 +326,10 @@ fn every_cause_a_line_can_carry_names_one_failure() {
             doing: "answering a tool call",
         }
         .kind(),
-        Failure::Panicked.kind(),
+        Failure::Panicked {
+            doing: "calling a tool",
+        }
+        .kind(),
     ];
 
     let mut seen = causes.to_vec();

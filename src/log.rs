@@ -26,14 +26,14 @@ pub struct Line {
 
 impl Line {
     pub fn calling(tool: &str) -> Self {
-        Self::about_subject(Subject::Tool(shorten(tool)))
+        Self::naming(Subject::Tool(shorten(tool)))
     }
 
     pub fn reading(resource: &str) -> Self {
-        Self::about_subject(Subject::Resource(shorten(resource)))
+        Self::naming(Subject::Resource(shorten(resource)))
     }
 
-    fn about_subject(subject: Subject) -> Self {
+    fn naming(subject: Subject) -> Self {
         Self {
             subject,
             args: Arguments::default(),
@@ -84,6 +84,15 @@ pub enum Subject {
     Tool(String),
 
     Resource(String),
+}
+
+impl Subject {
+    pub fn doing(&self) -> &'static str {
+        match self {
+            Self::Tool(_) => "calling a tool",
+            Self::Resource(_) => "reading a resource",
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
