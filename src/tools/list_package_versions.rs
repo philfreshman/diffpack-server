@@ -75,7 +75,9 @@ pub struct Version {
         \n\
         Absent where the registry does not say. A version without one is\n\
         listed after every version that has one, so it is at the end of the\n\
-        list without being the oldest release."
+        list without being the oldest release. Go's module proxy lists\n\
+        versions without dates, so a Go list is in version order instead,\n\
+        highest first."
     )]
     pub published_at: Option<String>,
 
@@ -100,7 +102,9 @@ impl Tool for ListPackageVersions {
         `search_packages` first. The order is by publish date, not by \
         version number: a \
         patch to an older release line published yesterday comes before a \
-        major released last month. The release the registry itself installs \
+        major released last month. Go is the exception: its module proxy \
+        lists a module's versions without dates, so a Go module's are \
+        highest version first. The release the registry itself installs \
         is a separate answer in the same result, `currentVersion`, and it is \
         often not the first entry — read it rather than the top of the list \
         when you want the version a package is on today.";

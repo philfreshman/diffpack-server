@@ -15,17 +15,22 @@ distinguishes them rather than restating the name.
 ### Packages and their contents
 
 **Registry**:
-One of the three package hosts this server knows: npm, crates.io, PyPI. The
-identifier in a key or a parameter is `npm`, `crates`, `pypi`; the name in a
-message to a model is the one the registry uses for itself — `npm`,
-`crates.io`, `PyPI`.
+One of the four package hosts this server knows: npm, crates.io, PyPI and the
+Go module proxy. The identifier in a key or a parameter is `npm`, `crates`,
+`pypi`, `go`; the name in a message to a model is the one the registry uses
+for itself — `npm`, `crates.io`, `PyPI` — and `Go` for the proxy, whose own
+name is its host.
 _Avoid_: package manager, source, ecosystem, repository
 
 **Package**:
 One named thing on a registry, across all of its versions. The name is taken
 verbatim — `@types/node` keeps the `@` and the `/`, `Typing.Extensions` keeps
-its case. A tool takes the name as `registry::PackageName`, which checks
-nothing and whose schema states every registry's Name rule.
+its case, and a Go module path keeps its capitals and its major-version suffix:
+`github.com/go-chi/chi/v5` is one package, and `/v5` is not a version. On Go a
+package is a *module* and its name a *module path*, and those are the words Go's
+own text uses — the one place the word below is not avoided. A tool takes the
+name as `registry::PackageName`, which checks nothing and whose schema states
+every registry's Name rule.
 _Avoid_: library, crate, module, dependency
 
 **Version**:
@@ -35,9 +40,9 @@ different versions here, because nothing is normalised. A tool takes one as
 _Avoid_: release, tag, revision
 
 **Archive**:
-The single compressed file a registry serves for one version: a `.tgz` from
-npm, a `.crate` from crates.io, an sdist from PyPI. It is bytes in flight —
-what was downloaded, before anything was read out of it.
+The single compressed file a registry serves for one version: a `.tgz` from npm,
+a `.crate` from crates.io, an sdist from PyPI, a module `.zip` from Go. It is
+bytes in flight — what was downloaded, before anything was read out of it.
 _Avoid_: tarball, bundle, download
 
 **Listing**:
@@ -66,7 +71,9 @@ rather than something it fetches
 **Catalogue**:
 What a registry says a package's versions are: every published version, with
 the date the registry says it was published and whether it is a preview, and
-the Current version. It is about a Package where a FileMap is about one
+the Current version. Go's is two documents rather than one: the proxy's list
+names versions and nothing else, so its Current version is asked of `@latest`
+beside it. It is about a Package where a FileMap is about one
 Version of one, it is read rather than extracted, and it is never cached —
 registry metadata goes stale when somebody publishes, and the Budget belongs
 to Diffs.
@@ -76,14 +83,15 @@ _Avoid_: version list, releases, index, metadata
 The one release a registry itself points at: what it installs for somebody who
 names no version. Every registry carries one and each spells it its own way —
 npm's `dist-tags.latest`, crates.io's `default_version`, the `isDefault` flag
-deps.dev puts on a PyPI version. It is a third answer and not either of the
-other two: on `@types/node` the Newest first entry is a 24.x patch, 26.6.2 is
-the Current version, and neither is a Preview. It is read out of the Catalogue
-document and never looked up in the versions beside it, so a registry pointing
-at a version this server did not receive is reported as the registry spelled
-it rather than as no current version at all. It is the same fact a Hit's
-version is, read out of a different document: a Search answer carries it for
-npm and crates.io, and PyPI's Index carries no version at all.
+deps.dev puts on a PyPI version, the version the Go proxy's `@latest` resolves.
+It is a third answer and not either of the other two: on `@types/node` the
+Newest first entry is a 24.x patch, 26.6.2 is the Current version, and neither
+is a Preview. It is read out of the Catalogue document and never looked up in
+the versions beside it, so a registry pointing at a version this server did not
+receive is reported as the registry spelled it rather than as no current version
+at all. It is the same fact a Hit's version is, read out of a different
+document: a Search answer carries it for npm, crates.io and Go, and PyPI's Index
+carries no version at all.
 _Avoid_: latest as a name for it — the word is ambiguous between this and
 Newest first, so it appears here only in quotes, as the question an agent
 arrives with; default, stable, `dist-tag`
@@ -95,22 +103,28 @@ highest version number — npm's `@types/node` publishes a 22.x patch after a
 top. Not a direction to read a source's document in either: deps.dev sorts
 PyPI's versions lexically, and npm's own order does not survive parsing. The
 date is the only thing that produces it, and a version the source gives no
-date for is listed last rather than dropped or guessed at.
+date for is listed last rather than dropped or guessed at. Go is the one
+exception: its proxy dates none of the versions it lists, so a Go module's are
+highest version first, in the order diffpack.io shows them ([ADR
+0019](docs/adr/0019-a-go-module-is-ordered-by-version-and-found-by-path.md)).
 _Avoid_: latest, sorted, descending, semver order
 
 **Preview**:
 A version that is an alpha, a beta, a release candidate or a development
 build, flagged so that an agent asked for "the last two versions" does not
 diff against one without knowing. Which spellings count is the registry's:
-npm and crates.io are semver, so it is what follows the first `-`; PyPI is PEP
-440, where `1.0rc1` is one and there is no separator at all. Build metadata
+npm, crates.io and Go are semver, so it is what follows the first `-`; PyPI is
+PEP 440, where `1.0rc1` is one and there is no separator at all. A Go
+pseudo-version is a preview by that rule, as Go itself counts it. Build metadata
 and a post-release are neither.
 _Avoid_: prerelease (as a concept — the field is `prerelease`), unstable,
 beta, draft
 
 **FileMap**:
 An Archive after extraction: every path in that version, file or directory,
-and what is at it, with the archive's top-level directory already stripped.
+and what is at it, with the archive's top-level directory already stripped —
+for Go, the `{module}@{version}/` prefix every entry of a module zip carries,
+several directories deep.
 It is what a diff is computed from, and it is the boundary the rest of the
 crate sees — a tool asks for a FileMap, never for an Archive. Every file's
 content is text, because extraction decodes it that way: bytes that are not
@@ -142,8 +156,10 @@ One package a Search found: the name to pass to any other tool, and beside
 it the Version the Registry would install for a caller that named none, and
 the package's own description — *where that registry carries them*. npm and
 crates.io carry all three; PyPI's Index carries a name and nothing else, so
-a PyPI hit has a name and nothing else. An absent version is a registry that
-does not say here, never a package that has published nothing.
+a PyPI hit has a name and nothing else. A Go hit has a name and a version and
+no description, because the proxy says nothing about what a module is. An
+absent version is a registry that does not say here, never a package that has
+published nothing.
 _Avoid_: result, match, search result, package (unqualified)
 
 **Search**:
@@ -152,19 +168,20 @@ rest of the crate has to that question: a query and a Limit in, Hits out. It
 is the Catalogue's sibling and not the Catalogue — that one is asked about a
 package a caller can already name, and this is what a caller uses when it
 cannot — and neither downloads anything. A tool asks it a question rather
-than learning that one registry answers with a ranked reply and another with
-its whole Index.
+than learning that one registry answers with a ranked reply, another with
+its whole Index, and Go with nothing at all: there is no Go search, so a Go
+query has to be the whole module path and finds that module or nothing.
 _Avoid_: lookup, find, query (that is the argument), catalogue, index
 
 **Name rule**:
 What one registry's spelling of a package name costs a caller, in a sentence
 that can be shown to it: npm's scopes, crates.io's `-` against `_`, PyPI's
-absent normalisation. A rule is told, not enforced — nothing here refuses a
-name for breaking one, because the registry decides what exists. The version
-rule is the same kind of sentence, and is one sentence for all three. Every
-package argument's schema states all three name rules, not the one that
-applies: the registry is a separate argument, so the schema cannot know which
-one a caller will pick, and an agent reads a tool's schema without reading
+absent normalisation, Go's whole module path. A rule is told, not enforced —
+nothing here refuses a name for breaking one, because the registry decides what
+exists. The version rule is the same kind of sentence, and is one sentence for
+all four. Every package argument's schema states all four name rules, not the
+one that applies: the registry is a separate argument, so the schema cannot know
+which one a caller will pick, and an agent reads a tool's schema without reading
 `diffpack://registries`.
 _Avoid_: validation, name format, constraint, schema
 

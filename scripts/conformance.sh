@@ -212,7 +212,7 @@ refuses_invalid_arguments_as_invalid_params() {
   local revision=$1
   local arguments
   for arguments in \
-    '{"registry": "go", "package": "zod", "version": "4.0.0"}' \
+    '{"registry": "maven", "package": "junit", "version": "4.13.2"}' \
     '{"registry": "npm", "package": "zod"}' \
     '{"registry": "npm", "package": "zod", "version": 4}'; do
     post "$revision" tools/call "{\"name\": \"resolve_archive_url\", \"arguments\": ${arguments}}" |
