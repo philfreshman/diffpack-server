@@ -247,6 +247,11 @@ impl Failure {
                 if !known.is_empty() {
                     let _ = write!(message, " Known recent versions: {}.", known.join(", "));
                 }
+                let _ = write!(
+                    message,
+                    " Call `list_package_versions` to see every version {registry} has, \
+                     spelled the way it spells them."
+                );
                 message
             }
 
