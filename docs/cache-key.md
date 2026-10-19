@@ -59,14 +59,15 @@ simpler and impossible to get subtly wrong at a library-version boundary.
 | `from` | string | `"3.25.76"` | The base version. |
 | `ignore_whitespace` | boolean | `false` | Changes statuses and line counts, so it changes the result. |
 | `package` | string | `"zod"` | The package name, verbatim (see *Normalisation*). |
-| `registry` | string | `"npm"` | One of `npm`, `crates`, `pypi`, `go`. |
+| `registry` | string | `"npm"` | One of `npm`, `crates`, `pypi`, `go`, `composer`. |
 | `schema` | number | `1` | The shape of the stored payload. Bumping it invalidates every entry at once. |
 | `similarity_threshold` | string | `"0.7500"` | Rename-detection threshold, as a fixed-precision string (see below). |
 | `to` | string | `"4.0.0"` | The target version. |
 
 `registry` is an open enum in the sense that adding a registry is additive: a
 new value, no schema bump, because the registry is already part of the key.
-`go` arrived that way (#28), and no entry for the other three changed.
+`go` arrived that way (#28), and so did `composer`, Packagist's identifier; no
+entry for the registries before either changed.
 
 The pair is **ordered**. `from` and `to` are not interchangeable: A→B and B→A
 are different diffs and must be different keys.

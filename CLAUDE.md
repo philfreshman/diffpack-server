@@ -1,7 +1,8 @@
 # CLAUDE.md
 
 An MCP server on Vercel (`mcp.diffpack.io`) that runs `diffpack-engine` natively
-to search, read and diff packages from npm, crates.io and PyPI. Read
+to search, read and diff packages from npm, crates.io, PyPI, the Go module
+proxy and Packagist. Read
 [`CONTEXT.md`](CONTEXT.md) for the vocabulary,
 [`docs/architecture.md`](docs/architecture.md) for which module owns what,
 [`docs/adr/`](docs/adr/) for why, and [`docs/operations.md`](docs/operations.md)

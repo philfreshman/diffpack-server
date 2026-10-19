@@ -15,11 +15,13 @@ distinguishes them rather than restating the name.
 ### Packages and their contents
 
 **Registry**:
-One of the four package hosts this server knows: npm, crates.io, PyPI and the
-Go module proxy. The identifier in a key or a parameter is `npm`, `crates`,
-`pypi`, `go`; the name in a message to a model is the one the registry uses
-for itself — `npm`, `crates.io`, `PyPI` — and `Go` for the proxy, whose own
-name is its host.
+One of the five package hosts this server knows: npm, crates.io, PyPI, the
+Go module proxy and Packagist, Composer's registry for PHP. The identifier in a
+key or a parameter is `npm`, `crates`, `pypi`, `go`, `composer`; the name in a
+message to a model is the one the registry uses for itself — `npm`,
+`crates.io`, `PyPI`, `Packagist` — and `Go` for the proxy, whose own name is
+its host. Packagist's identifier is its tool's name, `composer`, the one the
+cache key and the web app use.
 _Avoid_: package manager, source, ecosystem, repository
 
 **Package**:
@@ -41,15 +43,19 @@ _Avoid_: release, tag, revision
 
 **Archive**:
 The single compressed file a registry serves for one version: a `.tgz` from npm,
-a `.crate` from crates.io, an sdist from PyPI, a module `.zip` from Go. It is
+a `.crate` from crates.io, an sdist from PyPI, a module `.zip` from Go, and for
+Packagist the zip its listing names, from `codeload.github.com`, Bitbucket or
+gitlab.com. It is
 bytes in flight — what was downloaded, before anything was read out of it.
 _Avoid_: tarball, bundle, download
 
 **Listing**:
 The metadata document a registry serves when a version's Archive is not at a
-path a caller could have constructed — PyPI's, today, and nobody else's. A
-Listing is fetched and *chosen from*: it names a version's files, one of
-which is the Archive. Which of the two a registry serves is the registry's
+path a caller could have constructed — PyPI's and Packagist's. A Listing is
+fetched and *chosen from*: it names a version's files, one of which is the
+Archive. PyPI's is about one version; Packagist's p2 file is about every
+version of a package, so the version is part of the choice, and the same file
+is that package's Catalogue. Which of the two a registry serves is the registry's
 fact and not a caller's, so a tool asks where a version's archive is and is
 given either.
 _Avoid_: metadata, index, manifest, JSON
@@ -84,6 +90,10 @@ The one release a registry itself points at: what it installs for somebody who
 names no version. Every registry carries one and each spells it its own way —
 npm's `dist-tags.latest`, crates.io's `default_version`, the `isDefault` flag
 deps.dev puts on a PyPI version, the version the Go proxy's `@latest` resolves.
+Packagist is the one without a pointer, because Composer installs the newest
+stable version a constraint allows; its Current version is therefore the first
+entry in Packagist's own order whose `version_normalized` has no stability
+suffix.
 It is a third answer and not either of the other two: on `@types/node` the
 Newest first entry is a 24.x patch, 26.6.2 is the Current version, and neither
 is a Preview. It is read out of the Catalogue document and never looked up in
@@ -91,7 +101,7 @@ the versions beside it, so a registry pointing at a version this server did not
 receive is reported as the registry spelled it rather than as no current version
 at all. It is the same fact a Hit's version is, read out of a different
 document: a Search answer carries it for npm, crates.io and Go, and PyPI's Index
-carries no version at all.
+and Packagist's search carry no version at all.
 _Avoid_: latest as a name for it — the word is ambiguous between this and
 Newest first, so it appears here only in quotes, as the question an agent
 arrives with; default, stable, `dist-tag`
@@ -115,8 +125,10 @@ build, flagged so that an agent asked for "the last two versions" does not
 diff against one without knowing. Which spellings count is the registry's:
 npm, crates.io and Go are semver, so it is what follows the first `-`; PyPI is
 PEP 440, where `1.0rc1` is one and there is no separator at all. A Go
-pseudo-version is a preview by that rule, as Go itself counts it. Build metadata
-and a post-release are neither.
+pseudo-version is a preview by that rule, as Go itself counts it. Packagist's is
+the stability suffix on `version_normalized`: `dev`, `alpha`, `beta` and `RC`,
+and the short `a`, `b` and `rc`, while `-patch`, `-pl` and `-p` are stable
+releases. Build metadata and a post-release are neither.
 _Avoid_: prerelease (as a concept — the field is `prerelease`), unstable,
 beta, draft
 
@@ -124,7 +136,8 @@ beta, draft
 An Archive after extraction: every path in that version, file or directory,
 and what is at it, with the archive's top-level directory already stripped —
 for Go, the `{module}@{version}/` prefix every entry of a module zip carries,
-several directories deep.
+several directories deep, and for Packagist the folder `codeload` names for the
+commit, which differs between two versions.
 It is what a diff is computed from, and it is the boundary the rest of the
 crate sees — a tool asks for a FileMap, never for an Archive. Every file's
 content is text, because extraction decodes it that way: bytes that are not
@@ -157,7 +170,9 @@ it the Version the Registry would install for a caller that named none, and
 the package's own description — *where that registry carries them*. npm and
 crates.io carry all three; PyPI's Index carries a name and nothing else, so
 a PyPI hit has a name and nothing else. A Go hit has a name and a version and
-no description, because the proxy says nothing about what a module is. An
+no description, because the proxy says nothing about what a module is. A
+Packagist hit has a name and a description and no version, because its search
+answers with none. An
 absent version is a registry that does not say here, never a package that has
 published nothing.
 _Avoid_: result, match, search result, package (unqualified)
@@ -168,18 +183,23 @@ rest of the crate has to that question: a query and a Limit in, Hits out. It
 is the Catalogue's sibling and not the Catalogue — that one is asked about a
 package a caller can already name, and this is what a caller uses when it
 cannot — and neither downloads anything. A tool asks it a question rather
-than learning that one registry answers with a ranked reply, another with
-its whole Index, and Go with nothing at all: there is no Go search, so a Go
-query has to be the whole module path and finds that module or nothing.
+than learning that npm, crates.io and Packagist answer with a ranked reply,
+PyPI with its whole Index, and Go with nothing at all: there is no Go search,
+so a Go query has to be the whole module path and finds that module or
+nothing.
 _Avoid_: lookup, find, query (that is the argument), catalogue, index
 
 **Name rule**:
 What one registry's spelling of a package name costs a caller, in a sentence
 that can be shown to it: npm's scopes, crates.io's `-` against `_`, PyPI's
-absent normalisation, Go's whole module path. A rule is told, not enforced —
-nothing here refuses a name for breaking one, because the registry decides what
-exists. The version rule is the same kind of sentence, and is one sentence for
-all four. Every package argument's schema states all four name rules, not the
+absent normalisation, Go's whole module path, Packagist's lower-case
+`vendor/package`. A rule is told, not enforced — nothing here refuses a name for
+breaking one, because the registry decides what exists. The one place a rule
+bites is a Packagist Archive: its listing URL is built from the name, so a name
+that cannot be a Composer package is answered as `no_such_package`, which is
+what Packagist would say. The version rule is the same kind of sentence, and is
+one sentence for all five. Every package argument's schema states all five name
+rules, not the
 one that applies: the registry is a separate argument, so the schema cannot know
 which one a caller will pick, and an agent reads a tool's schema without reading
 `diffpack://registries`.
@@ -219,8 +239,10 @@ _Avoid_: overloaded, throttled, rate limited, at capacity, timed out
 
 **Allowed host**:
 A host this server may send an outbound request to. The set is derived from
-the URLs the registry module builds, so it grows when a Registry is added and
-never on its own. Distinct from an allowed *origin*, which points the other
+the URLs the registry module builds, together with the hosts a registry's
+Listing may name — `files.pythonhosted.org` for PyPI, and `codeload.github.com`,
+`bitbucket.org` and `gitlab.com` for Packagist — so it grows when a Registry is
+added and never on its own. Distinct from an allowed *origin*, which points the other
 way: a browser this server will answer.
 _Avoid_: allowlist (unqualified), whitelist, origin, domain
 
