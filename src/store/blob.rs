@@ -105,6 +105,7 @@ impl Credentials {
         Self::for_request(headers, |name| std::env::var(name).ok())
     }
 
+    #[cfg(test)]
     pub(crate) fn from_env() -> Result<Self, Failure> {
         Self::from_request(&HeaderMap::new())
     }
