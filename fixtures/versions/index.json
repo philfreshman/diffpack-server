@@ -16,5 +16,7 @@
   "https://proxy.golang.org/golang.org/x/exp/@v/list": "go-exp-list.txt",
   "https://proxy.golang.org/golang.org/x/exp/@latest": "go-exp-latest.json",
   "https://proxy.golang.org/github.com/not-a-real/module/@v/list": null,
-  "https://proxy.golang.org/github.com/not-a-real/module/@latest": null
+  "https://proxy.golang.org/github.com/not-a-real/module/@latest": null,
+  "https://proxy.golang.org/example.com/latest-unreachable/@v/list": "go-latest-unreachable-list.txt",
+  "https://proxy.golang.org/example.com/latest-unreachable/@latest": null
 }

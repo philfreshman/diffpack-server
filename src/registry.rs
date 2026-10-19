@@ -237,7 +237,7 @@ impl Registry {
         versions.sort_by(|a, b| {
             b.published_at
                 .cmp(&a.published_at)
-                .then_with(|| self.precedence(&b.version, &a.version))
+                .then_with(|| self.undated_order(&b.version, &a.version))
         });
         Some(Versions {
             all: versions,
@@ -253,7 +253,6 @@ impl Registry {
                 #[serde(rename_all = "PascalCase")]
                 struct Latest {
                     version: String,
-                    #[serde(default)]
                     time: Option<String>,
                 }
 
@@ -289,7 +288,10 @@ impl Registry {
                 names_a_package: false,
             },
             Self::Go => SearchSource {
-                url: format!("{GO_PROXY}/{}/@latest", go_module_path(query)),
+                url: format!(
+                    "{GO_PROXY}/{}/@latest",
+                    go_module_path(module_path_in(query))
+                ),
                 accept: "application/json",
                 whole_index: false,
                 names_a_package: true,
@@ -356,7 +358,7 @@ impl Registry {
             Self::Go => {
                 let module = self.read_current(body)?;
                 vec![Hit {
-                    name: query.to_owned(),
+                    name: module_path_in(query).to_owned(),
                     version: Some(module.version),
                     description: None,
                 }]
@@ -391,7 +393,7 @@ impl Registry {
         }
     }
 
-    fn precedence(self, left: &str, right: &str) -> Ordering {
+    fn undated_order(self, left: &str, right: &str) -> Ordering {
         match self {
             Self::Npm | Self::Crates | Self::PyPi => Ordering::Equal,
             Self::Go => GoVersion::parse(left).cmp(&GoVersion::parse(right)),
@@ -587,16 +589,17 @@ pub struct Versions {
 }
 
 impl Versions {
-    pub fn pointing_at(self, current: Version) -> Self {
-        let all = if self.all.is_empty() {
-            vec![current.clone()]
-        } else {
-            self.all
-        };
-
+    pub fn only(version: Version) -> Self {
         Self {
-            current: Some(current.version),
-            all,
+            current: Some(version.version.clone()),
+            all: vec![version],
+        }
+    }
+
+    pub fn pointing_at(self, current: String) -> Self {
+        Self {
+            current: Some(current),
+            ..self
         }
     }
 }
@@ -768,6 +771,16 @@ fn pep440_prerelease(version: &str) -> bool {
 }
 
 const GO_PROXY: &str = "https://proxy.golang.org";
+
+fn module_path_in(query: &str) -> &str {
+    const SCHEMES: [&str; 2] = ["https://", "http://"];
+
+    let without_scheme = SCHEMES
+        .iter()
+        .find_map(|scheme| query.strip_prefix(scheme))
+        .unwrap_or(query);
+    without_scheme.trim_end_matches('/')
+}
 
 fn go_module_path(module: &str) -> String {
     const PATH_SEPARATOR_AND_CASE_MARK: &[u8] = b"/!";

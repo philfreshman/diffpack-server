@@ -1,6 +1,6 @@
 mod common;
 
-use common::{Client, FIXTURES};
+use common::{names, Client, FIXTURES};
 use diffpack_server::error::Failure;
 use diffpack_server::page;
 use diffpack_server::registry::{PackageName, Registry};
@@ -195,6 +195,28 @@ async fn an_untagged_go_module_is_the_one_version_latest_resolves() {
         result["structuredContent"]["currentVersion"],
         json!("v0.0.0-20261014143641-f0251eb4aa3e"),
         "and that pseudo-version is what `go get` installs: got {result}"
+    );
+}
+
+#[tokio::test]
+async fn a_go_list_is_answered_when_only_latest_fails() {
+    let result = call(json!({
+        "registry": "go",
+        "package": "example.com/latest-unreachable",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "the list answered, and `@latest` is asked only for the pointer beside \
+         it: got {result}"
+    );
+    assert_eq!(versions(&result), vec!["v1.1.0", "v1.0.0"], "got {result}");
+    assert!(
+        result["structuredContent"]["currentVersion"].is_null(),
+        "with no answer from `@latest` there is no pointer to report, rather \
+         than one guessed from the list: got {result}"
     );
 }
 
@@ -580,7 +602,7 @@ async fn a_go_module_the_proxy_does_not_have_is_a_tool_error_naming_it() {
         .unwrap_or_else(|| panic!("a tool error carries text a model reads, got {result}"));
 
     assert!(
-        message.contains("github.com/not-a-real/module") && message.contains("Go"),
+        message.contains("github.com/not-a-real/module") && names(message, "Go"),
         "the message names what was asked for and where, got {message}"
     );
 }
@@ -641,7 +663,7 @@ async fn the_description_says_a_go_modules_order_is_by_version_number() {
     });
 
     assert!(
-        description.contains("Go"),
+        names(description, "Go"),
         "the one registry whose list is not by publish date should be named \
          where the order is promised, got {description}"
     );
@@ -651,7 +673,7 @@ async fn the_description_says_a_go_modules_order_is_by_version_number() {
         .as_str()
         .unwrap_or_else(|| panic!("every field is described, got {}", tool["outputSchema"]));
     assert!(
-        published_at.contains("Go"),
+        names(published_at, "Go"),
         "the field whose absence changes the order says when it is absent, \
          got {published_at}"
     );

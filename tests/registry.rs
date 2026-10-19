@@ -222,6 +222,44 @@ fn every_registry_says_where_its_versions_are_listed() {
 }
 
 #[test]
+fn a_go_list_is_in_the_order_diffpack_io_shows_it() {
+    let list = "v1.9.0\nv1.10.0\nv1.10.0-rc.1\nv1.10.0-rc.2\n\
+                v0.0.0-20240101000000-abcdefabcdef\nv2.0.0+incompatible\nv1.10.1\n";
+
+    let listed: Vec<String> = Registry::Go
+        .read_versions(list)
+        .expect("the proxy's list reads")
+        .all
+        .into_iter()
+        .map(|version| version.version)
+        .collect();
+
+    assert_eq!(
+        listed,
+        vec![
+            "v2.0.0+incompatible",
+            "v1.10.1",
+            "v1.10.0",
+            "v1.10.0-rc.2",
+            "v1.10.0-rc.1",
+            "v1.9.0",
+            "v0.0.0-20240101000000-abcdefabcdef",
+        ],
+        "the order diffpack.io's comparator gives the same list: 10 above 9, a \
+         release above its own previews, `+incompatible` ignored"
+    );
+}
+
+#[test]
+fn a_go_list_with_a_line_that_is_not_a_version_does_not_read() {
+    assert_eq!(
+        Registry::Go.read_versions("v1.0.0\n<html>not found</html>\n"),
+        None,
+        "a Go version starts with `v`, so anything else is not the list that was asked for"
+    );
+}
+
+#[test]
 fn search_comes_from_the_registrys_own_index() {
     assert_eq!(
         Registry::Npm.search("zod", 10),

@@ -1,6 +1,6 @@
 mod common;
 
-use common::{Client, FIXTURES};
+use common::{names, Client, FIXTURES};
 use diffpack_server::error::Failure;
 use diffpack_server::page;
 use diffpack_server::registry::Registry;
@@ -106,7 +106,7 @@ async fn the_description_says_a_go_query_has_to_be_a_whole_module_path() {
     let said = tool["description"].as_str().unwrap_or_default();
 
     assert!(
-        said.contains("Go") && said.contains("module path"),
+        names(said, "Go") && said.contains("module path"),
         "Go has nothing to search, so an agent has to be told that a Go query \
          is the module path itself, got {said:?}"
     );
@@ -211,6 +211,23 @@ async fn a_go_search_finds_the_module_a_whole_path_names() {
         json!([{ "name": "github.com/go-chi/chi/v5", "version": "v5.5.0" }]),
         "the proxy has no search, so a Go query is a module path and the hit is \
          that module with the version `@latest` resolves: got {result}"
+    );
+}
+
+#[tokio::test]
+async fn a_go_query_written_as_a_url_finds_the_module_by_its_path() {
+    let result = call(json!({
+        "registry": "go",
+        "query": "https://github.com/go-chi/chi/v5/",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["items"],
+        json!([{ "name": "github.com/go-chi/chi/v5", "version": "v5.5.0" }]),
+        "a scheme and a trailing slash are how a module path is pasted, not part \
+         of it, and the hit's name is what every other tool is then asked for: \
+         got {result}"
     );
 }
 

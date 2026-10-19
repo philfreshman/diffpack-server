@@ -35,18 +35,22 @@ impl Catalogue {
     pub async fn versions(&self, registry: Registry, package: &str) -> Result<Versions, Failure> {
         let source = registry.versions(package);
 
-        let (listed, current) = futures::try_join!(
+        let (listed, current) = futures::join!(
             self.document(registry, package, &source.url),
             self.current(registry, package, source.current.as_deref()),
-        )?;
+        );
 
         let versions = registry
-            .read_versions(text(&listed, registry, package)?)
+            .read_versions(text(&listed?, registry, package)?)
             .ok_or_else(|| unknown_shape(registry, package))?;
 
+        if versions.all.is_empty() {
+            return Ok(current?.map_or(versions, Versions::only));
+        }
+
         Ok(match current {
-            Some(current) => versions.pointing_at(current),
-            None => versions,
+            Ok(Some(current)) => versions.pointing_at(current.version),
+            Ok(None) | Err(_) => versions,
         })
     }
 
