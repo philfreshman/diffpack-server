@@ -13,6 +13,8 @@ pub const PAYLOAD_CEILING: usize = (RESPONSE_CEILING - ENVELOPE_RESERVE) / 3;
 
 pub const DEFAULT_LIMIT: usize = 200;
 
+pub const DEFAULT_MAX_BYTES: usize = 20_000;
+
 pub const MAX_LIMIT: usize = 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -152,12 +154,20 @@ impl JsonSchema for Limit {
 pub struct MaxBytes(u64);
 
 impl MaxBytes {
+    pub const CEILING: Self = Self(PAYLOAD_CEILING as u64);
+
     pub const fn new(asked: u64) -> Self {
         Self(asked)
     }
 
     fn bytes(self) -> usize {
         usize::try_from(self.0).unwrap_or(usize::MAX).max(1)
+    }
+}
+
+impl Default for MaxBytes {
+    fn default() -> Self {
+        Self(DEFAULT_MAX_BYTES as u64)
     }
 }
 
@@ -179,14 +189,19 @@ impl JsonSchema for MaxBytes {
             "type": "integer",
             "minimum": 1,
             "maximum": PAYLOAD_CEILING,
+            "default": DEFAULT_MAX_BYTES,
             "description": format!(
                 "The most of this text to return, in bytes, from 1 to {PAYLOAD_CEILING}. \
-                 Omit it to get as much as fits. It can only ask for less: a value above \
-                 {PAYLOAD_CEILING} is \
-                 narrowed to that rather than refused, because a larger response is one \
-                 the platform drops instead of shortening. Either way the answer says \
-                 whether it was cut and how many bytes the whole thing is, so a short \
-                 answer is never the whole story by omission.",
+                 Omit it for {DEFAULT_MAX_BYTES}, which keeps the answer small enough for \
+                 a client to hand you in one piece. When `truncated` is true there is \
+                 more: ask again with a larger `max_bytes` to see more of it. There is \
+                 no offset, so every answer starts at the beginning, and a larger cap \
+                 is the only way to read further; some clients refuse an answer much \
+                 over the default, so ask for only as much as you need. A value above \
+                 {PAYLOAD_CEILING} is narrowed to that rather than refused, because a \
+                 larger response is one the platform drops instead of shortening. \
+                 Either way the answer says whether it was cut and how many bytes the \
+                 whole thing is, so a short answer is never the whole story by omission.",
             ),
         })
     }
@@ -352,9 +367,9 @@ pub struct Excerpt {
     pub bytes: usize,
 }
 
-pub fn truncate(text: &str, max_bytes: Option<MaxBytes>) -> Excerpt {
+pub fn truncate(text: &str, max_bytes: MaxBytes) -> Excerpt {
     let bytes = text.len();
-    let raw_cap = max_bytes.map_or(usize::MAX, MaxBytes::bytes);
+    let raw_cap = max_bytes.bytes();
 
     let room = PAYLOAD_CEILING.saturating_sub(MARKER_RESERVE + 2);
 

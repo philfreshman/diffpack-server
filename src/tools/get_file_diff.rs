@@ -43,7 +43,7 @@ pub struct Args {
     pub context_lines: ContextLines,
 
     #[serde(default)]
-    pub max_bytes: Option<page::MaxBytes>,
+    pub max_bytes: page::MaxBytes,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
@@ -298,7 +298,7 @@ pub struct OneFile<'a> {
     pub path: &'a str,
     pub old_path: Option<&'a str>,
     pub context_lines: ContextLines,
-    pub max_bytes: Option<page::MaxBytes>,
+    pub max_bytes: page::MaxBytes,
 }
 
 impl Args {

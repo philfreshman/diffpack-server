@@ -27,7 +27,7 @@ pub struct Args {
     pub path: String,
 
     #[serde(default)]
-    pub max_bytes: Option<page::MaxBytes>,
+    pub max_bytes: page::MaxBytes,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
