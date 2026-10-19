@@ -62,9 +62,12 @@ impl Tool for GetFileContent {
         file whose bytes are not valid UTF-8 is decoded anyway, with each \
         byte that could not be decoded shown as `U+FFFD`; the answer says \
         when that happened, so replacement characters do not mean the file \
-        arrived broken. A long file is cut short, and the answer says so and \
-        gives the whole file's size in bytes — which is the decoded text's \
-        size, not the archive's.";
+        arrived broken. A long file is cut short, at `max_bytes` or at its \
+        default when you omit it: `truncated` says when that happened, and \
+        `bytes` gives the whole file's size — which is the decoded text's \
+        size, not the archive's. To see more of a cut file, ask again with a \
+        larger `max_bytes`. There is no way to start partway through a file, \
+        so every answer starts at its beginning.";
 
     const READ_ONLY: bool = true;
 

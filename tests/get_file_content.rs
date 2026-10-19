@@ -75,6 +75,12 @@ async fn the_description_says_what_an_agent_would_otherwise_get_wrong() {
         "a binary file comes back decoded rather than refused, which reads as \
          a corrupt file to an agent that was not told: got {description}"
     );
+    assert!(
+        description.contains("max_bytes") && description.contains("beginning"),
+        "a long file is cut at a default, and an agent that was not told how to \
+         read more either trusts the cut or offers to read on from where it \
+         stopped, which no argument here can do: got {description}"
+    );
 }
 
 #[tokio::test]
