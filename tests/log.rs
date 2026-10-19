@@ -492,6 +492,32 @@ async fn a_file_diff_read_names_the_file_as_well_as_the_comparison() {
 }
 
 #[tokio::test]
+async fn a_file_diff_path_is_written_decoded_so_redaction_sees_it() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    let handle = handle_in(&client.call("diff_package_versions", diffable()).await).to_owned();
+
+    for path in [
+        "src%2Findex.js",
+        "https%3A%2F%2Fblob.vercel-storage.com%2Fdiffs%2Fabc%3Ftoken%3Ds3cr3t",
+    ] {
+        read(&client, &format!("diffpack://diff/{handle}/file/{path}")).await;
+    }
+
+    let lines = log.lines();
+    let encoded = parse(&lines[1]);
+    assert_eq!(
+        encoded["args"]["path"], "src/index.js",
+        "one file is one path however the caller spelled it: {encoded}"
+    );
+    assert!(
+        !lines[2].contains("s3cr3t"),
+        "a signed URL percent-encoded into a path is still a signed URL: {}",
+        lines[2]
+    );
+}
+
+#[tokio::test]
 async fn a_uri_that_addresses_nothing_is_written_as_itself_and_redacted() {
     let unknown = "diffpack://nothing-here";
     let signed = "https://blob.vercel-storage.com/diffs/abc?token=s3cr3t&expires=1";

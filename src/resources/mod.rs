@@ -2,6 +2,8 @@ pub mod diff;
 pub mod file_diff;
 pub mod registries;
 
+use std::borrow::Cow;
+
 use rmcp::model::{JsonObject, ReadResourceResult, Resource, ResourceTemplate};
 use serde_json::Value;
 
@@ -17,7 +19,7 @@ pub fn templates() -> Vec<ResourceTemplate> {
     vec![diff::template(), file_diff::template()]
 }
 
-const PATH: &str = "path";
+const PATH_ARGUMENT: &str = "path";
 
 #[derive(Debug, Clone, Copy)]
 pub enum Address<'a> {
@@ -47,7 +49,7 @@ impl<'a> Address<'a> {
         Self::Nowhere { uri }
     }
 
-    pub fn resource(self) -> &'a str {
+    pub fn name_in_line(self) -> &'a str {
         match self {
             Self::Registries => registries::RESOURCE_NAME,
             Self::Diff { .. } => diff::RESOURCE_NAME,
@@ -60,8 +62,9 @@ impl<'a> Address<'a> {
         match self {
             Self::Diff { handle } => inputs_named_in(handle),
             Self::FileDiff { handle, path } => {
+                let path = file_diff::decoded(path).unwrap_or(Cow::Borrowed(path));
                 let mut arguments = inputs_named_in(handle);
-                arguments.insert(PATH.to_owned(), Value::from(path));
+                arguments.insert(PATH_ARGUMENT.to_owned(), Value::from(path.into_owned()));
                 arguments
             }
             Self::Registries | Self::Nowhere { .. } => JsonObject::new(),

@@ -115,7 +115,7 @@ impl ServerHandler for Diffpack {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         let address = Address::of(&request.uri);
-        let line = Line::reading(address.resource()).about(Some(&address.arguments()));
+        let line = Line::reading(address.name_in_line()).about(Some(&address.arguments()));
 
         tools::run(&self.ctx, line, async |call| address.read(call).await)
             .await

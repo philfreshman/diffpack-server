@@ -73,7 +73,7 @@ pub async fn read(
         .with_cache_scope(CacheScope::Public))
 }
 
-fn decoded(segment: &str) -> Result<Cow<'_, str>, Failure> {
+pub fn decoded(segment: &str) -> Result<Cow<'_, str>, Failure> {
     if !segment.contains('%') {
         return Ok(Cow::Borrowed(segment));
     }
