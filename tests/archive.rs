@@ -163,6 +163,24 @@ async fn a_version_packagist_does_not_list_is_no_such_version_with_the_ones_it_d
 }
 
 #[tokio::test]
+async fn a_package_packagist_has_no_listing_for_is_no_such_package() {
+    let failure = fixtures()
+        .fetch(Registry::Composer, "not-a-real/package", "1.0.0")
+        .await
+        .expect_err("Packagist serves no listing for this package");
+
+    assert!(
+        matches!(
+            failure,
+            Failure::NoSuchPackage { ref registry, ref package }
+                if registry == "Packagist" && package == "not-a-real/package"
+        ),
+        "the listing names every version of a package, so without one there is no \
+         package rather than no version, got {failure:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_packagist_version_without_an_archive_this_server_reads_is_refused_as_such() {
     for (version, why) in [
         ("1.0.0", "its dist is unset"),

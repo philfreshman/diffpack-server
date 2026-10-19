@@ -137,7 +137,11 @@ impl Archive {
             ArchiveSource::Archive { url } => url,
 
             ArchiveSource::Listing { url } => {
-                let listing = self.documents.body(&url, &about).await?;
+                let about_the_listing = About {
+                    missing: &|_| unlisted(registry, package, version),
+                    ..about
+                };
+                let listing = self.documents.body(&url, &about_the_listing).await?;
                 let listing = std::str::from_utf8(&listing)
                     .map_err(|_| unreadable(package, version, "its metadata is not text"))?;
 
@@ -193,6 +197,17 @@ fn unchosen(registry: Registry, package: &str, version: &str, listing: &str) -> 
             version,
             "the registry lists no archive for it that this server can read",
         ),
+    }
+}
+
+fn unlisted(registry: Registry, package: &str, version: &str) -> Failure {
+    if registry.listing_names_every_version() {
+        Failure::NoSuchPackage {
+            registry: registry.name().to_owned(),
+            package: package.to_owned(),
+        }
+    } else {
+        not_found(registry, package, version)
     }
 }
 

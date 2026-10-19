@@ -533,7 +533,10 @@ reads as a Catalogue: a version it does not list is `no_such_version`, with the
 newest versions it does list, and a listed version without a `dist`, or with
 one on a host this server does not fetch from, is `malformed_archive`. A PyPI
 listing is about one version and reads as no Catalogue, so its refusal is the
-second one, as before.
+second one, as before. A listing that is not there at all says the same thing
+the other way round: Packagist's names every version of a package, so its
+absence is `no_such_package`, while PyPI's is about one version and its absence
+stays `no_such_version`.
 
 ### `src/catalogue/` — what a package has released
 

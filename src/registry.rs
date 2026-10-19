@@ -465,6 +465,13 @@ impl Registry {
         }
     }
 
+    pub fn listing_names_every_version(self) -> bool {
+        match self {
+            Self::Composer => true,
+            Self::Npm | Self::Crates | Self::PyPi | Self::Go => false,
+        }
+    }
+
     pub fn choose_archive(self, version: &str, listing: &str) -> Option<String> {
         engine::choose_archive(self.id(), version, listing).ok()
     }
