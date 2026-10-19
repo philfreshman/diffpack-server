@@ -83,6 +83,8 @@ pub const SIZE_LIMIT: u64 = 128 * 1024 * 1024;
 
 const NO_SUCH_VERSION: u16 = 404;
 
+const KNOWN_VERSIONS: usize = 5;
+
 #[derive(Debug)]
 pub struct Archive {
     documents: Document,
@@ -135,17 +137,17 @@ impl Archive {
             ArchiveSource::Archive { url } => url,
 
             ArchiveSource::Listing { url } => {
-                let listing = self.documents.body(&url, &about).await?;
+                let about_the_listing = About {
+                    missing: &|_| unlisted(registry, package, version),
+                    ..about
+                };
+                let listing = self.documents.body(&url, &about_the_listing).await?;
                 let listing = std::str::from_utf8(&listing)
                     .map_err(|_| unreadable(package, version, "its metadata is not text"))?;
 
-                registry.choose_archive(version, listing).ok_or_else(|| {
-                    unreadable(
-                        package,
-                        version,
-                        "the registry lists no archive for it that this server can read",
-                    )
-                })?
+                registry
+                    .choose_archive(version, listing)
+                    .ok_or_else(|| unchosen(registry, package, version, listing))?
             }
         };
 
@@ -179,6 +181,33 @@ fn unreadable(package: &str, version: &str, reason: &str) -> Failure {
         package: package.to_owned(),
         version: version.to_owned(),
         reason: reason.to_owned(),
+    }
+}
+
+fn unchosen(registry: Registry, package: &str, version: &str, listing: &str) -> Failure {
+    match registry.read_versions(listing) {
+        Some(versions) if !versions.lists(version) => Failure::NoSuchVersion {
+            registry: registry.name().to_owned(),
+            package: package.to_owned(),
+            version: version.to_owned(),
+            known: versions.newest(KNOWN_VERSIONS),
+        },
+        _ => unreadable(
+            package,
+            version,
+            "the registry lists no archive for it that this server can read",
+        ),
+    }
+}
+
+fn unlisted(registry: Registry, package: &str, version: &str) -> Failure {
+    if registry.listing_names_every_version() {
+        Failure::NoSuchPackage {
+            registry: registry.name().to_owned(),
+            package: package.to_owned(),
+        }
+    } else {
+        not_found(registry, package, version)
     }
 }
 
