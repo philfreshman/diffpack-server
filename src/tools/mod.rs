@@ -314,7 +314,9 @@ fn with_handle_decoded(arguments: Option<&JsonObject>) -> JsonObject {
 
     if let Some(inputs) = inputs {
         arguments.remove(HANDLE_ARGUMENT);
-        arguments.extend(inputs);
+        for (name, value) in inputs {
+            arguments.entry(name).or_insert(value);
+        }
     }
 
     arguments

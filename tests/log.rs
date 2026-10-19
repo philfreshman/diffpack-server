@@ -639,6 +639,45 @@ async fn a_tool_that_reads_a_comparison_names_it_the_way_a_read_does() {
 }
 
 #[tokio::test]
+async fn a_decoded_handle_never_hides_what_the_caller_sent() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    let summary = client.call("diff_package_versions", diffable()).await;
+    let handle = handle_in(&summary);
+
+    for arguments in [
+        json!({ "handle": handle, "package": "sent-by-the-caller" }),
+        json!({ "handle": "not-a-handle" }),
+    ] {
+        client
+            .post(json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": { "name": "get_diff_tree", "arguments": arguments },
+            }))
+            .await;
+    }
+
+    let lines = log.lines();
+    assert_eq!(lines.len(), 3, "three calls, three lines: {lines:?}");
+
+    let clashing = parse(&lines[1]);
+    assert_eq!(
+        clashing["args"]["package"], "sent-by-the-caller",
+        "the line of a refused call should say what was sent, not what the handle holds: \
+         {clashing}"
+    );
+
+    let undecodable = parse(&lines[2]);
+    assert_eq!(
+        undecodable["args"],
+        json!({ "handle": "not-a-handle" }),
+        "a handle that does not decode is kept as sent: {undecodable}"
+    );
+}
+
+#[tokio::test]
 async fn a_call_that_panics_still_leaves_its_line() {
     let log = Capture::new();
     let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
