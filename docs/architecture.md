@@ -860,15 +860,19 @@ question.
 
 There is no published specification for that API and no usable Rust client for
 it, so the wire is taken from what `@vercel/blob` sends, read out of its
-source. Three of those facts are not guessable and fail only against the real
+source. Four of those facts are not guessable and fail only against the real
 store: a write's pathname is a query parameter rather than a path segment, the
-store id is provisioned with a `store_` prefix the header does not want, and
-`access` has no default. The tests drive the client through a stub HTTP server
+store id is provisioned with a `store_` prefix the header does not want,
+`access` has no default and must be `private` for this project's private store,
+and that store serves a blob's download only to a request that carries the
+token. The token itself comes with each request rather than from the
+environment; [`operations.md`](operations.md#the-caches-credentials) says
+why. The tests drive the client through a stub HTTP server
 on a loopback port, so what they hold is the request this module writes rather
 than a shape it was told to produce — and because the client is private, they
 live in the module rather than in `tests/`.
 
-A stub cannot settle those three, which is why one test is not a stub. It was
+A stub cannot settle those four, which is why one test is not a stub. It was
 written from the same reading of `@vercel/blob` as the client, so it agrees
 with the client whether or not the reading was right; only the store can
 disagree. So the four operations also run against it once, `#[ignore]`d the

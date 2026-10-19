@@ -29,6 +29,36 @@ uses fat LTO. Expect slow deploys; the measured cold build time is in
 compiles against it. Renaming the `[[bin]]` or moving `api/mcp.rs` would
 otherwise only show up as a 404 after a deploy.
 
+## The cache's credentials
+
+The diff cache is a private Vercel Blob store, `store_MckmSOFEWm4x66fo`,
+connected to the project. The project holds `BLOB_STORE_ID` and no
+`BLOB_READ_WRITE_TOKEN`: the store is reached with the OIDC token Vercel issues
+the deployment, so no long-lived secret is stored.
+
+That token is in the environment as `VERCEL_OIDC_TOKEN` only at build time. A
+running function is given it with every request, as the `x-vercel-oidc-token`
+header, so `src/store/blob.rs` takes the header first and the environment
+second, the way `@vercel/oidc` does. A locally run server has no such header,
+and uses `VERCEL_OIDC_TOKEN` from `vercel env pull`, or a
+`BLOB_READ_WRITE_TOKEN`.
+
+The store is built for each tool call and resource read from that request's
+headers, and keeps the token for its write after the response. Vercel's
+documentation does not say whether a header of that name sent by a client
+survives to the function. Either way, a forged one can only fail: the Blob API
+verifies the token and scopes it to this project, the store is built per
+request so the token reaches no other caller's cache access, and a store
+failure never fails a call. It is a miss.
+
+Because the store is private, every write declares `private` access, and a read
+presents the token on both of its requests, including the download.
+
+A deployment with neither credential has no store, and every call recomputes.
+The function's log line says so as `"cache":"no_store"`. Before
+[#130](https://github.com/philfreshman/diffpack-server/issues/130), every
+production request was that.
+
 ## Who can reach it
 
 The Vercel project has Vercel Authentication on Standard Protection, which
