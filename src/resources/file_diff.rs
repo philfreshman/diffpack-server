@@ -8,6 +8,8 @@ use crate::handle::DiffHandle;
 use crate::tools::get_file_diff::{self, OneFile};
 use crate::tools::{diff_package_versions, get_diff_tree, Call};
 
+pub const RESOURCE_NAME: &str = "file-diff";
+
 const SEPARATOR: &str = "/file/";
 
 pub fn uri_template() -> String {
@@ -22,7 +24,7 @@ pub fn parts_in(uri: &str) -> Option<(&str, &str)> {
 }
 
 pub fn template() -> ResourceTemplate {
-    ResourceTemplate::new(uri_template(), "file-diff")
+    ResourceTemplate::new(uri_template(), RESOURCE_NAME)
         .with_title("File diff")
         .with_description(
             "One file's diff out of a comparison, with three lines of unchanged context \

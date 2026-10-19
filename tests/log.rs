@@ -423,39 +423,46 @@ async fn each_call_through_one_context_times_only_its_own_fetches() {
 }
 
 #[tokio::test]
-async fn a_resource_read_leaves_no_line_until_26_says_what_it_holds() {
+async fn a_resource_read_leaves_a_line_naming_the_comparison_it_read() {
     let log = Capture::new();
-    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    let store = Memory::new();
+    let client = Client::over(
+        Ctx::fixture(FIXTURES)
+            .logging_to(log.sink())
+            .storing_in(store.store()),
+    );
 
     let summary = client.call("diff_package_versions", diffable()).await;
-    let handle = summary["structuredContent"]["handle"]
-        .as_str()
-        .unwrap_or_else(|| panic!("the summary carries a handle, got {summary}"));
-
-    let read = client
-        .post(json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "resources/read",
-            "params": { "uri": format!("diffpack://diff/{handle}") },
-        }))
-        .await;
-    assert!(
-        read["result"]["contents"][0]["text"].is_string(),
-        "the read should have answered, got {read}"
-    );
+    settles(&store).await;
+    read(&client, &format!("diffpack://diff/{}", handle_in(&summary))).await;
 
     let lines = log.lines();
     assert_eq!(
         lines.len(),
-        1,
-        "only the tool call should have left a line, got {lines:?}"
+        2,
+        "a tool call and a resource read are two calls, so two lines: {lines:?}"
+    );
+
+    let line = parse(&lines[1]);
+    assert_eq!(
+        line["resource"], "diff",
+        "the line names the resource the URI addresses: {line}"
     );
     assert_eq!(
-        parse(&lines[0])["tool"],
-        "diff_package_versions",
-        "the one line is the tool call's: {}",
-        lines[0]
+        line.get("tool"),
+        None,
+        "a read is not a tool call, and counting tools should not count it: {line}"
+    );
+    for (name, sent) in diffable().as_object().expect("the arguments are an object") {
+        assert_eq!(
+            &line["args"][name], sent,
+            "the handle's inputs go under the names the tool took them by, so a \
+             comparison read by URI counts with one asked for by tool: {line}"
+        );
+    }
+    assert_eq!(
+        line["cache"], "hit",
+        "the read asked the store for what the tool call had just put there: {line}"
     );
 }
 
@@ -466,7 +473,7 @@ async fn a_call_that_panics_still_leaves_its_line() {
 
     let answer = tools::run(
         &ctx,
-        Line::new("get_diff_tree"),
+        Line::calling("get_diff_tree"),
         async |_| -> Result<(), Failure> {
             panic!("deliberately panicking, so that the dispatch has something to catch")
         },
@@ -605,6 +612,23 @@ async fn calling(log: &Capture, store: Store, tool: &str, arguments: Value) -> V
             "params": { "name": tool, "arguments": arguments },
         }))
         .await
+}
+
+async fn read(client: &Client, uri: &str) -> Value {
+    client
+        .post(json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "resources/read",
+            "params": { "uri": uri },
+        }))
+        .await
+}
+
+fn handle_in(summary: &Value) -> &str {
+    summary["structuredContent"]["handle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the summary carries a handle, got {summary}"))
 }
 
 fn diffable() -> Value {

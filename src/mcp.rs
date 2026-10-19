@@ -23,9 +23,10 @@ use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 
 use crate::error::Failure;
+use crate::log::Line;
 use crate::prompts;
-use crate::resources;
-use crate::tools::{self, Call, Ctx};
+use crate::resources::{self, Address};
+use crate::tools::{self, Ctx};
 
 pub const NAME: &str = "diffpack";
 
@@ -113,7 +114,10 @@ impl ServerHandler for Diffpack {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        resources::read(&request.uri, &Call::new(&self.ctx))
+        let address = Address::of(&request.uri);
+        let line = Line::reading(address.resource()).about(Some(&address.arguments()));
+
+        tools::run(&self.ctx, line, async |call| address.read(call).await)
             .await
             .map(ReadResourceResponse::from)
             .map_err(Failure::refuse)

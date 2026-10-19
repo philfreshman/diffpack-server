@@ -9,6 +9,8 @@ use crate::tools::{diff_package_versions, Call, Tool};
 
 pub const PREFIX: &str = "diffpack://diff/";
 
+pub const RESOURCE_NAME: &str = "diff";
+
 pub fn uri_template() -> String {
     format!("{PREFIX}{{handle}}")
 }
@@ -23,7 +25,7 @@ pub fn uri_of(handle: &DiffHandle) -> String {
 }
 
 pub fn link(handle: &DiffHandle) -> Resource {
-    Resource::new(uri_of(handle), "diff")
+    Resource::new(uri_of(handle), RESOURCE_NAME)
         .with_title("This comparison")
         .with_description(
             "The whole of the comparison this call made: what was compared, how much \
@@ -34,7 +36,7 @@ pub fn link(handle: &DiffHandle) -> Resource {
 }
 
 pub fn template() -> ResourceTemplate {
-    ResourceTemplate::new(uri_template(), "diff")
+    ResourceTemplate::new(uri_template(), RESOURCE_NAME)
         .with_title("Package comparison")
         .with_description(
             "One comparison of two published versions: what was compared, how much \

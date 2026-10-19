@@ -273,7 +273,7 @@ pub async fn call(
     arguments: Option<JsonObject>,
     ctx: &Ctx,
 ) -> Result<CallToolResult, ErrorData> {
-    let line = Line::new(name).about(arguments.as_ref());
+    let line = Line::calling(name).about(arguments.as_ref());
 
     let answer = run(ctx, line, async |call| {
         dispatch(name, arguments, call).await
