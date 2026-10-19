@@ -49,6 +49,43 @@ async fn npm_resolves_to_the_registry_tarball() {
 }
 
 #[tokio::test]
+async fn a_go_module_resolves_to_the_proxys_escaped_zip() {
+    let result = call(json!({
+        "registry": "go",
+        "package": "github.com/Masterminds/semver/v3",
+        "version": "v3.2.1",
+    }))
+    .await;
+
+    assert_eq!(
+        result["structuredContent"]["url"],
+        "https://proxy.golang.org/github.com/!masterminds/semver/v3/@v/v3.2.1.zip",
+        "the proxy serves a module at a path built from its name, capitals \
+         escaped, so this tool can say where without asking: got {result}"
+    );
+}
+
+#[tokio::test]
+async fn the_definition_names_every_registry_it_resolves() {
+    let tool = Client::fixture().listed(TOOL).await;
+    let said = format!(
+        "{} {}",
+        tool["description"].as_str().unwrap_or_default(),
+        tool["inputSchema"]["properties"]["registry"]["description"]
+            .as_str()
+            .unwrap_or_default()
+    );
+
+    for resolved in ["`npm`", "`crates`", "`go`"] {
+        assert!(
+            said.contains(resolved),
+            "an agent is told which registries this resolves, and {resolved} is \
+             one: got {said}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_scoped_npm_package_drops_its_scope_from_the_filename() {
     let result = call(json!({
         "registry": "npm",

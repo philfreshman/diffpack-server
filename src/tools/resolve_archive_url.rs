@@ -19,7 +19,7 @@ pub struct ResolveArchiveUrl;
 #[serde(deny_unknown_fields)]
 pub struct Args {
     #[schemars(
-        description = "The registry that publishes the package: `npm` or `crates`.\n\
+        description = "The registry that publishes the package: `npm`, `crates` or `go`.\n\
         \n\
         `pypi` parses and is a registry this server knows, but this tool\n\
         cannot resolve a URL for it: PyPI lists a version's files in its\n\
@@ -44,8 +44,9 @@ impl Tool for ResolveArchiveUrl {
     const TITLE: &'static str = "Resolve archive URL";
     const DESCRIPTION: &'static str = "\
         Return the URL a published package version's archive is served from, \
-        so a diff can name where its bytes came from. Works for `npm` and \
-        `crates` (crates.io), which publish at a predictable path. Takes a \
+        so a diff can name where its bytes came from. Works for `npm`, \
+        `crates` (crates.io) and `go` (the Go module proxy), which publish at \
+        a predictable path. Takes a \
         registry, a package name and one exact version, all spelled the way \
         the registry spells them. Fetches nothing: the answer is built from \
         the arguments. To see what is inside a version, call \
