@@ -2,7 +2,7 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::{Client, CURRENT, PREVIOUS};
+use common::{names, Client, CURRENT, PREVIOUS};
 use diffpack_server::registry::Registry;
 use diffpack_server::router;
 use serde_json::{json, Value};
@@ -86,7 +86,7 @@ async fn the_instructions_name_every_registry_this_server_has() {
 
     for registry in Registry::ALL {
         assert!(
-            instructions.contains(registry.name()),
+            names(instructions, registry.name()),
             "a client deciding whether this server can help reads the \
              instructions first, so they should name {}: got {instructions}",
             registry.name()
