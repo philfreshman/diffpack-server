@@ -5,7 +5,7 @@ mod common;
 use axum::http::StatusCode;
 use common::Client;
 use diffpack_server::error::{self, Failure};
-use diffpack_server::router;
+use diffpack_server::{fetch, router, store};
 use serde_json::{json, Value};
 
 #[tokio::test]
@@ -434,9 +434,10 @@ fn the_call_deadline_leaves_the_function_time_to_answer() {
     let max_duration = manifest["functions"]["api/mcp.rs"]["maxDuration"]
         .as_u64()
         .expect("vercel.json should give the handler a maxDuration");
+    let time_to_answer = Duration::from_secs(30);
 
     assert!(
-        (error::CALL_DEADLINE + error::UPSTREAM_TIMEOUT).as_secs() <= max_duration,
+        (error::CALL_DEADLINE + time_to_answer).as_secs() <= max_duration,
         "a call deadline of {}s leaves too little of the function's {max_duration}s to \
          answer in",
         error::CALL_DEADLINE.as_secs()
@@ -444,15 +445,14 @@ fn the_call_deadline_leaves_the_function_time_to_answer() {
 }
 
 #[test]
-fn the_call_deadline_outlasts_the_longest_wait_on_a_registry() {
+fn the_call_deadline_outlasts_the_longest_a_call_can_wait() {
     let a_listing_then_its_archive = 2;
-    let a_slot_then_a_request = 2;
-    let longest_wait = error::UPSTREAM_TIMEOUT * a_listing_then_its_archive * a_slot_then_a_request;
+    let longest_wait = store::LONGEST_LOOKUP + fetch::LONGEST_FETCH * a_listing_then_its_archive;
 
     assert!(
         error::CALL_DEADLINE > longest_wait,
-        "a registry that is slow should be answered as slow, not as a call out of \
-         time: {:?} against {longest_wait:?}",
+        "a slow registry or blob store should be answered as slow, not as a call out \
+         of time: {:?} against {longest_wait:?}",
         error::CALL_DEADLINE
     );
 }

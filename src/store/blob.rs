@@ -17,6 +17,15 @@ const BACKOFF: Duration = Duration::from_millis(200);
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+const LONGEST_REQUEST: Duration = TIMEOUT
+    .saturating_mul(ATTEMPTS)
+    .saturating_add(BACKOFF.saturating_mul((1 << (ATTEMPTS - 1)) - 1));
+
+const WHERE_IT_IS_THEN_THE_DOWNLOAD: u32 = 2;
+
+pub(crate) const LONGEST_READ: Duration =
+    LONGEST_REQUEST.saturating_mul(WHERE_IT_IS_THEN_THE_DOWNLOAD);
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Blob {
