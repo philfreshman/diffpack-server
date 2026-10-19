@@ -532,15 +532,28 @@ What one tool call or one resource read leaves behind: a single JSON object
 naming the tool or the resource, a summary of what it was asked for, where its
 time went and how it ended. One per call or read, written by the dispatch
 rather than by a tool or a resource and written whether the work answered,
-failed or panicked, so a count of lines is a count of calls and reads. A Line
-names a `tool` or a `resource` and never both, so a count of one key is a
-count of that one population. A read names the resource its URI addresses and
-summarises a diff handle by the inputs it carries, under the names
-`diff_package_versions` takes them by, so the two group together on the
-package and the versions. Distinct from a Failure's message, which is written for a
-model and reaches a client — a Line is written for an operator and goes no
-further than the platform's logs.
+failed, panicked or ran past its Deadline, so a count of lines is a count of
+calls and reads. A Line names a `tool` or a `resource` and never both, so a
+count of one key is a count of that one population. A read names the resource
+its URI addresses. Wherever a diff handle is summarised, by a read or by a
+tool that takes one, it is replaced by the inputs it carries, under the names
+`diff_package_versions` takes them by, so every line about one comparison
+groups together on the package and the versions. Distinct from a Failure's
+message, which is written for a model and reaches a client — a Line is
+written for an operator and goes no further than the platform's logs.
 _Avoid_: log, log entry, event, trace, record
+
+**Deadline**:
+How long one tool call or one resource read has, from when the dispatch
+starts it, before it is answered as out of time: 240 s, inside the function's
+300 s. It bounds when the caller hears back and not the work. A step that runs
+on the blocking pool — extraction, a tree build, a patch — keeps running past
+it, and its result is dropped. Distinct from the Budget, which is the blob
+store's bytes, and from the upstream timeout, which is one request to a
+registry and is shorter, so that a slow registry is answered as slow rather
+than as out of time ([ADR 0020](docs/adr/0020-the-compute-deadline-lives-on-the-call.md)).
+_Avoid_: budget (that is the blob store's), timeout (that is one request's),
+time limit
 
 **Phase**:
 One part of a call that is timed by itself. Two of them today: the whole
@@ -587,8 +600,8 @@ _Avoid_: warning, log line, error, event
 
 **Cause**:
 Which Failure a call ended in, in one word, as a Line carries it —
-`no_such_version`, `rate_limited`, `too_large`, or `panicked` for a handler
-that never returned. It is the Failure's kind and not its message: a message
-is a sentence carrying the package name a caller sent, so counting by it would
-give one bucket per call.
+`no_such_version`, `rate_limited`, `too_large`; `panicked` for a handler that
+never returned, and `out_of_time` for one still working at its Deadline. It is
+the Failure's kind and not its message: a message is a sentence carrying the
+package name a caller sent, so counting by it would give one bucket per call.
 _Avoid_: error, reason, status, code
