@@ -19,7 +19,7 @@ pub const ALLOWED_ORIGINS: &str = "DIFFPACK_ALLOWED_ORIGINS";
 
 pub fn router() -> Router {
     router_with(|| Ok(Diffpack::new()), allowed_origins_from_env())
-        .merge(Entries::over(Ctx::new).routes())
+        .merge(Entries::over(Ctx::for_request).routes())
 }
 
 pub fn router_with<S, F>(service_factory: F, allowed_origins: Vec<String>) -> Router

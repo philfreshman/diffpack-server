@@ -1215,9 +1215,10 @@ An Entry may be 8 MiB, so the Response ceiling is the route's to keep, and it
 is a field for the reason the store's caps are. Over it, the patches are left
 out and the app computes the files it opens; a tree alone over it is a miss.
 
-Each request runs through `tools::run` over a Ctx built for it by a factory,
-`Ctx::new` in production, exactly as a tool call does. So the route and the
-tools find the store's credentials the same way, a panic is caught the same
+Each request runs through `tools::run` over a Ctx built for it by a factory
+handed the request's headers, `Ctx::for_request` in production, exactly as a
+tool call's is. So the route and the tools find the store's credentials the
+same way, from the token the request presents, a panic is caught the same
 way, and every request leaves one Line: `"route": "/diffs/v1"`, the `diff_id`
 it was asked for, and the Cache outcome. The outcome is what the browser got:
 an Entry whose tree alone is over the ceiling is a `miss`. A path that is not

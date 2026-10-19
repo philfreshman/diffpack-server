@@ -15,14 +15,14 @@ use crate::engine::{DiffFileEntry, Patch};
 use crate::error::Failure;
 use crate::log::Line;
 use crate::page::RESPONSE_CEILING;
-use crate::store::Entry;
+use crate::store::{Entry, RequestHeaders};
 use crate::tools::{self, Ctx};
 
 const HIT_CACHE_CONTROL: &str = "public, max-age=86400, s-maxage=31536000";
 
 const NOT_A_DIFF_ID: &str = "A diff_id is 64 lowercase hex digits.";
 
-type CtxFactory = Box<dyn Fn() -> Ctx + Send + Sync>;
+type CtxFactory = Box<dyn Fn(&RequestHeaders) -> Ctx + Send + Sync>;
 
 pub struct Entries {
     ctx: CtxFactory,
@@ -31,7 +31,7 @@ pub struct Entries {
 }
 
 impl Entries {
-    pub fn over(ctx: impl Fn() -> Ctx + Send + Sync + 'static) -> Self {
+    pub fn over(ctx: impl Fn(&RequestHeaders) -> Ctx + Send + Sync + 'static) -> Self {
         Self {
             ctx: Box::new(ctx),
             ceiling: RESPONSE_CEILING,
@@ -86,8 +86,12 @@ impl From<Entry> for Served {
     }
 }
 
-async fn serve(State(entries): State<Arc<Entries>>, Path(asked): Path<String>) -> Response {
-    let ctx = (entries.ctx)();
+async fn serve(
+    State(entries): State<Arc<Entries>>,
+    Path(asked): Path<String>,
+    request: RequestHeaders,
+) -> Response {
+    let ctx = (entries.ctx)(&request);
     let line = Line::serving(&route()).about(Some(&arguments(&asked)));
 
     let body = tools::run(&ctx, line, async |call| {
