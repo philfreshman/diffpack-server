@@ -19,6 +19,7 @@ use crate::cache_key::DiffKey;
 use crate::catalogue::Catalogue;
 use crate::compute;
 use crate::error::{Failure, CALL_BUDGET};
+use crate::handle::DiffHandle;
 use crate::log::{Line, Lookup, Sink, Spent};
 use crate::registry::{Hit, Registry, Versions};
 use crate::search::Search;
@@ -290,7 +291,7 @@ pub async fn call(
     arguments: Option<JsonObject>,
     ctx: &Ctx,
 ) -> Result<CallToolResult, ErrorData> {
-    let line = Line::calling(name).about(arguments.as_ref());
+    let line = Line::calling(name).about(Some(&with_handle_decoded(arguments.as_ref())));
 
     let answer = run(ctx, line, async |call| {
         dispatch(name, arguments, call).await
@@ -302,6 +303,24 @@ pub async fn call(
         Err(failure) => failure.respond(),
     }
 }
+
+fn with_handle_decoded(arguments: Option<&JsonObject>) -> JsonObject {
+    let mut arguments = arguments.cloned().unwrap_or_default();
+
+    let inputs = arguments
+        .get(HANDLE_ARGUMENT)
+        .and_then(Value::as_str)
+        .and_then(DiffHandle::inputs_named_in);
+
+    if let Some(inputs) = inputs {
+        arguments.remove(HANDLE_ARGUMENT);
+        arguments.extend(inputs);
+    }
+
+    arguments
+}
+
+const HANDLE_ARGUMENT: &str = "handle";
 
 pub async fn run<T>(
     ctx: &Ctx,

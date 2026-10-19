@@ -581,6 +581,46 @@ async fn a_read_that_needs_no_handle_or_cannot_decode_one_has_no_arguments() {
 }
 
 #[tokio::test]
+async fn a_tool_that_reads_a_comparison_names_it_the_way_a_read_does() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    let summary = client.call("diff_package_versions", diffable()).await;
+    let handle = handle_in(&summary);
+
+    client
+        .call("get_diff_tree", json!({ "handle": handle }))
+        .await;
+    client
+        .call(
+            "get_file_diff",
+            json!({ "handle": handle, "path": "src/index.js" }),
+        )
+        .await;
+
+    let lines = log.lines();
+    assert_eq!(lines.len(), 3, "three calls, three lines: {lines:?}");
+    for line in lines[1..].iter().map(|line| parse(line)) {
+        for (name, sent) in diffable().as_object().expect("the arguments are an object") {
+            assert_eq!(
+                &line["args"][name], sent,
+                "a tool reading a comparison groups with the call that made it: {line}"
+            );
+        }
+        assert_eq!(
+            line["args"].get("handle"),
+            None,
+            "a handle that decoded is said once, as its inputs: {line}"
+        );
+    }
+    assert_eq!(
+        parse(&lines[2])["args"]["path"],
+        "src/index.js",
+        "the tool's own arguments stay beside the handle's: {}",
+        lines[2]
+    );
+}
+
+#[tokio::test]
 async fn a_call_that_panics_still_leaves_its_line() {
     let log = Capture::new();
     let ctx = Ctx::fixture(FIXTURES).logging_to(log.sink());
