@@ -28,7 +28,7 @@ directory was created (#40).
 | [0015](0015-one-implementation-beneath-three-registry-seams.md) | One implementation beneath three registry seams | done, #81 |
 | [0016](0016-the-walk-to-a-comparison-is-this-tools.md) | The walk from a handle to a comparison is `diff_package_versions`'s | done, #83 |
 | [0017](0017-a-failure-carries-the-code-it-earned.md) | A failure carries the code it earned, not the one its caller picked | done, #85 |
-| [0018](0018-no-rate-limit-for-now.md) | No rate limit on the public endpoint, for now | #26 |
+| [0018](0018-no-rate-limit-for-now.md) | No rate limit on the public endpoint, for now | done, #26; no rule applied while on Vercel Hobby |
 | [0019](0019-a-go-module-is-ordered-by-version-and-found-by-path.md) | A Go module is ordered by version and found by its path | done, #28 |
 | [0020](0020-the-browser-reads-an-entry-through-the-server-by-diff-id.md) | The browser reads an Entry through this server, by diff_id | done, #27 |
 | [0021](0021-the-compute-deadline-lives-on-the-call.md) | The compute deadline lives on the call, not in the engine | done, #26; the longest wait is 192.4 s since 0022 |
