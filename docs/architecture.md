@@ -265,13 +265,12 @@ pool is not stopped when the deadline passes: it finishes, and its result is
 dropped. What the deadline guarantees is the answer.
 
 `Call::store()` hands back a wrapper of its own rather than that one, and the
-difference is a decision rather than an omission: the `fetch` phase answers
-how long a call waited on a *registry*, and a cache read counted towards it
-would report the call that avoided two downloads as the one that waited
-longest. What that wrapper records instead is whether the lookup found its
-entry. It clones the handle where an entry is written rather than handing a
-caller one to clone, because writing an entry outlives the call that produced
-it — the work goes to `waitUntil` and the context is gone by the time it runs.
+difference is a decision rather than an omission: the `fetch` phase answers how
+long a call waited on a *registry*, and a cache read counted towards it would
+report the call that avoided two downloads as the one that waited longest. What
+that wrapper records instead is whether the lookup found its entry. Writing an
+entry goes through it too, and the call waits for the write before it answers
+([ADR 0022](adr/0022-a-cache-write-happens-before-the-answer.md)).
 
 `Ctx::storing_in` is the third `..self` spread beside `Ctx::logging_to`, and
 it is there for the two things a store can be that a fixture directory cannot
@@ -785,9 +784,11 @@ diff failure**: every way this module can fail ends in a miss, so neither
 method has a `Result`, and what would have been one is a line in the log
 instead. **An entry is the unit**: `meta.json` and `patches.json` go together,
 because half of one is not a hit and the only right answer to half is the one
-this module already gives. And **a write happens after the answer**, through
-the runtime's `waitUntil`, because a caller is waiting on a diff and not on a
-cache.
+this module already gives. And **a write happens before the answer**, with a
+deadline of its own, `WRITE_DEADLINE`: Vercel's Rust runtime gives a function
+no time after its response, so a write left for later is never made, and a
+write that outlasts its deadline is dropped with a Note rather than holding the
+answer ([ADR 0022](adr/0022-a-cache-write-happens-before-the-answer.md)).
 
 Two caps are the store's too — 256 KiB on one file's patch, 8 MiB on one
 entry — and both are fields rather than constants read where they are used, so
@@ -824,11 +825,11 @@ already there is not admitted at all, and what makes a second `put` happen is
 a lookup that missed when it should not have: a transient failure, or two
 invocations computing one comparison at once.
 
-That is a head per blob on a write that does go ahead, and the write is
-backgrounded, so no caller waits on it. The head inside the write is still
-there and is not the first one repeated: a sweep happens between the two, and
-it is long enough for another invocation to land the blob this one is about to
-write.
+That is a head per blob on a write that does go ahead, and the caller waits for
+it, since the write now comes before the answer. The head inside the write is
+still there and is not the first one repeated: a sweep happens between the two,
+and it is long enough for another invocation to land the blob this one is about
+to write.
 
 Two numbers rather than one, and the 16 MB between them is the point. Two
 invocations can admit at the same moment, each against a total that did not
@@ -1148,10 +1149,10 @@ thing that method is for.
 
 A `Note` is the other thing this module writes, and it is deliberately not a
 `Line`. A seam that must not fail a call has nowhere else to put a failure: a
-`Failure` would reach the model, and a `Line` is the dispatch's — one per
-call, so that counting them counts calls, and already written by the time a
-backgrounded cache write has failed. The `DiffStore` is the only seam like
-that, by ADR 0003, and it carries a `Sink` of its own for the same reason.
+`Failure` would reach the model, and a `Line` is the dispatch's — one per call,
+so that counting them counts calls, and about the call's outcome, which a
+failed cache write is not. The `DiffStore` is the only seam like that, by ADR
+0003, and it carries a `Sink` of its own for the same reason.
 
 `Spent` keeps the *window* fetching spanned rather than the sum of each
 fetch's duration, because `diff_package_versions` asks for two versions

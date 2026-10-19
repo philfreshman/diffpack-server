@@ -32,6 +32,7 @@ directory was created (#40).
 | [0019](0019-a-go-module-is-ordered-by-version-and-found-by-path.md) | A Go module is ordered by version and found by its path | done, #28 |
 | [0020](0020-the-browser-reads-an-entry-through-the-server-by-diff-id.md) | The browser reads an Entry through this server, by diff_id | done, #27 |
 | [0021](0021-the-compute-deadline-lives-on-the-call.md) | The compute deadline lives on the call, not in the engine | done, #26 |
+| [0022](0022-a-cache-write-happens-before-the-answer.md) | A cache write happens before the answer, not after it | done, #130 |
 
 A new one goes in at the next number. The bar is the usual three: hard to
 reverse, surprising without the context, and the result of a real trade-off. A
