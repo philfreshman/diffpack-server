@@ -667,6 +667,30 @@ fn packagists_search_answer_reads_as_hits_without_a_version() {
 }
 
 #[test]
+fn a_packagist_hit_that_only_names_what_other_packages_provide_is_left_out() {
+    let body = r#"{"results":[
+        {"name":"psr/log-implementation","description":"",
+         "url":"https://packagist.org/providers/psr/log-implementation","repository":"","virtual":true},
+        {"name":"monolog/monolog","description":"Sends your logs to files, sockets, inboxes, databases and various web services",
+         "url":"https://packagist.org/packages/monolog/monolog","repository":"https://github.com/Seldaek/monolog",
+         "downloads":1091256792,"favers":22270}
+    ],"total":2}"#;
+
+    let names: Vec<String> = Registry::Composer
+        .read_hits(body, "log implementation", 10)
+        .expect("a Packagist search answer reads")
+        .into_iter()
+        .map(|hit| hit.name)
+        .collect();
+
+    assert_eq!(
+        names,
+        vec!["monolog/monolog".to_owned()],
+        "a virtual package has no versions and no archive, so no other tool could take its name"
+    );
+}
+
+#[test]
 fn pypis_index_reads_as_hits_the_query_matches() {
     let body = r#"{"meta":{"api-version":"1.4"},"projects":[
         {"name":"requests"},

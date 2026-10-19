@@ -172,7 +172,9 @@ crates.io carry all three; PyPI's Index carries a name and nothing else, so
 a PyPI hit has a name and nothing else. A Go hit has a name and a version and
 no description, because the proxy says nothing about what a module is. A
 Packagist hit has a name and a description and no version, because its search
-answers with none. An
+answers with none, and a virtual package Packagist's search also returns is no
+hit at all: it only names what other packages provide, so it has nothing to
+diff. An
 absent version is a registry that does not say here, never a package that has
 published nothing.
 _Avoid_: result, match, search result, package (unqualified)

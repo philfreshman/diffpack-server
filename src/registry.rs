@@ -409,6 +409,7 @@ impl Registry {
                 answer
                     .results
                     .into_iter()
+                    .filter(|found| !found.only_provided)
                     .map(|found| Hit {
                         name: found.name,
                         version: None,
@@ -746,6 +747,8 @@ struct PackagistSearch {
 struct PackagistHit {
     name: String,
     description: Option<String>,
+    #[serde(default, rename = "virtual")]
+    only_provided: bool,
 }
 
 #[derive(Deserialize)]
