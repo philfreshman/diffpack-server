@@ -16,7 +16,7 @@ src/tools/          one module per tool: definition and handler together,
                     and diff_package_versions::compare, the one walk from a
                     handle to a comparison that every diff path takes, with
                     Comparison::file_patch, the one way to one file's patch;
-                    Ctx, the seams that outlive a call, and Call, one call
+                    Ctx, the seams a call is made over, and Call, one call
                     over them with its own tally
 src/resources/      one module per resource: URI and handler together
 src/prompts/        one module per prompt: arguments and messages together
@@ -225,13 +225,16 @@ list of tools, and the generic call path where arguments are validated and
 `Failure` is put on its channel — which is why a handler returns
 `Result<Output, Failure>` and never names a result type of MCP's.
 
-`Ctx` is what outlives a call, built once per request by the service factory
-`router::router_with` takes: the seams a handler may reach — `Archive`,
-`Catalogue`, `Search` and `DiffStore`, while `registry`, `page` and `handle`
-are named directly because a pure module has nothing to hand over — the log's
-`Sink`, which the dispatch writes to and a handler never touches, and the
-deadline every call it serves is given.
-Nothing in it belongs to one call, so cloning a `Ctx` is always safe.
+`Ctx` is what a call is made over. A live `Diffpack` builds one for each tool
+call and resource read from the headers of the request it came in, because the
+blob store's token arrives with the request
+([`operations.md`](operations.md#the-caches-credentials)); a `Diffpack` given a
+`Ctx`, as every suite's is, clones that one per call. It holds the seams a
+handler may reach — `Archive`, `Catalogue`, `Search` and `DiffStore`, while
+`registry`, `page` and `handle` are named directly because a pure module has
+nothing to hand over — the log's `Sink`, which the dispatch writes to and a
+handler never touches, and the deadline every call it serves is given. Nothing
+in it belongs to one call, so cloning a `Ctx` is always safe.
 
 `Call` is one call while it runs, and it is what a handler is handed: a
 `Ctx`'s seams, and the call's own tally — the `Spent` its phases add up in and
@@ -285,14 +288,16 @@ as production does, and `Client::over` clones one the suite made. The two
 differ only in what the seams remember, since a call's tally is never in the
 context.
 
-`Ctx` itself is built two ways and only two: `Ctx::new` is every seam live and
-`Ctx::fixture` is every seam reading from the checked-in sets under
-`fixtures/`. Both name every field, so a seam added later is a compile error
-in each of them and its author answers for production and for the suite at
-once. There is deliberately no builder that supplies one seam and fills the
-rest, because filling them meant filling them live: a test naming the archive
-carried a live catalogue beside it, and the first tool to read a catalogue
-through such a context would have asked npm from CI.
+`Ctx` itself is built two ways and only two: `Ctx::for_request` is every seam
+live, with the store reached by whatever token the request's headers present
+(`Ctx::new` is a request that presents none), and `Ctx::fixture` is every seam
+reading from the checked-in sets under `fixtures/`. Both name every field, so a
+seam added later is a compile error in each of them and its author answers for
+production and for the suite at once. There is deliberately no builder that
+supplies one seam and fills the rest, because filling them meant filling them
+live: a test naming the archive carried a live catalogue beside it, and the
+first tool to read a catalogue through such a context would have asked npm from
+CI.
 
 What the compiler checks there is that every field was answered for, not that
 the answer was a fixture one, so the second half is `Ctx::seams`. It names the
@@ -881,15 +886,19 @@ question.
 
 There is no published specification for that API and no usable Rust client for
 it, so the wire is taken from what `@vercel/blob` sends, read out of its
-source. Three of those facts are not guessable and fail only against the real
+source. Four of those facts are not guessable and fail only against the real
 store: a write's pathname is a query parameter rather than a path segment, the
-store id is provisioned with a `store_` prefix the header does not want, and
-`access` has no default. The tests drive the client through a stub HTTP server
+store id is provisioned with a `store_` prefix the header does not want,
+`access` has no default and must be `private` for this project's private store,
+and that store serves a blob's download only to a request that carries the
+token. The token itself comes with each request rather than from the
+environment; [`operations.md`](operations.md#the-caches-credentials) says
+why. The tests drive the client through a stub HTTP server
 on a loopback port, so what they hold is the request this module writes rather
 than a shape it was told to produce — and because the client is private, they
 live in the module rather than in `tests/`.
 
-A stub cannot settle those three, which is why one test is not a stub. It was
+A stub cannot settle those four, which is why one test is not a stub. It was
 written from the same reading of `@vercel/blob` as the client, so it agrees
 with the client whether or not the reading was right; only the store can
 disagree. So the four operations also run against it once, `#[ignore]`d the
@@ -1227,9 +1236,10 @@ An Entry may be 8 MiB, so the Response ceiling is the route's to keep, and it
 is a field for the reason the store's caps are. Over it, the patches are left
 out and the app computes the files it opens; a tree alone over it is a miss.
 
-Each request runs through `tools::run` over a Ctx built for it by a factory,
-`Ctx::new` in production, exactly as a tool call does. So the route and the
-tools find the store's credentials the same way, a panic is caught the same
+Each request runs through `tools::run` over a Ctx built for it by a factory
+handed the request's headers, `Ctx::for_request` in production, exactly as a
+tool call's is. So the route and the tools find the store's credentials the
+same way, from the token the request presents, a panic is caught the same
 way, and every request leaves one Line: `"route": "/diffs/v1"`, the `diff_id`
 it was asked for, and the Cache outcome. The outcome is what the browser got:
 an Entry whose tree alone is over the ceiling is a `miss`. A path that is not

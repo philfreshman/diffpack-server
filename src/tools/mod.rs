@@ -23,7 +23,7 @@ use crate::handle::DiffHandle;
 use crate::log::{Line, Lookup, Sink, Spent};
 use crate::registry::{Hit, Registry, Versions};
 use crate::search::Search;
-use crate::store::{DiffStore, Entry, Memory};
+use crate::store::{DiffStore, Entry, Memory, RequestHeaders};
 
 macro_rules! tools {
     ($($module:ident::$tool:ident),+ $(,)?) => {
@@ -81,11 +81,15 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn new() -> Self {
+        Self::for_request(&RequestHeaders::new())
+    }
+
+    pub fn for_request(request: &RequestHeaders) -> Self {
         Self {
             archive: Arc::new(Archive::live()),
             catalogue: Arc::new(Catalogue::live()),
             search: Arc::new(Search::live()),
-            store: Arc::new(DiffStore::live()),
+            store: Arc::new(DiffStore::live_for(request)),
             log: Sink::default(),
             deadline: CALL_DEADLINE,
         }

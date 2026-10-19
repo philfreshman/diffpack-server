@@ -16,6 +16,8 @@ use crate::engine::{DiffFileEntry, Patch};
 use crate::error::Failure;
 use crate::log::{Note, Sink};
 
+pub use reqwest::header::HeaderMap as RequestHeaders;
+
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub key: DiffKey,
@@ -122,8 +124,8 @@ impl Blobs {
 }
 
 impl DiffStore {
-    pub fn live() -> Self {
-        let source = match blob::Credentials::from_env() {
+    pub fn live_for(request: &RequestHeaders) -> Self {
+        let source = match blob::Credentials::from_request(request) {
             Ok(credentials) => Source::Blobs(Blobs::Live(blob::Api::live(credentials))),
             Err(_) => Source::Unavailable(NO_CREDENTIALS),
         };

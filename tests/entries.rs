@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 mod common;
@@ -180,7 +181,7 @@ async fn no_store_at_all_is_a_miss_the_line_says_is_no_store() {
     let sink = capture.sink();
     let served = Client::routed(move || {
         let sink = sink.clone();
-        Entries::over(move || {
+        Entries::over(move |_| {
             Ctx::fixture(FIXTURES)
                 .storing_in(DiffStore::unavailable())
                 .logging_to(sink.clone())
@@ -259,7 +260,7 @@ async fn an_entry_whose_tree_alone_is_over_the_response_ceiling_is_a_miss() {
     let served = Client::routed(move || {
         let reading = reading.clone();
         let sink = sink.clone();
-        Entries::over(move || {
+        Entries::over(move |_| {
             Ctx::fixture(FIXTURES)
                 .storing_in(reading.store())
                 .logging_to(sink.clone())
@@ -323,6 +324,42 @@ async fn a_path_that_is_not_a_diff_id_is_logged_as_the_caller_s_mistake() {
     assert_eq!(line.get("cache"), None, "nothing was looked up, got {line}");
 }
 
+#[tokio::test]
+async fn the_store_an_entry_is_read_from_is_built_from_the_request_it_answers() {
+    let presented: Arc<Mutex<Option<String>>> = Arc::default();
+    let seen = Arc::clone(&presented);
+
+    let mut request = get(&format!("/diffs/v1/{NEVER_WRITTEN}"));
+    request.headers_mut().insert(
+        "x-vercel-oidc-token",
+        "a-request-token".parse().expect("a valid header"),
+    );
+
+    Client::routed(move || {
+        let seen = Arc::clone(&seen);
+        Entries::over(move |headers| {
+            *seen.lock().expect("the test's lock is not poisoned") = headers
+                .get("x-vercel-oidc-token")
+                .and_then(|token| token.to_str().ok())
+                .map(str::to_owned);
+            Ctx::fixture(FIXTURES)
+        })
+        .routes()
+    })
+    .send(request)
+    .await;
+
+    assert_eq!(
+        presented
+            .lock()
+            .expect("the test's lock is not poisoned")
+            .as_deref(),
+        Some("a-request-token"),
+        "the store's token arrives with each request, so a store built without \
+         the request's headers has nothing to read the entry with"
+    );
+}
+
 async fn compare(store: &Memory, arguments: Value) -> Value {
     let answer = Client::over(Ctx::fixture(FIXTURES).storing_in(store.store()))
         .call("diff_package_versions", arguments)
@@ -335,7 +372,7 @@ async fn fetch(store: &Memory, path: &str) -> Answer {
     let store = store.clone();
     Client::routed(move || {
         let store = store.clone();
-        Entries::over(move || Ctx::fixture(FIXTURES).storing_in(store.store())).routes()
+        Entries::over(move |_| Ctx::fixture(FIXTURES).storing_in(store.store())).routes()
     })
     .send(get(path))
     .await
@@ -345,7 +382,7 @@ async fn fetch_capped(store: &Memory, path: &str, ceiling: usize) -> Answer {
     let store = store.clone();
     Client::routed(move || {
         let store = store.clone();
-        Entries::over(move || Ctx::fixture(FIXTURES).storing_in(store.store()))
+        Entries::over(move |_| Ctx::fixture(FIXTURES).storing_in(store.store()))
             .capping_responses_at(ceiling)
             .routes()
     })
@@ -359,7 +396,7 @@ async fn fetch_logging(store: &Memory, path: &str, capture: &Capture) -> Answer 
     Client::routed(move || {
         let store = store.clone();
         let sink = sink.clone();
-        Entries::over(move || {
+        Entries::over(move |_| {
             Ctx::fixture(FIXTURES)
                 .storing_in(store.store())
                 .logging_to(sink.clone())
