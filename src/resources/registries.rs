@@ -6,8 +6,10 @@ use crate::registry::{ArchiveSource, Registry, VERSION_RULE};
 
 pub const URI: &str = "diffpack://registries";
 
+pub const RESOURCE_NAME: &str = "registries";
+
 pub fn resource() -> Resource {
-    Resource::new(URI, "registries")
+    Resource::new(URI, RESOURCE_NAME)
         .with_title("Package registries")
         .with_description(
             "The registries this server knows — npm, crates.io and PyPI — with the \

@@ -1,8 +1,10 @@
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use futures::FutureExt as _;
 use rmcp::model::{
     CallToolResult, ContentBlock, JsonObject, Resource, Tool as Definition, ToolAnnotations,
 };
@@ -271,7 +273,7 @@ pub async fn call(
     arguments: Option<JsonObject>,
     ctx: &Ctx,
 ) -> Result<CallToolResult, ErrorData> {
-    let line = Line::new(name).about(arguments.as_ref());
+    let line = Line::calling(name).about(arguments.as_ref());
 
     let answer = run(ctx, line, async |call| {
         dispatch(name, arguments, call).await
@@ -284,15 +286,19 @@ pub async fn call(
     }
 }
 
-pub(crate) async fn run<T>(
+pub async fn run<T>(
     ctx: &Ctx,
     line: Line,
     work: impl AsyncFnOnce(&Call) -> Result<T, Failure>,
 ) -> Result<T, Failure> {
     let call = Call::new(ctx);
     let started = Instant::now();
+    let doing = line.subject.doing();
 
-    let answer = work(&call).await;
+    let answer = AssertUnwindSafe(work(&call))
+        .catch_unwind()
+        .await
+        .unwrap_or(Err(Failure::Panicked { doing }));
     ctx.log.write(
         &line
             .taking(started.elapsed(), &call.spent)
