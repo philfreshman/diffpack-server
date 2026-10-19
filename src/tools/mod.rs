@@ -17,6 +17,7 @@ use serde_json::Value;
 use crate::archive::{Archive, FileMap};
 use crate::cache_key::DiffKey;
 use crate::catalogue::Catalogue;
+use crate::compute;
 use crate::error::{Failure, CALL_BUDGET};
 use crate::log::{Line, Lookup, Sink, Spent};
 use crate::registry::{Hit, Registry, Versions};
@@ -171,6 +172,14 @@ impl Call {
 
     pub fn search(&self) -> Timed<'_, Search> {
         self.timed(&self.ctx.search)
+    }
+
+    pub async fn compute<T: Send + 'static>(
+        &self,
+        doing: &'static str,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, Failure> {
+        compute::off_the_runtime(doing, work).await
     }
 
     fn timed<'a, S>(&'a self, seam: &'a S) -> Timed<'a, S> {
