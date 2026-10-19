@@ -153,22 +153,22 @@ fn a_listing_is_read_for_the_archive_a_diff_wants() {
     let wheel = r#"{"packagetype":"bdist_wheel","url":"https://files.pythonhosted.org/x-py3-none-any.whl"}"#;
 
     assert_eq!(
-        Registry::PyPi.choose_archive(&listing(&format!("{wheel},{sdist}"))),
+        Registry::PyPi.choose_archive("1.0", &listing(&format!("{wheel},{sdist}"))),
         Some("https://files.pythonhosted.org/x-1.0.tar.gz".to_owned()),
         "an sdist is preferred over a wheel, whichever order they are listed in"
     );
     assert_eq!(
-        Registry::PyPi.choose_archive(&listing(wheel)),
+        Registry::PyPi.choose_archive("1.0", &listing(wheel)),
         Some("https://files.pythonhosted.org/x-py3-none-any.whl".to_owned()),
         "a version published only as a wheel is still diffable"
     );
     assert_eq!(
-        Registry::PyPi.choose_archive(&listing("")),
+        Registry::PyPi.choose_archive("1.0", &listing("")),
         None,
         "a version with no file this server can read names no archive"
     );
     assert_eq!(
-        Registry::PyPi.choose_archive("not metadata"),
+        Registry::PyPi.choose_archive("1.0", "not metadata"),
         None,
         "and neither does a body that is not the metadata we asked for"
     );

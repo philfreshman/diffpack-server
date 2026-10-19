@@ -139,7 +139,7 @@ impl Archive {
                 let listing = std::str::from_utf8(&listing)
                     .map_err(|_| unreadable(package, version, "its metadata is not text"))?;
 
-                registry.choose_archive(listing).ok_or_else(|| {
+                registry.choose_archive(version, listing).ok_or_else(|| {
                     unreadable(
                         package,
                         version,
