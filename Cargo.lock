@@ -394,8 +394,8 @@ dependencies = [
 
 [[package]]
 name = "diffpack-engine"
-version = "0.4.1"
-source = "git+https://github.com/philfreshman/diffpack-engine.git?tag=v0.4.1#c3c3f34ba5f938a416be4f5ca2067a0d4fc87f67"
+version = "0.5.0"
+source = "git+https://github.com/philfreshman/diffpack-engine.git?tag=v0.5.0#0dd2c041c4d14170e0154236dfc172dced2b767f"
 dependencies = [
  "flate2",
  "futures",

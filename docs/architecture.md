@@ -1202,8 +1202,9 @@ returns, whose fields serialise as the `data` and `is_diff` a stored
 
 The archive lookup is the engine's too, and is re-exported whole:
 `archive_source` says where a version's archive is, or which listing names it;
-`choose_archive` reads a listing for it; `unpack_archive` extracts it, with
-whatever wrapper directory that registry's archives have removed. None of them
+`choose_archive` reads that listing for the version asked for, since one
+listing can cover every version of a package; `unpack_archive` extracts it,
+with whatever wrapper directory that registry's archives have removed. None of them
 fetches. `registry` asks the first two and `archive` asks the last, and every
 download between them is `archive`'s own, under its size cap and its failures.
 

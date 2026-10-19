@@ -409,8 +409,8 @@ impl Registry {
         }
     }
 
-    pub fn choose_archive(self, listing: &str) -> Option<String> {
-        engine::choose_archive(self.id(), listing).ok()
+    pub fn choose_archive(self, version: &str, listing: &str) -> Option<String> {
+        engine::choose_archive(self.id(), version, listing).ok()
     }
 }
 
