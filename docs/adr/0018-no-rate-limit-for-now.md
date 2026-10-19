@@ -77,7 +77,9 @@ single call can do is a known number.
   several callers shares those four. A caller that waits out `SLOT_WAIT` for
   one is refused as `Busy` rather than left queued — the guard #26 asks for.
 * **The time limits.** `UPSTREAM_TIMEOUT` in `src/error.rs`, 30 s per request,
-  so `fetch::bytes` is bounded at twice that; and `maxDuration: 300` in
+  so `fetch::bytes` is bounded at twice that; `CALL_DEADLINE`, 240 s, after
+  which a call is answered as out of time even if its work is still running
+  (ADR 0021, added after this record); and `maxDuration: 300` in
   `vercel.json` over the whole invocation.
 * **The budget.** `CACHE_MAX_BYTES` in `src/store/mod.rs`: 256 MB over the
   whole blob store, swept oldest first (#22): a loop can churn it, not grow it.

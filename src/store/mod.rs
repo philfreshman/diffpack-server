@@ -44,6 +44,10 @@ pub const CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 pub const CACHE_TARGET_BYTES: u64 = 240 * 1024 * 1024;
 
+const THE_TREE_THEN_ITS_PATCHES: u32 = 2;
+
+pub const LONGEST_LOOKUP: Duration = blob::LONGEST_READ.saturating_mul(THE_TREE_THEN_ITS_PATCHES);
+
 pub struct DiffStore {
     source: Source,
 

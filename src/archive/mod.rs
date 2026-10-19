@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::compute;
 use crate::document::{About, Document};
 use crate::engine;
 use crate::error::Failure;
@@ -149,7 +150,12 @@ impl Archive {
         };
 
         let bytes = self.documents.body(&url, &about).await?;
-        extract(registry, &bytes, package, version)
+        let (package, version) = (package.to_owned(), version.to_owned());
+
+        compute::off_the_runtime("extracting an archive", move || {
+            extract(registry, &bytes, &package, &version)
+        })
+        .await?
     }
 }
 

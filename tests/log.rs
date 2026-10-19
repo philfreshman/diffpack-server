@@ -281,6 +281,24 @@ fn concurrent_fetches_cost_the_window_they_span_and_not_their_sum() {
     );
 }
 
+#[tokio::test]
+async fn a_fetch_cut_short_by_the_deadline_still_counts_the_time_it_waited() {
+    let spent = Spent::new();
+    let waited = Duration::from_millis(50);
+
+    let cut_short =
+        tokio::time::timeout(waited, spent.while_fetching(std::future::pending::<()>())).await;
+    assert!(cut_short.is_err(), "the fetch never finishes on its own");
+
+    let fetch = spent
+        .fetch()
+        .expect("a call that ran out of time while fetching was still waiting on a registry");
+    assert!(
+        fetch >= waited,
+        "the wait lasted until the fetch was abandoned, got {fetch:?}"
+    );
+}
+
 #[test]
 fn a_request_that_fetched_nothing_reports_no_fetch() {
     assert_eq!(Spent::starting_at(Instant::now()).fetch(), None);
@@ -578,6 +596,85 @@ async fn a_read_that_needs_no_handle_or_cannot_decode_one_has_no_arguments() {
             "neither read asked the store: {line}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_tool_that_reads_a_comparison_names_it_the_way_a_read_does() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    let summary = client.call("diff_package_versions", diffable()).await;
+    let handle = handle_in(&summary);
+
+    client
+        .call("get_diff_tree", json!({ "handle": handle }))
+        .await;
+    client
+        .call(
+            "get_file_diff",
+            json!({ "handle": handle, "path": "src/index.js" }),
+        )
+        .await;
+
+    let lines = log.lines();
+    assert_eq!(lines.len(), 3, "three calls, three lines: {lines:?}");
+    for line in lines[1..].iter().map(|line| parse(line)) {
+        for (name, sent) in diffable().as_object().expect("the arguments are an object") {
+            assert_eq!(
+                &line["args"][name], sent,
+                "a tool reading a comparison groups with the call that made it: {line}"
+            );
+        }
+        assert_eq!(
+            line["args"].get("handle"),
+            None,
+            "a handle that decoded is said once, as its inputs: {line}"
+        );
+    }
+    assert_eq!(
+        parse(&lines[2])["args"]["path"],
+        "src/index.js",
+        "the tool's own arguments stay beside the handle's: {}",
+        lines[2]
+    );
+}
+
+#[tokio::test]
+async fn a_decoded_handle_never_hides_what_the_caller_sent() {
+    let log = Capture::new();
+    let client = Client::over(Ctx::fixture(FIXTURES).logging_to(log.sink()));
+    let summary = client.call("diff_package_versions", diffable()).await;
+    let handle = handle_in(&summary);
+
+    for arguments in [
+        json!({ "handle": handle, "package": "sent-by-the-caller" }),
+        json!({ "handle": "not-a-handle" }),
+    ] {
+        client
+            .post(json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": { "name": "get_diff_tree", "arguments": arguments },
+            }))
+            .await;
+    }
+
+    let lines = log.lines();
+    assert_eq!(lines.len(), 3, "three calls, three lines: {lines:?}");
+
+    let clashing = parse(&lines[1]);
+    assert_eq!(
+        clashing["args"]["package"], "sent-by-the-caller",
+        "the line of a refused call should say what was sent, not what the handle holds: \
+         {clashing}"
+    );
+
+    let undecodable = parse(&lines[2]);
+    assert_eq!(
+        undecodable["args"],
+        json!({ "handle": "not-a-handle" }),
+        "a handle that does not decode is kept as sent: {undecodable}"
+    );
 }
 
 #[tokio::test]

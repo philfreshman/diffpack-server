@@ -15,7 +15,7 @@ Five codes. Two were already here and three are new:
 | `-32602` | Invalid params: the caller can fix this from what it was already told | `InvalidParams`, `NoSuchTool`, `NoSuchResource` |
 | `-32000` | A fault of this server's | `Internal` |
 | `-32001` | Ask for something else: the request was understood and there is no answer to it | `NoSuchPackage`, `NoSuchVersion`, `MalformedArchive`, `UnreadableVersions`, `VersionsTooLarge`, `UnreadableSearch`, `NoSuchFile`, `PathIsDirectory`, `UnresolvableArchiveUrl` |
-| `-32003` | Try again: nothing was served, and another attempt might be | `RateLimited`, `TimedOut`, `Busy`, `Unreachable`, `Unavailable` |
+| `-32003` | Try again: nothing was served, and another attempt might be | `RateLimited`, `TimedOut`, `Busy`, `Unreachable`, `Unavailable`; `OutOfTime` since #26 (ADR 0021) |
 | `-32004` | Ask for less: the answer is there, is over a limit, and has a narrower form | `TooLarge`, `SearchTooLarge`, `ItemTooLarge` |
 
 The three new ones are the three remedies `Failure::message` already writes

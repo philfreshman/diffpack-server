@@ -2,7 +2,7 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::FutureExt as _;
 use rmcp::model::{
@@ -17,7 +17,9 @@ use serde_json::Value;
 use crate::archive::{Archive, FileMap};
 use crate::cache_key::{DiffId, DiffKey};
 use crate::catalogue::Catalogue;
-use crate::error::Failure;
+use crate::compute;
+use crate::error::{Failure, CALL_DEADLINE};
+use crate::handle::DiffHandle;
 use crate::log::{Line, Lookup, Sink, Spent};
 use crate::registry::{Hit, Registry, Versions};
 use crate::search::Search;
@@ -74,6 +76,7 @@ pub struct Ctx {
     search: Arc<Search>,
     store: Arc<DiffStore>,
     log: Sink,
+    deadline: Duration,
 }
 
 impl Ctx {
@@ -84,6 +87,7 @@ impl Ctx {
             search: Arc::new(Search::live()),
             store: Arc::new(DiffStore::live()),
             log: Sink::default(),
+            deadline: CALL_DEADLINE,
         }
     }
 
@@ -95,11 +99,16 @@ impl Ctx {
             search: Arc::new(Search::fixture(fixtures.join("searches"))),
             store: Arc::new(Memory::new().store()),
             log: Sink::default(),
+            deadline: CALL_DEADLINE,
         }
     }
 
     pub fn logging_to(self, log: Sink) -> Self {
         Self { log, ..self }
+    }
+
+    pub fn answering_within(self, deadline: Duration) -> Self {
+        Self { deadline, ..self }
     }
 
     pub fn storing_in(self, store: DiffStore) -> Self {
@@ -116,6 +125,7 @@ impl Ctx {
             search: _,
             store: _,
             log: _,
+            deadline: _,
         } = self;
 
         &["archive", "catalogue", "search", "store"]
@@ -163,6 +173,14 @@ impl Call {
 
     pub fn search(&self) -> Timed<'_, Search> {
         self.timed(&self.ctx.search)
+    }
+
+    pub async fn compute<T: Send + 'static>(
+        &self,
+        doing: &'static str,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, Failure> {
+        compute::off_the_runtime(doing, work).await
     }
 
     fn timed<'a, S>(&'a self, seam: &'a S) -> Timed<'a, S> {
@@ -285,7 +303,7 @@ pub async fn call(
     arguments: Option<JsonObject>,
     ctx: &Ctx,
 ) -> Result<CallToolResult, ErrorData> {
-    let line = Line::calling(name).about(arguments.as_ref());
+    let line = Line::calling(name).about(Some(&with_handle_decoded(arguments.as_ref())));
 
     let answer = run(ctx, line, async |call| {
         dispatch(name, arguments, call).await
@@ -298,6 +316,26 @@ pub async fn call(
     }
 }
 
+fn with_handle_decoded(arguments: Option<&JsonObject>) -> JsonObject {
+    let mut arguments = arguments.cloned().unwrap_or_default();
+
+    let inputs = arguments
+        .get(HANDLE_ARGUMENT)
+        .and_then(Value::as_str)
+        .and_then(DiffHandle::inputs_named_in);
+
+    if let Some(inputs) = inputs {
+        arguments.remove(HANDLE_ARGUMENT);
+        for (name, value) in inputs {
+            arguments.entry(name).or_insert(value);
+        }
+    }
+
+    arguments
+}
+
+const HANDLE_ARGUMENT: &str = "handle";
+
 pub async fn run<T>(
     ctx: &Ctx,
     line: Line,
@@ -307,10 +345,15 @@ pub async fn run<T>(
     let started = Instant::now();
     let doing = line.subject.doing();
 
-    let answer = AssertUnwindSafe(work(&call))
-        .catch_unwind()
-        .await
-        .unwrap_or(Err(Failure::Panicked { doing }));
+    let guarded = AssertUnwindSafe(work(&call)).catch_unwind();
+
+    let answer = match tokio::time::timeout(ctx.deadline, guarded).await {
+        Ok(Ok(answered)) => answered,
+        Ok(Err(_panic)) => Err(Failure::Panicked { doing }),
+        Err(_elapsed) => Err(Failure::OutOfTime {
+            deadline: ctx.deadline,
+        }),
+    };
     ctx.log.write(
         &line
             .taking(started.elapsed(), &call.spent)
