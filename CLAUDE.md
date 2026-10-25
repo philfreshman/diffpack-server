@@ -6,7 +6,7 @@ proxy and Packagist. Read
 [`CONTEXT.md`](CONTEXT.md) for the vocabulary,
 [`docs/architecture.md`](docs/architecture.md) for which module owns what,
 [`docs/adr/`](docs/adr/) for why, and [`docs/operations.md`](docs/operations.md)
-for deploys and dependency updates.
+for deploys, releases and dependency updates.
 
 ## Commands
 
@@ -77,4 +77,13 @@ Silence a lint with `#[expect(lint, reason = "…")]`.
 ## Git
 
 Branch from `development` and open pull requests against it. Only `main`
-deploys, so a merge into `development` is not live. Use Conventional Commits.
+deploys, so a merge into `development` is not live. Use Conventional Commits:
+the `conventional commits` CI job fails a pull request with a commit that does
+not follow the format.
+
+`main` takes pull requests from `development` only, as a merge commit; the
+`main source is development` check fails any other head branch. Every merge
+into `main` is a release: semantic-release tags it and writes the GitHub
+release from the commit types. It commits nothing back, so `version` in
+`Cargo.toml` is not the release number. See "Releases" in
+[`docs/operations.md`](docs/operations.md#releases).
