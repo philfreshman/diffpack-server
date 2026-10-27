@@ -248,6 +248,7 @@ async fn the_review_points_at_the_file_each_registry_declares_dependencies_in() 
         ("npm", "`package.json`"),
         ("crates", "`Cargo.toml`"),
         ("pypi", "`PKG-INFO`"),
+        ("composer", "`composer.json`"),
     ] {
         let text = review(registry, "anything", "1.0.0", "2.0.0").await;
 
@@ -257,6 +258,17 @@ async fn the_review_points_at_the_file_each_registry_declares_dependencies_in() 
              review should send an agent there: got {text}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_packagist_review_asks_about_the_minimum_php_version() {
+    let text = review("composer", "monolog/monolog", "3.12.0", "3.12.1").await;
+
+    assert!(
+        text.contains("minimum PHP version"),
+        "a Composer package declares the PHP it needs in `require.php`, so a \
+         raised one is a break to report: got {text}"
+    );
 }
 
 #[tokio::test]

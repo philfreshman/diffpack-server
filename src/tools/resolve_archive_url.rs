@@ -21,9 +21,10 @@ pub struct Args {
     #[schemars(
         description = "The registry that publishes the package: `npm`, `crates` or `go`.\n\
         \n\
-        `pypi` parses and is a registry this server knows, but this tool\n\
-        cannot resolve a URL for it: PyPI lists a version's files in its\n\
-        metadata rather than serving them from a predictable path."
+        `pypi` and `composer` parse and are registries this server knows,\n\
+        but this tool cannot resolve a URL for them: PyPI and Packagist list\n\
+        a version's files in their metadata rather than serving them from a\n\
+        predictable path."
     )]
     pub registry: Registry,
 

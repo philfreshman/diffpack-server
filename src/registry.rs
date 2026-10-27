@@ -14,14 +14,16 @@ pub enum Registry {
     Crates,
     PyPi,
     Go,
+    Composer,
 }
 
 impl Registry {
-    pub const ALL: [Registry; 4] = [
+    pub const ALL: [Registry; 5] = [
         Registry::Npm,
         Registry::Crates,
         Registry::PyPi,
         Registry::Go,
+        Registry::Composer,
     ];
 
     pub fn id(self) -> &'static str {
@@ -30,6 +32,7 @@ impl Registry {
             Self::Crates => "crates",
             Self::PyPi => "pypi",
             Self::Go => "go",
+            Self::Composer => "composer",
         }
     }
 
@@ -43,6 +46,7 @@ impl Registry {
             Self::Crates => "crates.io",
             Self::PyPi => "PyPI",
             Self::Go => "Go",
+            Self::Composer => "Packagist",
         }
     }
 
@@ -50,9 +54,19 @@ impl Registry {
         match engine::archive_source(self.id(), package, version) {
             Ok(engine::ArchiveSource::Archive { url }) => Ok(ArchiveSource::Archive { url }),
             Ok(engine::ArchiveSource::Listing { url }) => Ok(ArchiveSource::Listing { url }),
-            Err(_) => Err(Failure::Internal {
+            Err(_) => Err(self.unbuildable_archive_url(package)),
+        }
+    }
+
+    fn unbuildable_archive_url(self, package: &str) -> Failure {
+        match self {
+            Self::Composer => Failure::NoSuchPackage {
+                registry: self.name().to_owned(),
+                package: package.to_owned(),
+            },
+            Self::Npm | Self::Crates | Self::PyPi | Self::Go => Failure::Internal {
                 doing: "building an archive URL",
-            }),
+            },
         }
     }
 
@@ -76,6 +90,11 @@ impl Registry {
                            included: `github.com/go-chi/chi/v5`, not `github.com/go-chi/chi` \
                            and not `chi`. Case is kept: `github.com/Masterminds/semver/v3`."
             }
+            Self::Composer => {
+                "A package name is a vendor and a package joined by one `/`, in \
+                           lower case: `monolog/monolog`, not `monolog` and not \
+                           `Monolog/Monolog`."
+            }
         }
     }
 
@@ -85,6 +104,7 @@ impl Registry {
             Self::Crates => "`Cargo.toml`",
             Self::PyPi => "`PKG-INFO`, `pyproject.toml` or `setup.py`",
             Self::Go => "`go.mod`",
+            Self::Composer => "`composer.json`",
         }
     }
 
@@ -94,6 +114,7 @@ impl Registry {
             Self::Crates => "Rust",
             Self::PyPi => "Python",
             Self::Go => "Go",
+            Self::Composer => "PHP",
         }
     }
 
@@ -116,6 +137,10 @@ impl Registry {
                     current: Some(format!("{GO_PROXY}/{module}/@latest")),
                 }
             }
+            Self::Composer => VersionSource::one_document(format!(
+                "{PACKAGIST_REPOSITORY}/p2/{}.json",
+                composer_package_path(package)
+            )),
         }
     }
 
@@ -232,6 +257,15 @@ impl Registry {
                     .collect::<Option<Vec<_>>>()?;
                 (listed, None)
             }
+
+            Self::Composer => {
+                let listed = packagist_versions(document)?;
+                let current = listed
+                    .iter()
+                    .find(|version| !version.prerelease)
+                    .map(|version| version.version.clone());
+                (listed, current)
+            }
         };
 
         versions.sort_by(|a, b| {
@@ -247,7 +281,7 @@ impl Registry {
 
     pub fn read_current(self, document: &str) -> Option<Version> {
         match self {
-            Self::Npm | Self::Crates | Self::PyPi => None,
+            Self::Npm | Self::Crates | Self::PyPi | Self::Composer => None,
             Self::Go => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "PascalCase")]
@@ -296,6 +330,12 @@ impl Registry {
                 whole_index: false,
                 names_a_package: true,
             },
+            Self::Composer => {
+                let per_page = limit.clamp(1, 100);
+                SearchSource::asking(format!(
+                    "https://packagist.org/search.json?q={escaped}&per_page={per_page}"
+                ))
+            }
         }
     }
 
@@ -363,13 +403,27 @@ impl Registry {
                     description: None,
                 }]
             }
+
+            Self::Composer => {
+                let answer: PackagistSearch = serde_json::from_str(body).ok()?;
+                answer
+                    .results
+                    .into_iter()
+                    .filter(|found| !found.only_provided)
+                    .map(|found| Hit {
+                        name: found.name,
+                        version: None,
+                        description: found.description,
+                    })
+                    .collect()
+            }
         };
 
         Some(hits.into_iter().take(limit as usize).collect())
     }
 
     pub fn hosts(self) -> BTreeSet<String> {
-        const PROBE: &str = "package";
+        const PROBE: &str = "vendor/package";
 
         let mut urls = vec![self.versions(PROBE).url];
         if let Ok(archive) = self.archive(PROBE, "1.0.0") {
@@ -390,12 +444,13 @@ impl Registry {
         match self {
             Self::Npm | Self::Crates | Self::Go => &[],
             Self::PyPi => &["files.pythonhosted.org"],
+            Self::Composer => &["codeload.github.com", "bitbucket.org", "gitlab.com"],
         }
     }
 
     fn undated_order(self, left: &str, right: &str) -> Ordering {
         match self {
-            Self::Npm | Self::Crates | Self::PyPi => Ordering::Equal,
+            Self::Npm | Self::Crates | Self::PyPi | Self::Composer => Ordering::Equal,
             Self::Go => GoVersion::parse(left).cmp(&GoVersion::parse(right)),
         }
     }
@@ -406,6 +461,14 @@ impl Registry {
         match self {
             Self::Npm | Self::Crates | Self::Go => version.contains('-'),
             Self::PyPi => pep440_prerelease(version),
+            Self::Composer => composer_preview(version),
+        }
+    }
+
+    pub fn listing_names_every_version(self) -> bool {
+        match self {
+            Self::Composer => true,
+            Self::Npm | Self::Crates | Self::PyPi | Self::Go => false,
         }
     }
 
@@ -596,6 +659,20 @@ impl Versions {
         }
     }
 
+    pub fn lists(&self, version: &str) -> bool {
+        self.all
+            .iter()
+            .any(|listed| without_leading_v(&listed.version) == without_leading_v(version))
+    }
+
+    pub fn newest(&self, count: usize) -> Vec<String> {
+        self.all
+            .iter()
+            .take(count)
+            .map(|listed| listed.version.clone())
+            .collect()
+    }
+
     pub fn pointing_at(self, current: String) -> Self {
         Self {
             current: Some(current),
@@ -666,6 +743,19 @@ struct CratesCrate {
     name: String,
     default_version: Option<String>,
     description: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PackagistSearch {
+    results: Vec<PackagistHit>,
+}
+
+#[derive(Deserialize)]
+struct PackagistHit {
+    name: String,
+    description: Option<String>,
+    #[serde(default, rename = "virtual")]
+    only_provided: bool,
 }
 
 #[derive(Deserialize)]
@@ -770,7 +860,108 @@ fn pep440_prerelease(version: &str) -> bool {
     })
 }
 
+const PACKAGIST_MINIFIED: &str = "composer/2.0";
+
+const PACKAGIST_UNSET: &str = "__unset";
+
+#[derive(Deserialize)]
+struct PackagistListing {
+    #[serde(default)]
+    minified: Option<String>,
+    packages: std::collections::HashMap<String, Vec<PackagistEntry>>,
+}
+
+#[derive(Deserialize)]
+struct PackagistEntry {
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    version_normalized: Option<String>,
+    #[serde(default)]
+    time: Option<String>,
+}
+
+#[derive(Default)]
+struct PackagistRelease {
+    version: Option<String>,
+    version_normalized: Option<String>,
+    time: Option<String>,
+}
+
+impl PackagistRelease {
+    fn absorb(&mut self, entry: PackagistEntry) {
+        carry_forward(&mut self.version, entry.version);
+        carry_forward(&mut self.version_normalized, entry.version_normalized);
+        carry_forward(&mut self.time, entry.time);
+    }
+
+    fn as_version(&self) -> Option<Version> {
+        let version = self.version.clone()?;
+        let stability_spelling = self.version_normalized.as_deref().unwrap_or(&version);
+        Some(Version {
+            prerelease: Registry::Composer.is_prerelease(stability_spelling),
+            published_at: self.time.clone(),
+            version,
+        })
+    }
+}
+
+fn packagist_versions(document: &str) -> Option<Vec<Version>> {
+    let listing: PackagistListing = serde_json::from_str(document).ok()?;
+    let carries_forward = listing.minified.as_deref() == Some(PACKAGIST_MINIFIED);
+    let mut packages = listing.packages.into_values();
+    let entries = packages.next().filter(|_| packages.next().is_none())?;
+
+    let mut release = PackagistRelease::default();
+    Some(
+        entries
+            .into_iter()
+            .filter_map(|entry| {
+                if !carries_forward {
+                    release = PackagistRelease::default();
+                }
+                release.absorb(entry);
+                release.as_version()
+            })
+            .collect(),
+    )
+}
+
+fn carry_forward(carried: &mut Option<String>, listed: Option<String>) {
+    match listed {
+        Some(value) if value == PACKAGIST_UNSET => *carried = None,
+        Some(value) => *carried = Some(value),
+        None => {}
+    }
+}
+
+fn without_leading_v(version: &str) -> &str {
+    version.strip_prefix('v').unwrap_or(version)
+}
+
+fn composer_preview(version: &str) -> bool {
+    const PREVIEWS: [&str; 6] = ["dev", "alpha", "beta", "rc", "a", "b"];
+
+    let version = version.to_ascii_lowercase();
+    let stability = version
+        .trim_start_matches('v')
+        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.')
+        .trim_start_matches(['-', '_', '.'])
+        .trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+
+    stability.starts_with("dev") || stability.ends_with("dev") || PREVIEWS.contains(&stability)
+}
+
 const GO_PROXY: &str = "https://proxy.golang.org";
+
+const PACKAGIST_REPOSITORY: &str = "https://repo.packagist.org";
+
+fn composer_package_path(package: &str) -> String {
+    match package.split_once('/') {
+        Some((vendor, name)) => format!("{}/{}", escape(vendor), escape(name)),
+        None => escape(package),
+    }
+}
 
 fn module_path_in(query: &str) -> &str {
     const SCHEMES: [&str; 2] = ["https://", "http://"];

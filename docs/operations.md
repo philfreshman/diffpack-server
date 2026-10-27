@@ -1,13 +1,15 @@
 # Operations
 
-How this server is deployed, who can reach it, and how its dependencies are
-updated. The settings live in `vercel.json` and `renovate.json5`; this page says
-why they are set the way they are.
+How this server is deployed and released, who can reach it, and how its
+dependencies are updated. The settings live in `vercel.json`, `.releaserc.json`
+and `renovate.json5`; this page says why they are set the way they are.
 
 ## Deployment
 
 Only a push to `main` deploys, to production. Nothing else deploys: not
-`development`, not a branch, not a pull request.
+`development`, not a branch, not a pull request. Code reaches `main` only by
+merging `development` into it, which is also what makes a release (see
+[Releases](#releases)).
 
 `vercel.json` holds only what Vercel cannot work out by itself:
 
@@ -28,6 +30,39 @@ uses fat LTO. Expect slow deploys; the measured cold build time is in
 `tests/deploy.rs` checks `vercel.json` against the crate layout, since nothing
 compiles against it. Renaming the `[[bin]]` or moving `api/mcp.rs` would
 otherwise only show up as a 404 after a deploy.
+
+## Releases
+
+`main` only takes pull requests from `development`, merged with a merge commit.
+The `main source is development` check
+([`.github/workflows/main-source.yml`](../.github/workflows/main-source.yml))
+fails a pull request to `main` from any other branch or from a fork, and it is
+required on `main`.
+
+Each merge into `main` runs
+[`.github/workflows/release.yml`](../.github/workflows/release.yml), which uses
+[semantic-release](https://semantic-release.gitbook.io/) to turn the commit
+messages since the last `v*` tag into a version, a tag and a GitHub release with
+notes grouped by type:
+
+| Commits since the last release | Next version |
+| :--- | :--- |
+| a `feat!:` / `fix!:` or a `BREAKING CHANGE:` footer | major (`v2.0.0`) |
+| at least one `feat` | minor (`v1.1.0`) |
+| at least one `fix`, `perf` or `revert` | patch (`v1.0.1`) |
+| only `chore`, `docs`, `style`, `refactor`, `test`, `build`, `ci` | no release |
+
+This is why the commit types matter. A commit message is
+`type(scope): description`, with `type` one of `build`, `chore`, `ci`, `docs`,
+`feat`, `fix`, `perf`, `refactor`, `revert`, `style` or `test`, and the scope
+optional. The `conventional commits` CI job fails a pull request with a commit
+that does not follow it, since such a commit would be left out of the version
+and the notes.
+
+Nothing is committed back to `main`, so `version` in `Cargo.toml` stays as it
+is and is not the release number. The release settings live in
+[`.releaserc.json`](../.releaserc.json). The release is a tag and notes only:
+the deploy is still Vercel's own build of the same push.
 
 ## The cache's credentials
 

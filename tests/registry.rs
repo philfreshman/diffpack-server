@@ -1,3 +1,4 @@
+use diffpack_server::error::Failure;
 use diffpack_server::registry::{self, ArchiveSource, Hit, Registry, SearchSource, VersionSource};
 
 #[test]
@@ -13,9 +14,10 @@ fn every_registry_carries_the_identifier_and_the_name_it_is_known_by() {
             ("npm", "npm"),
             ("crates", "crates.io"),
             ("pypi", "PyPI"),
-            ("go", "Go")
+            ("go", "Go"),
+            ("composer", "Packagist")
         ],
-        "the four registries of CONTEXT.md, in the order a catalogue lists them"
+        "the five registries of CONTEXT.md, in the order a catalogue lists them"
     );
 }
 
@@ -89,7 +91,7 @@ fn the_schema_lists_exactly_the_registries_this_server_has() {
     );
     assert_eq!(
         schema["enum"],
-        serde_json::json!(["npm", "crates", "pypi", "go"]),
+        serde_json::json!(["npm", "crates", "pypi", "go", "composer"]),
         "the schema's values are the identifiers, in the catalogue's order"
     );
 }
@@ -144,6 +146,28 @@ fn every_registry_says_how_to_reach_a_version_archive() {
         },
         "a major-version suffix is part of the module path, not a version"
     );
+    assert_eq!(
+        source(Registry::Composer, "monolog/monolog", "3.12.1"),
+        ArchiveSource::Listing {
+            url: "https://repo.packagist.org/p2/monolog/monolog.json".to_owned()
+        },
+        "a Packagist listing names every version's archive, so that is the first hop"
+    );
+}
+
+#[test]
+fn a_name_packagist_could_not_list_is_no_such_package() {
+    for name in ["monolog", "monolog/", "-monolog/monolog", "a/b/c"] {
+        assert!(
+            matches!(
+                Registry::Composer.archive(name, "1.0.0"),
+                Err(Failure::NoSuchPackage { ref registry, ref package })
+                    if registry == "Packagist" && package == name
+            ),
+            "`{name}` cannot be a Composer package, got {:?}",
+            Registry::Composer.archive(name, "1.0.0")
+        );
+    }
 }
 
 #[test]
@@ -224,6 +248,24 @@ fn every_registry_says_where_its_versions_are_listed() {
         "https://proxy.golang.org/example.com/a%20module%3F%23/@v/list",
         "a module path keeps its slashes, and anything that would end the path is escaped"
     );
+    assert_eq!(
+        Registry::Composer.versions("monolog/monolog"),
+        VersionSource {
+            url: "https://repo.packagist.org/p2/monolog/monolog.json".to_owned(),
+            current: None,
+        },
+        "a Composer name is a vendor and a package, and each is one path segment"
+    );
+    assert_eq!(
+        Registry::Composer.versions("vendor/a b?#").url,
+        "https://repo.packagist.org/p2/vendor/a%20b%3F%23.json",
+        "anything in a segment that would end the path is escaped"
+    );
+    assert_eq!(
+        Registry::Composer.versions("a/b/c").url,
+        "https://repo.packagist.org/p2/a/b%2Fc.json",
+        "only the first slash separates the vendor from the package"
+    );
 }
 
 #[test]
@@ -262,6 +304,133 @@ fn a_go_list_with_a_line_that_is_not_a_version_does_not_read() {
         None,
         "a Go version starts with `v`, so anything else is not the list that was asked for"
     );
+}
+
+const MINIFIED_LISTING: &str = r#"{"minified":"composer/2.0","packages":{"vendor/package":[
+    {"name":"vendor/package","version":"2.0.0-RC1","version_normalized":"2.0.0.0-RC1",
+     "time":"2026-03-01T00:00:00+00:00","dist":{"url":"https://api.github.com/repos/vendor/package/zipball/c"}},
+    {"version":"1.1.0","version_normalized":"1.1.0.0",
+     "time":"2026-02-01T00:00:00+00:00","dist":{"url":"https://api.github.com/repos/vendor/package/zipball/b"}},
+    {"version":"1.0.1","version_normalized":"1.0.1.0"},
+    {"version":"1.0.0","version_normalized":"1.0.0.0","time":"__unset",
+     "dist":{"url":"https://api.github.com/repos/vendor/package/zipball/a"}},
+    {"version":"0.9.0","version_normalized":"0.9.0.0","time":"2026-01-01T00:00:00+00:00"}
+]}}"#;
+
+fn listed(versions: &registry::Versions) -> Vec<(&str, Option<&str>)> {
+    versions
+        .all
+        .iter()
+        .map(|version| (version.version.as_str(), version.published_at.as_deref()))
+        .collect()
+}
+
+#[test]
+fn a_packagist_listing_carries_each_key_forward_until_it_changes_or_is_unset() {
+    let versions = Registry::Composer
+        .read_versions(MINIFIED_LISTING)
+        .expect("a minified Packagist listing reads");
+
+    assert_eq!(
+        listed(&versions),
+        vec![
+            ("2.0.0-RC1", Some("2026-03-01T00:00:00+00:00")),
+            ("1.1.0", Some("2026-02-01T00:00:00+00:00")),
+            ("1.0.1", Some("2026-02-01T00:00:00+00:00")),
+            ("0.9.0", Some("2026-01-01T00:00:00+00:00")),
+            ("1.0.0", None),
+        ],
+        "1.0.1 inherits the date listed before it, 1.0.0's is unset so it goes last, \
+         and 0.9.0 dates itself again"
+    );
+}
+
+#[test]
+fn packagists_current_version_is_the_first_stable_one_it_lists() {
+    let versions = Registry::Composer
+        .read_versions(MINIFIED_LISTING)
+        .expect("a minified Packagist listing reads");
+
+    assert_eq!(
+        versions.current.as_deref(),
+        Some("1.1.0"),
+        "Composer has no pointer of its own, so it is the newest stable entry in \
+         Packagist's order"
+    );
+    assert_eq!(
+        versions
+            .all
+            .iter()
+            .map(|version| (version.version.as_str(), version.prerelease))
+            .collect::<Vec<_>>(),
+        vec![
+            ("2.0.0-RC1", true),
+            ("1.1.0", false),
+            ("1.0.1", false),
+            ("0.9.0", false),
+            ("1.0.0", false),
+        ]
+    );
+}
+
+#[test]
+fn a_full_packagist_listing_carries_nothing_forward() {
+    let listing = r#"{"packages":{"vendor/package":[
+        {"version":"1.1.0","version_normalized":"1.1.0.0","time":"2026-02-01T00:00:00+00:00"},
+        {"version":"1.0.0","version_normalized":"1.0.0.0"}
+    ]}}"#;
+
+    let versions = Registry::Composer
+        .read_versions(listing)
+        .expect("a listing that is not minified reads too");
+
+    assert_eq!(
+        listed(&versions),
+        vec![
+            ("1.1.0", Some("2026-02-01T00:00:00+00:00")),
+            ("1.0.0", None),
+        ],
+        "without `minified`, an entry missing a date has none"
+    );
+}
+
+#[test]
+fn a_body_that_is_not_a_packagist_listing_does_not_read() {
+    assert_eq!(
+        Registry::Composer.read_versions("<html>not found</html>"),
+        None
+    );
+    assert_eq!(
+        Registry::Composer.read_versions(r#"{"packages":{}}"#),
+        None,
+        "a listing that names no package is not the one that was asked for"
+    );
+}
+
+#[test]
+fn a_composer_preview_is_its_stability_suffix() {
+    for (version, preview) in [
+        ("2.0.0.0-RC1", true),
+        ("2.0.0.0-beta2", true),
+        ("1.0.0.0-alpha", true),
+        ("1.0.0.0-dev", true),
+        ("1.0.x-dev", true),
+        ("dev-main", true),
+        ("1.0.0-a1", true),
+        ("1.0.0-b2", true),
+        ("1.0.0rc1", true),
+        ("v1.0.0-beta.2", true),
+        ("1.0.0.0", false),
+        ("1.0.0.0-patch1", false),
+        ("1.0.0-pl2", false),
+        ("1.0.0-p1", false),
+    ] {
+        assert_eq!(
+            Registry::Composer.is_prerelease(version),
+            preview,
+            "`{version}`"
+        );
+    }
 }
 
 #[test]
@@ -305,6 +474,16 @@ fn search_comes_from_the_registrys_own_index() {
         },
         "the Go proxy has no search either, so the query is asked for as the module \
          path it would have to be"
+    );
+    assert_eq!(
+        Registry::Composer.search("psr log", 10),
+        SearchSource {
+            url: "https://packagist.org/search.json?q=psr%20log&per_page=10".to_owned(),
+            accept: "application/json",
+            whole_index: false,
+            names_a_package: false,
+        },
+        "Packagist ranks a query itself, on its website's host rather than the repository's"
     );
 }
 
@@ -396,6 +575,16 @@ fn a_source_is_never_asked_for_more_than_it_answers() {
         },
         "crates.io refuses a per_page over 100"
     );
+    assert_eq!(
+        Registry::Composer.search("monolog", 1_000).url,
+        "https://packagist.org/search.json?q=monolog&per_page=100",
+        "Packagist refuses a per_page over 100"
+    );
+    assert_eq!(
+        Registry::Composer.search("monolog", 0).url,
+        "https://packagist.org/search.json?q=monolog&per_page=1",
+        "and one under 1"
+    );
 }
 
 #[test]
@@ -438,6 +627,66 @@ fn crates_ios_search_answer_reads_as_hits() {
             description: Some("A generic serialization/deserialization framework".to_owned()),
         }]),
         "a hit carries the version the registry itself would hand a caller"
+    );
+}
+
+#[test]
+fn packagists_search_answer_reads_as_hits_without_a_version() {
+    let body = r#"{"results":[
+        {"name":"monolog/monolog","description":"Sends your logs to files, sockets, inboxes, databases and various web services",
+         "url":"https://packagist.org/packages/monolog/monolog","repository":"https://github.com/Seldaek/monolog",
+         "downloads":1091256792,"favers":22270},
+        {"name":"symfony/monolog-bundle","description":"Symfony MonologBundle",
+         "url":"https://packagist.org/packages/symfony/monolog-bundle","repository":"https://github.com/symfony/monolog-bundle",
+         "downloads":282942043,"favers":2928}
+    ],"total":1170,"next":"https://packagist.org/search.json?q=monolog&page=2&per_page=2"}"#;
+
+    assert_eq!(
+        Registry::Composer.read_hits(body, "monolog", 10),
+        Some(vec![
+            Hit {
+                name: "monolog/monolog".to_owned(),
+                version: None,
+                description: Some(
+                    "Sends your logs to files, sockets, inboxes, databases and various web services"
+                        .to_owned()
+                ),
+            },
+            Hit {
+                name: "symfony/monolog-bundle".to_owned(),
+                version: None,
+                description: Some("Symfony MonologBundle".to_owned()),
+            },
+        ]),
+        "Packagist's search carries a name and a description, in its own ranking, and no version"
+    );
+    assert_eq!(
+        Registry::Composer.read_hits("<html></html>", "monolog", 10),
+        None
+    );
+}
+
+#[test]
+fn a_packagist_hit_that_only_names_what_other_packages_provide_is_left_out() {
+    let body = r#"{"results":[
+        {"name":"psr/log-implementation","description":"",
+         "url":"https://packagist.org/providers/psr/log-implementation","repository":"","virtual":true},
+        {"name":"monolog/monolog","description":"Sends your logs to files, sockets, inboxes, databases and various web services",
+         "url":"https://packagist.org/packages/monolog/monolog","repository":"https://github.com/Seldaek/monolog",
+         "downloads":1091256792,"favers":22270}
+    ],"total":2}"#;
+
+    let names: Vec<String> = Registry::Composer
+        .read_hits(body, "log implementation", 10)
+        .expect("a Packagist search answer reads")
+        .into_iter()
+        .map(|hit| hit.name)
+        .collect();
+
+    assert_eq!(
+        names,
+        vec!["monolog/monolog".to_owned()],
+        "a virtual package has no versions and no archive, so no other tool could take its name"
     );
 }
 
@@ -486,11 +735,11 @@ fn a_registrys_hosts_are_the_hosts_of_the_urls_it_builds() {
         let hosts = registry.hosts();
         let mut built = vec![
             registry
-                .archive("package", "1.0.0")
+                .archive("vendor/package", "1.0.0")
                 .expect("a registry says where its archives are")
                 .url()
                 .to_owned(),
-            registry.versions("package").url,
+            registry.versions("vendor/package").url,
         ];
         built.push(registry.search("query", 1).url);
 
@@ -515,6 +764,25 @@ fn a_host_that_only_a_listing_names_is_allowed_too() {
         Registry::PyPi.hosts().contains("files.pythonhosted.org"),
         "PyPI archives come from the file host, got {:?}",
         Registry::PyPi.hosts()
+    );
+}
+
+#[test]
+fn packagist_archives_come_from_the_hosts_its_listings_name_and_never_the_github_api() {
+    assert_eq!(
+        Registry::Composer.hosts(),
+        [
+            "bitbucket.org",
+            "codeload.github.com",
+            "gitlab.com",
+            "packagist.org",
+            "repo.packagist.org",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+        "the engine turns a GitHub zipball into its codeload URL, so `api.github.com` \
+         is never asked"
     );
 }
 
@@ -595,6 +863,12 @@ fn every_registry_states_the_name_rule_that_trips_an_agent() {
         Registry::PyPi.name_rule().contains("PEP 503"),
         "PyPI's rule is the normalisation this server does not do: {}",
         Registry::PyPi.name_rule()
+    );
+    assert!(
+        Registry::Composer.name_rule().contains("`monolog/monolog`")
+            && Registry::Composer.name_rule().contains("lower case"),
+        "Packagist's rule is the vendor, the package and their case: {}",
+        Registry::Composer.name_rule()
     );
 }
 
