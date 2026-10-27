@@ -143,3 +143,45 @@ So `page` now owns the arguments that shape an answer, and the ceiling is the
 reason for three of them. The sentence above saying `limit` and `cursor` are
 the only part of this module an agent reads stopped being true with
 `max_bytes`, and is not true of `path` or `prefix` either.
+
+## Since: #25
+
+`max_bytes` has a default now, `page::DEFAULT_MAX_BYTES`, and the sentence
+above saying it declares none is no longer true. Omitting it used to mean the
+ceiling. Running Claude Code against production showed what that costs:
+`get_file_content` on `lib/typescript.js` from typescript 5.6.2 answered about
+1.5 million characters, and Claude Code refuses any tool result over 25,000
+tokens (`MAX_MCP_OUTPUT_TOKENS`). The model saw an error and nothing of the
+file. The ceiling is the platform's limit, and a client's limit can be far
+smaller. A model that trusts a default should get an answer it can read.
+
+The default is 20,000 bytes. The text travels twice, in `structuredContent`
+and in the text block that mirrors it, and the mirror escapes it again, so
+20,000 bytes of JavaScript is about 43,000 characters in one result. Source
+code costs three to four characters a token, which puts that at 11,000 to
+15,000 tokens. That leaves room under 25,000 for text that tokenises worse
+and for whatever a client wraps around a result. It is a round number rather
+than a derivation, because what a byte costs in tokens depends on the text and
+on the client's tokeniser, and this server knows neither.
+
+A caller can still ask for more, up to `PAYLOAD_CEILING`, and a larger value
+is still narrowed rather than refused. The schema says so, and says there is
+no offset: a larger cap reads from the beginning again, because nothing else
+does. `MaxBytes` carries the default in its `Default` and in its schema, as
+`Limit` does, so the number a model reads is the number that binds.
+
+`truncate` takes a `MaxBytes` rather than an `Option` of one, and
+`MaxBytes::CEILING` is what the file-diff resource passes. A resource read has
+no argument to ask for more with, so it keeps answering as much as fits.
+
+### Rejected: the ceiling as the default, with a warning in the description
+
+Telling a model to pass `max_bytes` for a large file changes nothing for the
+model that does not read it. In #25 Opus passed `max_bytes` on its own, and
+the run that failed was the one where a model trusted the default and saw an
+error with nothing in it this server can explain. The answer a caller gets for not asking should be
+the safe one.
+
+The cost is that a model which needs all of a large file has to ask for it,
+and may then be refused by its own client. That is a choice it makes knowing
+the size, because `bytes` in the first answer told it.
