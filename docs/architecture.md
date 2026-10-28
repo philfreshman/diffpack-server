@@ -20,7 +20,7 @@ src/tools/          one module per tool: definition and handler together,
                     over them with its own tally
 src/resources/      one module per resource: URI and handler together
 src/prompts/        one module per prompt: arguments and messages together
-src/registry.rs     what a registry is: npm, crates, pypi, go; and the
+src/registry.rs     what a registry is: npm, crates, pypi, go, composer; and the
                     package and version arguments that state its rules
 src/archive/        fetch(registry, package, version) -> FileMap, and what
                     a FileMap answers: what is at a path, and its paths
@@ -418,14 +418,15 @@ the compiler.
 
 ### `src/registry.rs` — what a registry is
 
-npm, crates.io, PyPI and Go, described once: the identifier used in a parameter
-and in a cache key (`npm`, `crates`, `pypi`, `go`), the name the registry calls
-itself in a message to a model (`npm`, `crates.io`, `PyPI`, `Go`), where a
+npm, crates.io, PyPI, Go and Packagist, described once: the identifier used in a
+parameter and in a cache key (`npm`, `crates`, `pypi`, `go`, `composer`), the
+name the registry calls itself in a message to a model (`npm`, `crates.io`,
+`PyPI`, `Go`, `Packagist`), where a
 version's archive is, where versions and search come from, the hosts it may be
 reached at, and the name rules an agent would otherwise guess at, and the
 manifest a package declares its dependencies in and the runtime it targets,
 which `review_upgrade` sends an agent to. Every per-registry fact is a `match`
-over the four variants in this one file, so the compiler enumerates what a fifth
+over the five variants in this one file, so the compiler enumerates what a sixth
 registry owes.
 
 Two things are *derived* here rather than written down beside it. The `registry`
@@ -463,10 +464,20 @@ server's instructions say where Go differs. See [ADR
 0004](adr/0004-one-registry-module.md) and [ADR
 0019](adr/0019-a-go-module-is-ordered-by-version-and-found-by-path.md).
 
+Packagist was the same kind of addition. Its p2 file is both its Catalogue and
+the Listing its archives are chosen from, and both reads are here: a minified
+file names a key once and carries it forward until an entry changes it or sets
+it to `__unset`, so a version that lists no `time` has the one before it. The
+engine chooses the archive and turns a GitHub zipball into its `codeload` URL,
+so the hosts a Packagist listing may name are `codeload.github.com`,
+`bitbucket.org` and `gitlab.com`, and never `api.github.com`. A name the engine
+cannot turn into a listing URL is `no_such_package`.
+
 ### `src/archive/` — a version's files
 
 `fetch(registry, package, version) -> FileMap`. Everything on the other side of
-that signature — resolving the download URL, PyPI's second hop, the HTTP
+that signature — resolving the download URL, the second hop PyPI and Packagist
+need, the HTTP
 client, the timeout, the size cap, decompressing, untarring, stripping the
 top-level directory — is this module's and nobody else's. Two adapters sit
 behind the same interface: the live one over `reqwest`, and a fixture one
@@ -498,8 +509,8 @@ alone, because each is a rule about what this server does rather than about
 where bytes come from: the host allowlist `registry` derives, the size cap,
 and extraction. The first two are `src/document/`'s and shared with the other
 two seams; extraction is this module's, and is what is left here along with
-where a version's archive is and the hop PyPI needs to find out. The fixture
-index is keyed by URL for that same reason — a fetch path that built a URL of
+where a version's archive is and the hop PyPI and Packagist need to find it.
+The fixture index is keyed by URL for that same reason — a fetch path that built a URL of
 its own instead of asking `registry` finds nothing there, so `tests/archive.rs`
 is a test of resolution as well as of extraction. Extraction runs on the
 blocking pool through `compute::off_the_runtime`, so that a call's deadline
@@ -515,6 +526,17 @@ cannot disagree about what a missing version reads like.
 Redirects are followed only while they stay on allowed hosts. A `302` is a
 request to wherever it points, so the alternative is an allowlist whose holes
 the registry chooses.
+
+When the engine chooses no archive from a listing, its reason is a sentence,
+so this module asks the listing it already holds instead. A Packagist listing
+reads as a Catalogue: a version it does not list is `no_such_version`, with the
+newest versions it does list, and a listed version without a `dist`, or with
+one on a host this server does not fetch from, is `malformed_archive`. A PyPI
+listing is about one version and reads as no Catalogue, so its refusal is the
+second one, as before. A listing that is not there at all says the same thing
+the other way round: Packagist's names every version of a package, so its
+absence is `no_such_package`, while PyPI's is about one version and its absence
+stays `no_such_version`.
 
 ### `src/catalogue/` — what a package has released
 
@@ -552,7 +574,10 @@ registry's order is its dates and nothing else. See [ADR
 **The current version is the registry's own answer**, read out of what it
 serves rather than picked from the list. For three registries it is in the
 same document as the list: npm's `dist-tags.latest`, crates.io's
-`default_version`, the `isDefault` deps.dev puts on a PyPI version. Go's list
+`default_version`, the `isDefault` deps.dev puts on a PyPI version. Packagist
+has no pointer, because Composer installs the newest stable version a
+constraint allows, so its current version is the first entry in Packagist's own
+order whose `version_normalized` has no stability suffix. Go's list
 carries none, so its `VersionSource` names a second document, `@latest`,
 fetched beside the list at the same time. A failed `@latest` costs the
 pointer and not the list, except for a module that was never tagged: that one
@@ -945,7 +970,7 @@ where it is deliberately.
 `page::Cursor` and `page::MaxBytes` — rather than two numbers and a string a
 tool describes for itself. They are the only part of the ceiling an agent ever
 sees, so the default, the range, the "passed back unchanged" rule and the
-"this can only ask for less" rule are written into their schemas and every
+"never more than the ceiling" rule are written into their schemas and every
 tool inherits them by naming the type. `Cursor` deserialises by decoding, so a
 cursor that is not ours is `-32602` before a handler runs, the same way a
 `DiffHandle` is.
@@ -1202,8 +1227,9 @@ returns, whose fields serialise as the `data` and `is_diff` a stored
 
 The archive lookup is the engine's too, and is re-exported whole:
 `archive_source` says where a version's archive is, or which listing names it;
-`choose_archive` reads a listing for it; `unpack_archive` extracts it, with
-whatever wrapper directory that registry's archives have removed. None of them
+`choose_archive` reads that listing for the version asked for, since one
+listing can cover every version of a package; `unpack_archive` extracts it,
+with whatever wrapper directory that registry's archives have removed. None of them
 fetches. `registry` asks the first two and `archive` asks the last, and every
 download between them is `archive`'s own, under its size cap and its failures.
 

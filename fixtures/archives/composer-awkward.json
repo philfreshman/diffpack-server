@@ -1,0 +1,23 @@
+{
+  "minified": "composer/2.0",
+  "packages": {
+    "diffpack/awkward": [
+      {
+        "name": "diffpack/awkward",
+        "version": "2.0.0",
+        "version_normalized": "2.0.0.0",
+        "dist": {
+          "url": "https://git.drupalcode.org/project/awkward/-/archive/2.0.0/awkward-2.0.0.zip",
+          "type": "zip"
+        },
+        "time": "2026-02-01T00:00:00+00:00"
+      },
+      {
+        "version": "1.0.0",
+        "version_normalized": "1.0.0.0",
+        "dist": "__unset",
+        "time": "2026-01-01T00:00:00+00:00"
+      }
+    ]
+  }
+}

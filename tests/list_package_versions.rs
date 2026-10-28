@@ -87,6 +87,55 @@ async fn a_pypi_packages_versions_are_ordered_by_date_not_by_the_documents_order
 }
 
 #[tokio::test]
+async fn a_packagist_packages_versions_come_back_newest_first_with_inherited_dates() {
+    let result = call(json!({
+        "registry": "composer",
+        "package": "monolog/monolog",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "a package the fixture set has is not an error, got {result}"
+    );
+
+    assert_eq!(
+        versions(&result),
+        vec!["3.12.1", "3.12.0", "3.11.0", "3.10.0", "3.0.0", "3.0.0-RC1"],
+        "3.11.0 lists no date of its own and inherits 3.12.0's, and 3.0.0-RC1's \
+         date is unset, so it goes last: got {result}"
+    );
+    assert_eq!(
+        previews(&result).last(),
+        Some(&("3.0.0-RC1", true)),
+        "a release candidate is a preview, got {result}"
+    );
+    assert_eq!(
+        result["structuredContent"]["currentVersion"],
+        json!("3.12.1"),
+        "Packagist has no pointer, so the Current version is the first stable \
+         entry it lists: got {result}"
+    );
+}
+
+#[tokio::test]
+async fn a_package_packagist_does_not_have_is_a_tool_error_naming_it() {
+    let result = call(json!({
+        "registry": "composer",
+        "package": "not-a-real/package",
+    }))
+    .await;
+
+    assert_eq!(result["isError"], json!(true), "got {result}");
+    let message = result["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("not-a-real/package") && message.contains("Packagist"),
+        "the message names what was asked for and where, got {message}"
+    );
+}
+
+#[tokio::test]
 async fn a_go_modules_versions_come_back_highest_first_because_the_proxy_dates_none() {
     let result = call(json!({
         "registry": "go",

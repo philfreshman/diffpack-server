@@ -327,7 +327,7 @@ fn a_cursor_past_the_end_ends_the_walk_rather_than_failing_it() {
 fn a_blob_under_the_ceiling_comes_back_whole() {
     let content = "fn main() {\n    println!(\"hello\");\n}\n";
 
-    let excerpt = page::truncate(content, None);
+    let excerpt = page::truncate(content, page::MaxBytes::CEILING);
 
     assert_eq!(
         excerpt.text, content,
@@ -345,7 +345,7 @@ fn a_blob_over_the_ceiling_is_cut_and_says_so_in_the_text() {
         "the test's own input must not fit"
     );
 
-    let excerpt = page::truncate(&content, None);
+    let excerpt = page::truncate(&content, page::MaxBytes::CEILING);
 
     assert!(excerpt.truncated, "it did not fit, so it was cut");
     assert_eq!(
@@ -378,8 +378,8 @@ fn a_blob_over_the_ceiling_is_cut_and_says_so_in_the_text() {
 
 #[test]
 fn a_cut_blob_is_cut_on_what_it_costs_encoded_not_on_its_own_length() {
-    let worst = page::truncate(&"\"".repeat(4_000_000), None);
-    let plain = page::truncate(&"x".repeat(4_000_000), None);
+    let worst = page::truncate(&"\"".repeat(4_000_000), page::MaxBytes::CEILING);
+    let plain = page::truncate(&"x".repeat(4_000_000), page::MaxBytes::CEILING);
 
     let shown = |excerpt: &page::Excerpt| {
         excerpt
@@ -421,7 +421,7 @@ fn a_cut_blob_is_cut_on_what_it_costs_encoded_not_on_its_own_length() {
 fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
     let content = "abcdefghij".repeat(1_000);
 
-    let asked_for_less = page::truncate(&content, Some(page::MaxBytes::new(100)));
+    let asked_for_less = page::truncate(&content, page::MaxBytes::new(100));
     let shown = asked_for_less
         .text
         .find("\n[truncated")
@@ -433,7 +433,7 @@ fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
     assert!(asked_for_less.truncated);
     assert_eq!(asked_for_less.bytes, 10_000, "and still the real total");
 
-    let asked_for_everything = page::truncate(&content, Some(page::MaxBytes::new(u64::MAX)));
+    let asked_for_everything = page::truncate(&content, page::MaxBytes::new(u64::MAX));
     assert_eq!(
         asked_for_everything.text, content,
         "a cap larger than the text is not a cut"
@@ -441,7 +441,7 @@ fn max_bytes_narrows_the_cut_and_cannot_widen_it() {
     assert!(!asked_for_everything.truncated);
 
     let huge = "x".repeat(page::PAYLOAD_CEILING * 2);
-    let refused_the_raise = page::truncate(&huge, Some(page::MaxBytes::new(u64::MAX)));
+    let refused_the_raise = page::truncate(&huge, page::MaxBytes::new(u64::MAX));
     assert!(
         refused_the_raise.truncated,
         "asking for all of it does not make it fit"

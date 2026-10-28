@@ -1,0 +1,102 @@
+{
+  "minified": "composer/2.0",
+  "packages": {
+    "monolog/monolog": [
+      {
+        "name": "monolog/monolog",
+        "description": "Sends your logs to files, sockets, inboxes, databases and various web services",
+        "require": {
+          "php": ">=8.1",
+          "psr/log": "^2.0 || ^3.0"
+        },
+        "version": "3.12.1",
+        "version_normalized": "3.12.1.0",
+        "source": {
+          "url": "https://github.com/Seldaek/monolog.git",
+          "type": "git",
+          "reference": "d7059e4c691d05ea1222b5124bed0f961be46e15"
+        },
+        "dist": {
+          "url": "https://api.github.com/repos/Seldaek/monolog/zipball/d7059e4c691d05ea1222b5124bed0f961be46e15",
+          "type": "zip",
+          "shasum": "",
+          "reference": "d7059e4c691d05ea1222b5124bed0f961be46e15"
+        },
+        "time": "2026-09-29T19:21:12+00:00"
+      },
+      {
+        "version": "3.12.0",
+        "version_normalized": "3.12.0.0",
+        "source": {
+          "url": "https://github.com/Seldaek/monolog.git",
+          "type": "git",
+          "reference": "72c534fc0ab181ef52d92a68382318631e301608"
+        },
+        "dist": {
+          "url": "https://api.github.com/repos/Seldaek/monolog/zipball/72c534fc0ab181ef52d92a68382318631e301608",
+          "type": "zip",
+          "shasum": "",
+          "reference": "72c534fc0ab181ef52d92a68382318631e301608"
+        },
+        "time": "2026-09-09T08:34:20+00:00"
+      },
+      {
+        "version": "3.11.0",
+        "version_normalized": "3.11.0.0",
+        "source": {
+          "url": "https://github.com/Seldaek/monolog.git",
+          "type": "git",
+          "reference": "147f303310f06334f03f409e49d7ad1e275ff05a"
+        }
+      },
+      {
+        "version": "3.10.0",
+        "version_normalized": "3.10.0.0",
+        "source": {
+          "url": "https://github.com/Seldaek/monolog.git",
+          "type": "git",
+          "reference": "b321dd6749f0bf7189444158a3ce785cc16d69b0"
+        },
+        "dist": {
+          "url": "https://api.github.com/repos/Seldaek/monolog/zipball/b321dd6749f0bf7189444158a3ce785cc16d69b0",
+          "type": "zip",
+          "shasum": "",
+          "reference": "b321dd6749f0bf7189444158a3ce785cc16d69b0"
+        },
+        "time": "2026-01-02T08:56:05+00:00"
+      },
+      {
+        "version": "3.0.0",
+        "version_normalized": "3.0.0.0",
+        "source": {
+          "url": "https://github.com/Seldaek/monolog.git",
+          "type": "git",
+          "reference": "60ad5183b5e5d6c9d4047e9f3072d36071dcc161"
+        },
+        "dist": {
+          "url": "https://api.github.com/repos/Seldaek/monolog/zipball/60ad5183b5e5d6c9d4047e9f3072d36071dcc161",
+          "type": "zip",
+          "shasum": "",
+          "reference": "60ad5183b5e5d6c9d4047e9f3072d36071dcc161"
+        },
+        "time": "2022-05-10T10:39:55+00:00"
+      },
+      {
+        "version": "3.0.0-RC1",
+        "version_normalized": "3.0.0.0-RC1",
+        "source": {
+          "url": "https://github.com/Seldaek/monolog.git",
+          "type": "git",
+          "reference": "a71c4e02502dd04d91f1c7d72ffccf0bd11310eb"
+        },
+        "dist": {
+          "url": "https://api.github.com/repos/Seldaek/monolog/zipball/a71c4e02502dd04d91f1c7d72ffccf0bd11310eb",
+          "type": "zip",
+          "shasum": "",
+          "reference": "a71c4e02502dd04d91f1c7d72ffccf0bd11310eb"
+        },
+        "time": "__unset"
+      }
+    ]
+  }
+}
