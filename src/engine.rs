@@ -20,4 +20,4 @@ pub fn build_diff_tree(
     )
 }
 
-pub const VERSION: &str = "0.4.1";
+pub const VERSION: &str = "0.5.0";

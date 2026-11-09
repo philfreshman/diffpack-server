@@ -262,4 +262,31 @@ write "$chi/chi.go" 'package chi
 '
 go_module_zip "chi-v5.0.12.zip" "github.com/go-chi/chi/v5" "v5.0.12" "$chi"
 
+codeload_zip() {
+  local out=$1 root=$2 version=$3
+  local dir=$work/$root
+  write "$dir/composer.json" '{
+    "name": "monolog/monolog",
+    "require": {
+        "php": ">=8.1",
+        "psr/log": "^2.0 || ^3.0"
+    }
+}
+'
+  write "$dir/README.md" '# Monolog
+'
+  write "$dir/src/Monolog/Logger.php" "<?php
+
+namespace Monolog;
+
+class Logger
+{
+    public const VERSION = '${version}';
+}
+"
+  zip_up "$out" "$dir" "$root"
+}
+codeload_zip "monolog-3.12.0.zip" "Seldaek-monolog-72c534f" "3.12.0"
+codeload_zip "monolog-3.12.1.zip" "Seldaek-monolog-d7059e4" "3.12.1"
+
 echo "ok: rebuilt the archives in ${ARCHIVES}/"

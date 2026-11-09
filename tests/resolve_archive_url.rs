@@ -210,6 +210,42 @@ async fn a_registry_this_tool_cannot_resolve_is_a_tool_error() {
 }
 
 #[tokio::test]
+async fn a_packagist_archive_is_not_resolved_because_only_its_listing_names_it() {
+    let result = call(json!({
+        "registry": "composer",
+        "package": "monolog/monolog",
+        "version": "3.12.1",
+    }))
+    .await;
+
+    assert_eq!(
+        result["isError"],
+        json!(true),
+        "this tool fetches nothing, and a Packagist archive is named by a listing \
+         that has to be fetched: got {result}"
+    );
+    let text = result["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("composer") && text.contains("npm"),
+        "the message names what was asked for and what would have worked, got {text}"
+    );
+}
+
+#[tokio::test]
+async fn the_description_says_which_registries_it_cannot_resolve() {
+    let tool = Client::fixture().listed(TOOL).await;
+    let registry = tool["inputSchema"]["properties"]["registry"]["description"]
+        .as_str()
+        .unwrap_or_default();
+
+    assert!(
+        registry.contains("`pypi`") && registry.contains("`composer`"),
+        "both registries whose archives a listing names should be called out, \
+         got {registry:?}"
+    );
+}
+
+#[tokio::test]
 async fn arguments_that_do_not_validate_are_a_protocol_error() {
     let answer = Client::fixture()
         .post(json!({
@@ -255,7 +291,7 @@ async fn a_registry_outside_the_enum_is_refused_by_naming_the_ones_that_exist() 
     let message = answer["error"]["message"]
         .as_str()
         .expect("a protocol error carries a message");
-    for known in ["npm", "crates", "pypi", "go"] {
+    for known in ["npm", "crates", "pypi", "go", "composer"] {
         assert!(
             message.contains(known),
             "the refusal should name `{known}`, got {message}"

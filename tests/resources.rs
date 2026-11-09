@@ -140,8 +140,8 @@ async fn the_catalogue_names_every_registry_and_where_its_archives_are() {
         .collect();
     assert_eq!(
         ids,
-        vec!["npm", "crates", "pypi", "go"],
-        "all four registries should be described, got {catalogue}"
+        vec!["npm", "crates", "pypi", "go", "composer"],
+        "all five registries should be described, got {catalogue}"
     );
 
     let patterns: Vec<&str> = described
@@ -155,6 +155,7 @@ async fn the_catalogue_names_every_registry_and_where_its_archives_are() {
             "https://static.crates.io/crates/{package}/{package}-{version}.crate",
             "https://pypi.org/pypi/{package}/{version}/json",
             "https://proxy.golang.org/{package}/@v/{version}.zip",
+            "https://repo.packagist.org/p2/{package}.json",
         ],
         "each registry should say where a version's archive comes from, got {catalogue}"
     );
@@ -205,6 +206,7 @@ async fn the_catalogue_is_the_registry_module_rather_than_a_copy_of_it() {
 
     for (registry, described) in Registry::ALL.into_iter().zip(described) {
         let id = registry.id();
+        let package = package_on(registry);
 
         assert_eq!(
             fields(&described),
@@ -220,7 +222,7 @@ async fn the_catalogue_is_the_registry_module_rather_than_a_copy_of_it() {
         );
 
         let archive = registry
-            .archive(PACKAGE, VERSION)
+            .archive(package, VERSION)
             .expect("every registry says where an archive is");
         assert_eq!(
             fields(&described["archive"]),
@@ -236,12 +238,12 @@ async fn the_catalogue_is_the_registry_module_rather_than_a_copy_of_it() {
             "got {described}"
         );
         assert_eq!(
-            filled(&described["archive"]["url_pattern"]),
+            filled(package, &described["archive"]["url_pattern"]),
             archive.url(),
             "filling `{id}`'s archive pattern in should give the URL the module builds"
         );
 
-        let versions = registry.versions(PACKAGE);
+        let versions = registry.versions(package);
         let mut expected = vec!["url_pattern"];
         if versions.current.is_some() {
             expected.insert(0, "current_url_pattern");
@@ -253,13 +255,13 @@ async fn the_catalogue_is_the_registry_module_rather_than_a_copy_of_it() {
              and no other does: got {described}"
         );
         assert_eq!(
-            filled(&described["versions"]["url_pattern"]),
+            filled(package, &described["versions"]["url_pattern"]),
             versions.url,
             "filling `{id}`'s versions pattern in should give the URL the module builds"
         );
         if let Some(current) = versions.current {
             assert_eq!(
-                filled(&described["versions"]["current_url_pattern"]),
+                filled(package, &described["versions"]["current_url_pattern"]),
                 current,
                 "filling `{id}`'s current-version pattern in should give the URL \
                  the module builds"
@@ -273,7 +275,7 @@ async fn the_catalogue_is_the_registry_module_rather_than_a_copy_of_it() {
             "got {described}"
         );
         assert_eq!(
-            filled(&described["search"]["url_pattern"]),
+            filled(package, &described["search"]["url_pattern"]),
             search.url,
             "filling `{id}`'s search pattern in should give the URL the module builds"
         );
@@ -771,17 +773,25 @@ async fn call(tool: &str, arguments: Value) -> Value {
 }
 
 const PACKAGE: &str = "serde";
+const VENDORED_PACKAGE: &str = "monolog/monolog";
 const VERSION: &str = "1.0.0";
 const QUERY: &str = "serde";
 
 const LIMIT: u32 = 5;
 
-fn filled(pattern: &Value) -> String {
+fn package_on(registry: Registry) -> &'static str {
+    match registry {
+        Registry::Composer => VENDORED_PACKAGE,
+        _ => PACKAGE,
+    }
+}
+
+fn filled(package: &str, pattern: &Value) -> String {
     pattern
         .as_str()
         .unwrap_or_else(|| panic!("a URL pattern is a string, got {pattern}"))
-        .replace("{package-without-scope}", PACKAGE)
-        .replace("{package}", PACKAGE)
+        .replace("{package-without-scope}", package)
+        .replace("{package}", package)
         .replace("{version}", VERSION)
         .replace("{query}", QUERY)
         .replace("{limit}", &LIMIT.to_string())

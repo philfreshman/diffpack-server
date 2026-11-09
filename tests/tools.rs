@@ -173,7 +173,7 @@ async fn every_registry_argument_is_the_enum_the_registry_module_owns() {
         asked += 1;
         assert_eq!(
             registry["enum"],
-            json!(["npm", "crates", "pypi", "go"]),
+            json!(["npm", "crates", "pypi", "go", "composer"]),
             "`{name}` should list the registries this server has, got {registry}"
         );
     }

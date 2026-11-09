@@ -1,5 +1,6 @@
 {
   "https://crates.io/api/v1/crates?q=serde&per_page=100": "crates-serde.json",
+  "https://packagist.org/search.json?q=monolog&per_page=100": "composer-monolog.json",
   "https://pypi.org/simple/": "pypi-simple.json",
   "https://proxy.golang.org/github.com/go-chi/chi/v5/@latest": "go-chi-v5-latest.json",
   "https://proxy.golang.org/http%20router/@latest": null,

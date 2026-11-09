@@ -145,6 +145,7 @@ fn the_registry_archive_lookup_is_reachable_through_the_seam() {
 
     let chosen = choose_archive(
         "pypi",
+        "1.0",
         r#"{"urls":[
             {"packagetype":"bdist_wheel","url":"https://files.pythonhosted.org/x-py3-none-any.whl"},
             {"packagetype":"sdist","url":"https://files.pythonhosted.org/x-1.0.tar.gz"}

@@ -59,6 +59,46 @@ async fn pypi_serves_the_source_distribution_it_lists() {
 }
 
 #[tokio::test]
+#[ignore = "networked: fetches from repo.packagist.org and codeload.github.com"]
+async fn packagist_serves_the_archive_its_listing_names() {
+    let files = Archive::live()
+        .fetch(Registry::Composer, "monolog/monolog", "3.12.1")
+        .await
+        .expect("Packagist lists this version and codeload serves its zipball");
+
+    assert!(
+        files.at("composer.json") != At::Nothing,
+        "every Composer package has a `composer.json` at its root, once codeload's \
+         commit folder is stripped"
+    );
+    assert!(
+        files.at("src/Monolog/Logger.php") != At::Nothing,
+        "and monolog keeps its logger where it always has, got {:?}",
+        files.paths()
+    );
+}
+
+#[tokio::test]
+#[ignore = "networked: fetches from repo.packagist.org"]
+async fn a_version_packagist_does_not_list_is_named_with_the_ones_it_does() {
+    let failure = Archive::live()
+        .fetch(Registry::Composer, "monolog/monolog", "99.99.99")
+        .await
+        .expect_err("Packagist lists no such version of monolog");
+
+    match failure {
+        Failure::NoSuchVersion { version, known, .. } => {
+            assert_eq!(version, "99.99.99");
+            assert!(
+                !known.is_empty(),
+                "the listing was read, so it can say what is there"
+            );
+        }
+        other => panic!("a missing version should say so, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 #[ignore = "networked: fetches from static.crates.io"]
 async fn an_archive_over_the_cap_is_refused_before_it_is_downloaded() {
     let failure = Archive::live()
@@ -154,6 +194,29 @@ async fn pypi_versions_are_ordered_by_date_rather_than_by_the_sources_order() {
 }
 
 #[tokio::test]
+#[ignore = "networked: fetches from repo.packagist.org"]
+async fn packagist_lists_the_versions_this_server_asks_it_for_newest_first() {
+    let versions = Catalogue::live()
+        .versions(Registry::Composer, "monolog/monolog")
+        .await
+        .expect("Packagist lists this package");
+
+    assert!(
+        versions.all.iter().any(|v| v.version == "3.12.1"),
+        "a release this server has an archive fixture for is still published"
+    );
+    assert!(
+        versions
+            .all
+            .iter()
+            .any(|v| v.version == "3.0.0-RC1" && v.prerelease),
+        "a release candidate is still listed, and is a preview"
+    );
+    assert_recent(&versions.all, "2026");
+    assert_points_somewhere(&versions, "the first stable entry");
+}
+
+#[tokio::test]
 #[ignore = "networked: fetches from registry.npmjs.org"]
 async fn a_package_no_registry_has_is_a_failure_a_model_can_act_on() {
     let failure = Catalogue::live()
@@ -236,6 +299,25 @@ async fn crates_io_answers_a_search_in_the_shape_this_server_reads() {
         first.version.is_some(),
         "crates.io says which version it would install, got {first:?}"
     );
+}
+
+#[tokio::test]
+#[ignore = "networked: searches packagist.org"]
+async fn packagist_answers_a_search_in_the_shape_this_server_reads() {
+    let hits = Search::live()
+        .hits(Registry::Composer, "monolog", 5)
+        .await
+        .expect("Packagist answers a search");
+
+    let first = hits
+        .first()
+        .expect("`monolog/monolog` is a package Packagist has");
+    assert_eq!(first.name, "monolog/monolog", "got {hits:?}");
+    assert!(
+        first.version.is_none() && first.description.is_some(),
+        "Packagist's search carries a description and no version, got {first:?}"
+    );
+    assert!(hits.len() <= 5, "five were asked for, got {}", hits.len());
 }
 
 #[tokio::test]

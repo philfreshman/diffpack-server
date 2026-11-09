@@ -178,6 +178,43 @@ async fn a_crates_io_search_answers_with_the_crates_it_found() {
 }
 
 #[tokio::test]
+async fn a_packagist_search_answers_with_names_and_descriptions_and_no_version() {
+    let result = call(json!({
+        "registry": "composer",
+        "query": "monolog",
+    }))
+    .await;
+
+    let items = &result["structuredContent"]["items"];
+    assert_eq!(
+        items[0],
+        json!({
+            "name": "monolog/monolog",
+            "description": "Sends your logs to files, sockets, inboxes, databases and \
+                            various web services",
+        }),
+        "the first hit is the package itself, and Packagist's search names no version, \
+         got {items}"
+    );
+    assert_eq!(
+        items[1]["name"], "symfony/monolog-bundle",
+        "and the rest follow in the order Packagist ranked them, got {items}"
+    );
+}
+
+#[tokio::test]
+async fn the_description_says_a_packagist_hit_carries_no_version() {
+    let tool = listed(TOOL).await;
+    let said = tool["description"].as_str().unwrap_or_default();
+
+    assert!(
+        names(said, "Packagist") && said.contains("no version"),
+        "an agent should know to call `list_package_versions` for a Packagist hit, \
+         got {said:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_pypi_search_answers_with_names_and_says_no_more_than_that() {
     let result = call(json!({
         "registry": "pypi",

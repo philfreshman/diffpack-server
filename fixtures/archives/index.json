@@ -10,6 +10,12 @@
 
   "https://static.crates.io/crates/serde/serde-1.0.0.crate": "serde-1.0.0.crate",
 
+  "https://repo.packagist.org/p2/monolog/monolog.json": "../versions/composer-monolog-monolog.json",
+  "https://codeload.github.com/Seldaek/monolog/legacy.zip/72c534fc0ab181ef52d92a68382318631e301608": "monolog-3.12.0.zip",
+  "https://codeload.github.com/Seldaek/monolog/legacy.zip/d7059e4c691d05ea1222b5124bed0f961be46e15": "monolog-3.12.1.zip",
+  "https://repo.packagist.org/p2/diffpack/awkward.json": "composer-awkward.json",
+  "https://repo.packagist.org/p2/not-a-real/package.json": null,
+
   "https://pypi.org/pypi/numpy/1.9.0/json": "numpy-1.9.0.json",
   "https://files.pythonhosted.org/packages/9a/54/numpy-1.9.0.zip": "numpy-1.9.0.zip",
 

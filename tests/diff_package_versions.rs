@@ -173,6 +173,33 @@ async fn a_go_module_pair_reports_what_changed_rather_than_everything_moved() {
 }
 
 #[tokio::test]
+async fn a_packagist_pair_reports_what_changed_rather_than_everything_moved() {
+    let result = call(json!({
+        "registry": "composer",
+        "package": "monolog/monolog",
+        "from_version": "3.12.0",
+        "to_version": "3.12.1",
+    }))
+    .await;
+
+    assert_eq!(result["isError"], json!(false), "got {result}");
+    assert_eq!(
+        result["structuredContent"]["totals"],
+        json!({
+            "added": 0,
+            "removed": 0,
+            "modified": 1,
+            "renamed": 0,
+            "unchanged": 2,
+            "lines_added": 1,
+            "lines_removed": 1,
+        }),
+        "each codeload zip sits under a folder named for its own commit, so unless \
+         it is stripped no path is shared and every file reads as removed: got {result}"
+    );
+}
+
+#[tokio::test]
 async fn the_answer_names_the_pair_it_compared() {
     let result = call(json!({
         "registry": "npm",

@@ -1,0 +1,46 @@
+{
+  "results": [
+    {
+      "name": "monolog/monolog",
+      "description": "Sends your logs to files, sockets, inboxes, databases and various web services",
+      "url": "https://packagist.org/packages/monolog/monolog",
+      "repository": "https://github.com/Seldaek/monolog",
+      "downloads": 1091256792,
+      "favers": 22270
+    },
+    {
+      "name": "symfony/monolog-bundle",
+      "description": "Symfony MonologBundle",
+      "url": "https://packagist.org/packages/symfony/monolog-bundle",
+      "repository": "https://github.com/symfony/monolog-bundle",
+      "downloads": 282942043,
+      "favers": 2928
+    },
+    {
+      "name": "symfony/monolog-bridge",
+      "description": "Provides integration for Monolog with various Symfony components",
+      "url": "https://packagist.org/packages/symfony/monolog-bridge",
+      "repository": "https://github.com/symfony/monolog-bridge",
+      "downloads": 224740630,
+      "favers": 2586
+    },
+    {
+      "name": "symfony/debug-bundle",
+      "description": "Provides a tight integration of the Symfony VarDumper component and the ServerLogCommand from MonologBridge into the Symfony full-stack framework",
+      "url": "https://packagist.org/packages/symfony/debug-bundle",
+      "repository": "https://github.com/symfony/debug-bundle",
+      "downloads": 137438161,
+      "favers": 2361
+    },
+    {
+      "name": "maxbanton/cwh",
+      "description": "AWS CloudWatch Handler for Monolog library",
+      "url": "https://packagist.org/packages/maxbanton/cwh",
+      "repository": "https://github.com/maxbanton/cwh",
+      "downloads": 16993447,
+      "favers": 425
+    }
+  ],
+  "total": 1170,
+  "next": "https://packagist.org/search.json?q=monolog&page=2&per_page=5"
+}

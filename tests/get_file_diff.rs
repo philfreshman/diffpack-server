@@ -128,13 +128,31 @@ async fn the_context_argument_documents_the_default_that_binds() {
 }
 
 #[tokio::test]
+async fn the_cap_argument_is_the_one_get_file_content_documents() {
+    let max_bytes = listed(TOOL).await["inputSchema"]["properties"]["max_bytes"].clone();
+    let content_max_bytes =
+        listed("get_file_content").await["inputSchema"]["properties"]["max_bytes"].clone();
+
+    assert_eq!(
+        max_bytes["default"],
+        json!(page::DEFAULT_MAX_BYTES),
+        "the default in the schema is the cut a caller gets by omitting the \
+         argument: got {max_bytes}"
+    );
+    assert_eq!(
+        max_bytes, content_max_bytes,
+        "both tools cut a blob the same way, so both describe it in the same words"
+    );
+}
+
+#[tokio::test]
 async fn the_description_says_what_an_agent_would_otherwise_get_wrong() {
     let tool = listed(TOOL).await;
     let description = tool["description"]
         .as_str()
         .unwrap_or_else(|| panic!("a tool carries a description, got {tool}"));
 
-    for said in ["isDiff", "old_path", "context_lines"] {
+    for said in ["isDiff", "old_path", "context_lines", "max_bytes"] {
         assert!(
             description.contains(said),
             "the description should name `{said}`, which is a case where a \
@@ -837,7 +855,29 @@ async fn the_reported_size_is_the_patch_at_the_context_asked_for() {
 }
 
 #[tokio::test]
-async fn an_answer_larger_than_a_response_is_cut_without_being_asked() {
+async fn a_long_answer_is_cut_at_the_default_when_no_cap_is_asked_for() {
+    let answer = patch(json!({
+        "handle": handle("odd-files", "1.0.0", "1.0.0", false),
+        "path": "big.txt",
+    }))
+    .await;
+
+    assert_eq!(
+        answer["truncated"],
+        json!(true),
+        "two megabytes are far over the default, got {}",
+        answer["bytes"]
+    );
+    assert_eq!(
+        text(&answer).find("\n[truncated by diffpack"),
+        Some(page::DEFAULT_MAX_BYTES),
+        "an answer a client can hand a model in one piece, unless the model \
+         asks for more"
+    );
+}
+
+#[tokio::test]
+async fn an_answer_larger_than_a_response_is_cut_even_when_more_is_asked_for() {
     let sent = Client::fixture()
         .respond(json!({
             "jsonrpc": "2.0",
@@ -848,6 +888,7 @@ async fn an_answer_larger_than_a_response_is_cut_without_being_asked() {
                 "arguments": {
                     "handle": handle("odd-files", "1.0.0", "1.0.0", false),
                     "path": "big.txt",
+                    "max_bytes": u64::MAX,
                 },
             },
         }))
@@ -860,7 +901,7 @@ async fn an_answer_larger_than_a_response_is_cut_without_being_asked() {
         answer["truncated"],
         json!(true),
         "a two-megabyte answer does not fit under the response ceiling and is \
-         cut whether or not a cap was asked for: got {}",
+         cut however large a cap was asked for: got {}",
         answer["bytes"]
     );
     assert_eq!(

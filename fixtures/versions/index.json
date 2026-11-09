@@ -18,5 +18,7 @@
   "https://proxy.golang.org/github.com/not-a-real/module/@v/list": null,
   "https://proxy.golang.org/github.com/not-a-real/module/@latest": null,
   "https://proxy.golang.org/example.com/latest-unreachable/@v/list": "go-latest-unreachable-list.txt",
-  "https://proxy.golang.org/example.com/latest-unreachable/@latest": null
+  "https://proxy.golang.org/example.com/latest-unreachable/@latest": null,
+  "https://repo.packagist.org/p2/monolog/monolog.json": "composer-monolog-monolog.json",
+  "https://repo.packagist.org/p2/not-a-real/package.json": null
 }
